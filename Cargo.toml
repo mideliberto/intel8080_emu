@@ -3,4 +3,12 @@ name = "intel8080_emu"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "asm8080"
+path = "src/bin/asm8080.rs"
+
+[[bin]]
+name = "intel8080_emu"
+path = "src/main.rs"
+
 [dependencies]

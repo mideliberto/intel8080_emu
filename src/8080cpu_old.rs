@@ -1,161 +1,9 @@
 // Complete Intel 8080 with Enum Pattern for Type Safety
+mod registers;
 
-// ============================================
-// ENUM DEFINITIONS (Layer 2 from earlier)
-// ============================================
+use crate::registers::{Register, RegisterPair, PushPopPair, Condition};
+use crate::registers::{FLAG_CARRY, FLAG_BIT_1, FLAG_PARITY, FLAG_AUX_CARRY, FLAG_ZERO, FLAG_SIGN};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Register {
-    B = 0,
-    C = 1,
-    D = 2,
-    E = 3,
-    H = 4,
-    L = 5,
-    M = 6,  // Memory at HL
-    A = 7,
-}
-
-impl Register {
-    /// Convert from 3-bit opcode field to Register enum
-    pub fn from_code(code: u8) -> Self {
-        match code & 0x07 {
-            0 => Register::B,
-            1 => Register::C,
-            2 => Register::D,
-            3 => Register::E,
-            4 => Register::H,
-            5 => Register::L,
-            6 => Register::M,
-            7 => Register::A,
-            _ => unreachable!(),
-        }
-    }
-    
-    /// Get the 3-bit encoding for this register
-    pub fn to_code(self) -> u8 {
-        self as u8
-    }
-    
-    /// Get register name for disassembly
-    pub fn name(self) -> &'static str {
-        match self {
-            Register::B => "B",
-            Register::C => "C",
-            Register::D => "D",
-            Register::E => "E",
-            Register::H => "H",
-            Register::L => "L",
-            Register::M => "M",
-            Register::A => "A",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RegisterPair {
-    BC = 0,
-    DE = 1,
-    HL = 2,
-    SP = 3,  // Note: Sometimes this is PSW instead
-}
-
-impl RegisterPair {
-    /// Convert from 2-bit opcode field to RegisterPair
-    pub fn from_code(code: u8) -> Self {
-        match code & 0x03 {
-            0 => RegisterPair::BC,
-            1 => RegisterPair::DE,
-            2 => RegisterPair::HL,
-            3 => RegisterPair::SP,
-            _ => unreachable!(),
-        }
-    }
-    
-    /// For PUSH/POP instructions, encoding is different
-    pub fn from_push_pop_code(code: u8) -> PushPopPair {
-        match code & 0x03 {
-            0 => PushPopPair::BC,
-            1 => PushPopPair::DE,
-            2 => PushPopPair::HL,
-            3 => PushPopPair::PSW,  // PSW instead of SP!
-            _ => unreachable!(),
-        }
-    }
-    
-    pub fn to_code(self) -> u8 {
-        self as u8
-    }
-    
-    pub fn name(self) -> &'static str {
-        match self {
-            RegisterPair::BC => "BC",
-            RegisterPair::DE => "DE",
-            RegisterPair::HL => "HL",
-            RegisterPair::SP => "SP",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PushPopPair {
-    BC = 0,
-    DE = 1,
-    HL = 2,
-    PSW = 3,  // AF for PUSH/POP
-}
-
-impl PushPopPair {
-    pub fn name(self) -> &'static str {
-        match self {
-            PushPopPair::BC => "BC",
-            PushPopPair::DE => "DE",
-            PushPopPair::HL => "HL",
-            PushPopPair::PSW => "PSW",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Condition {
-    NZ = 0,  // Not Zero
-    Z  = 1,  // Zero
-    NC = 2,  // No Carry
-    C  = 3,  // Carry
-    PO = 4,  // Parity Odd
-    PE = 5,  // Parity Even
-    P  = 6,  // Plus (positive)
-    M  = 7,  // Minus (negative)
-}
-
-impl Condition {
-    pub fn from_code(code: u8) -> Self {
-        match code & 0x07 {
-            0 => Condition::NZ,
-            1 => Condition::Z,
-            2 => Condition::NC,
-            3 => Condition::C,
-            4 => Condition::PO,
-            5 => Condition::PE,
-            6 => Condition::P,
-            7 => Condition::M,
-            _ => unreachable!(),
-        }
-    }
-    
-    pub fn name(self) -> &'static str {
-        match self {
-            Condition::NZ => "NZ",
-            Condition::Z => "Z",
-            Condition::NC => "NC",
-            Condition::C => "C",
-            Condition::PO => "PO",
-            Condition::PE => "PE",
-            Condition::P => "P",
-            Condition::M => "M",
-        }
-    }
-}
 
 // ============================================
 // CPU STRUCTURE
@@ -184,7 +32,7 @@ pub struct Intel8080 {
     instructions: [Option<Instruction>; 256],
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct Instruction {
     mnemonic: &'static str,
     size: u8,
@@ -195,13 +43,6 @@ struct Instruction {
 type OpHandler = fn(&mut Intel8080) -> u8;
 
 // Flag constants
-const FLAG_CARRY: u8     = 0b00000001;
-const FLAG_BIT_1: u8     = 0b00000010;
-const FLAG_PARITY: u8    = 0b00000100;
-const FLAG_AUX_CARRY: u8 = 0b00010000;
-const FLAG_ZERO: u8      = 0b01000000;
-const FLAG_SIGN: u8      = 0b10000000;
-
 impl Intel8080 {
     pub fn new() -> Self {
         let mut cpu = Intel8080 {
@@ -424,9 +265,11 @@ impl Intel8080 {
         self.set_pair(RegisterPair::from_code(code), val)
     }
     
-    // ============================================
-    // INITIALIZE INSTRUCTIONS WITH ENUMS
-    // ============================================
+    /*
+    ============================================
+    INITIALIZE INSTRUCTIONS WITH ENUMS
+    ============================================
+    */
     
     fn init_instructions(&mut self) {
         // Initialize MOV instructions using enums
