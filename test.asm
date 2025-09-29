@@ -1,5 +1,3 @@
     ORG 0
-    MVI A, 42h
-    MVI B, 10h
-    ADD B
+    MVI A, 42H
     HLT

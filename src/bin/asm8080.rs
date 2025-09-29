@@ -19,12 +19,14 @@ pub struct Assembler {
     forward_refs: Vec<ForwardRef>,
     output: Vec<u8>,
     pass: u8,
+    current_line: usize,
+    current_line_text: String,
 }
 
 #[derive(Debug, Clone)]
 struct ForwardRef {
     label: String,
-    address: u16,
+    output_offset: usize,  // Offset in output buffer, not memory address
     size: u8,
 }
 
@@ -46,7 +48,7 @@ impl std::fmt::Display for AsmError {
             AsmError::InvalidMnemonic(s) => write!(f, "Invalid mnemonic: {}", s),
             AsmError::InvalidOperand(s) => write!(f, "Invalid operand: {}", s),
             AsmError::InvalidRegister(s) => write!(f, "Invalid register: {}", s),
-            AsmError::InvalidNumber(s) => write!(f, "Invalid number: {}", s),
+            AsmError::InvalidNumber(s) => write!(f, "Invalid number: '{}'", s),
             AsmError::UndefinedSymbol(s) => write!(f, "Undefined symbol: {}", s),
             AsmError::DuplicateLabel(s) => write!(f, "Duplicate label: {}", s),
             AsmError::SyntaxError(s) => write!(f, "Syntax error: {}", s),
@@ -65,6 +67,8 @@ impl Assembler {
             forward_refs: Vec::new(),
             output: Vec::new(),
             pass: 1,
+            current_line: 0,
+            current_line_text: String::new(),
         }
     }
     
@@ -117,6 +121,24 @@ impl Assembler {
         let line = line.trim();
         if line.is_empty() {
             return Ok(());
+        }
+        
+        // Check for EQU directive (special case: LABEL EQU VALUE)
+        if line.contains(" EQU ") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 && parts[1] == "EQU" {
+                let label = parts[0];
+                let value_str = parts[2..].join(" ");
+                let value = self.parse_number(&value_str)?;
+                
+                if self.pass == 1 {
+                    if self.symbols.contains_key(label) {
+                        return Err(AsmError::DuplicateLabel(label.to_string()));
+                    }
+                    self.symbols.insert(label.to_string(), value);
+                }
+                return Ok(());
+            }
         }
         
         // Check for label
@@ -305,16 +327,16 @@ impl Assembler {
             
             // LDAX/STAX
             "LDAX" => {
-                match operands {
-                    "B" => self.emit_byte(0x0A),
-                    "D" => self.emit_byte(0x1A),
+                match operands.to_uppercase().as_str() {
+                    "B" | "BC" => self.emit_byte(0x0A),
+                    "D" | "DE" => self.emit_byte(0x1A),
                     _ => return Err(AsmError::InvalidOperand(operands.to_string())),
                 }
             }
             "STAX" => {
-                match operands {
-                    "B" => self.emit_byte(0x02),
-                    "D" => self.emit_byte(0x12),
+                match operands.to_uppercase().as_str() {
+                    "B" | "BC" => self.emit_byte(0x02),
+                    "D" | "DE" => self.emit_byte(0x12),
                     _ => return Err(AsmError::InvalidOperand(operands.to_string())),
                 }
             }
@@ -439,14 +461,15 @@ impl Assembler {
             if let Some(&addr) = self.symbols.get(expr) {
                 return Ok(addr);
             } else if self.pass == 2 {
+                // Forward reference - record where in output buffer this needs to be fixed
                 self.forward_refs.push(ForwardRef {
                     label: expr.to_string(),
-                    address: self.current_address,
-                    size: 2,
+                    output_offset: self.output.len(),  // Current position in output
+                    size: 2,  // Assume 16-bit for now
                 });
-                return Ok(0);
+                return Ok(0);  // Placeholder
             } else {
-                return Ok(0);
+                return Ok(0);  // Pass 1 - just return 0
             }
         }
         
@@ -456,18 +479,32 @@ impl Assembler {
     fn parse_number(&self, s: &str) -> Result<u16> {
         let s = s.trim();
         
+        // Hexadecimal with H suffix
         if s.ends_with('H') || s.ends_with('h') {
             let hex_str = &s[..s.len() - 1];
+            // Handle case where hex starts with letter (e.g., FFH needs leading 0)
             u16::from_str_radix(hex_str, 16)
                 .map_err(|_| AsmError::InvalidNumber(s.to_string()))
-        } else if s.ends_with('B') || s.ends_with('b') {
+        } 
+        // Binary with B suffix
+        else if s.ends_with('B') || s.ends_with('b') {
             let bin_str = &s[..s.len() - 1];
             u16::from_str_radix(bin_str, 2)
                 .map_err(|_| AsmError::InvalidNumber(s.to_string()))
-        } else if s.starts_with("0X") || s.starts_with("0x") {
+        }
+        // Octal with O or Q suffix
+        else if s.ends_with('O') || s.ends_with('o') || s.ends_with('Q') || s.ends_with('q') {
+            let oct_str = &s[..s.len() - 1];
+            u16::from_str_radix(oct_str, 8)
+                .map_err(|_| AsmError::InvalidNumber(s.to_string()))
+        }
+        // Hexadecimal with 0x prefix
+        else if s.starts_with("0X") || s.starts_with("0x") {
             u16::from_str_radix(&s[2..], 16)
                 .map_err(|_| AsmError::InvalidNumber(s.to_string()))
-        } else {
+        } 
+        // Decimal (default)
+        else {
             s.parse::<u16>()
                 .map_err(|_| AsmError::InvalidNumber(s.to_string()))
         }
@@ -542,12 +579,16 @@ impl Assembler {
     fn resolve_forward_refs(&mut self) -> Result<()> {
         for fref in &self.forward_refs {
             if let Some(&target) = self.symbols.get(&fref.label) {
-                let addr = fref.address as usize;
-                if fref.size == 2 {
-                    self.output[addr] = (target & 0xFF) as u8;
-                    self.output[addr + 1] = (target >> 8) as u8;
-                } else {
-                    self.output[addr] = target as u8;
+                let offset = fref.output_offset;
+                if offset + (fref.size as usize) <= self.output.len() {
+                    if fref.size == 2 {
+                        // 16-bit address (little-endian)
+                        self.output[offset] = (target & 0xFF) as u8;
+                        self.output[offset + 1] = (target >> 8) as u8;
+                    } else {
+                        // 8-bit address
+                        self.output[offset] = target as u8;
+                    }
                 }
             } else {
                 return Err(AsmError::UndefinedSymbol(fref.label.clone()));
@@ -594,12 +635,13 @@ fn main() {
                 let mut symbols: Vec<_> = assembler.symbols.iter().collect();
                 symbols.sort_by_key(|&(_, addr)| addr);
                 for (label, addr) in symbols {
-                    println!("  {:16} = ${:04X}", label, addr);
+                    println!("  {:20} = ${:04X}", label, addr);
                 }
             }
         }
         Err(e) => {
-            eprintln!("✗ Assembly failed: {}", e);
+            eprintln!("\n✗ Assembly failed:");
+            eprintln!("{}", e);
             std::process::exit(1);
         }
     }
