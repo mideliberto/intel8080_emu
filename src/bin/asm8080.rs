@@ -84,30 +84,36 @@ impl Assembler {
         Ok(())
     }
     
-    pub fn assemble(&mut self, source: &str) -> Result<Vec<u8>> {
-        // Pass 1: Build symbol table
-        self.pass = 1;
-        self.current_address = 0;
-        self.symbols.clear();
-        self.output.clear();
-        
-        for line in source.lines() {
-            self.process_line(line)?;
-        }
-        
-        // Pass 2: Generate code
-        self.pass = 2;
-        self.current_address = 0;
-        self.output.clear();
-        self.forward_refs.clear();
-        
-        for line in source.lines() {
-            self.process_line(line)?;
-        }
-        
-        self.resolve_forward_refs()?;
-        
-        Ok(self.output.clone())
+pub fn assemble(&mut self, source: &str) -> Result<Vec<u8>> {
+    // Pass 1: Build symbol table
+    self.pass = 1;
+    self.current_address = 0;
+    self.current_line = 0;  // Initialize
+    self.symbols.clear();
+    self.output.clear();
+    
+    for line in source.lines() {
+        self.current_line += 1;        // ← Add this
+        self.current_line_text = line.to_string();  // ← Add this
+        self.process_line(line)?;
+    }
+    
+    // Pass 2: Generate code
+    self.pass = 2;
+    self.current_address = 0;
+    self.current_line = 0;  // Reset
+    self.output.clear();
+    self.forward_refs.clear();
+    
+    for line in source.lines() {
+        self.current_line += 1;        // ← Add this
+        self.current_line_text = line.to_string();  // ← Add this
+        self.process_line(line)?;
+    }
+    
+    self.resolve_forward_refs()?;
+    
+    Ok(self.output.clone())
     }
     
     fn process_line(&mut self, line: &str) -> Result<()> {
@@ -129,11 +135,12 @@ impl Assembler {
             if parts.len() >= 3 && parts[1] == "EQU" {
                 let label = parts[0];
                 let value_str = parts[2..].join(" ");
-                let value = self.parse_number(&value_str)?;
+                let value = self.parse_number(&value_str)
+                    .map_err(|e| self.add_line_context(e))?;
                 
                 if self.pass == 1 {
                     if self.symbols.contains_key(label) {
-                        return Err(AsmError::DuplicateLabel(label.to_string()));
+                        return Err(self.add_line_context(AsmError::DuplicateLabel(label.to_string())));
                     }
                     self.symbols.insert(label.to_string(), value);
                 }
@@ -153,17 +160,27 @@ impl Assembler {
         if let Some(label) = label {
             if self.pass == 1 {
                 if self.symbols.contains_key(label) {
-                    return Err(AsmError::DuplicateLabel(label.to_string()));
+                    return Err(self.add_line_context(AsmError::DuplicateLabel(label.to_string())));
                 }
                 self.symbols.insert(label.to_string(), self.current_address);
             }
         }
         
         if !rest.is_empty() {
-            self.process_statement(rest)?;
+            self.process_statement(rest)
+                .map_err(|e| self.add_line_context(e))?;
         }
         
         Ok(())
+    }
+    
+    fn add_line_context(&self, err: AsmError) -> AsmError {
+        AsmError::SyntaxError(format!(
+            "Line {}: {}\n    {}", 
+            self.current_line, 
+            err, 
+            self.current_line_text.trim()
+        ))
     }
     
     fn process_statement(&mut self, stmt: &str) -> Result<()> {
@@ -193,15 +210,34 @@ impl Assembler {
                 self.current_address = addr;
                 Ok(true)
             }
+             "END" => {
+            // END directive - marks end of source
+            // Operand (if present) specifies entry point but we ignore it
+            Ok(true)
+            }
             "DB" | "DEFB" => {
                 for operand in operands.split(',') {
                     let operand = operand.trim();
+                    
+                    // Handle double-quoted strings: "ABC"
                     if operand.starts_with('"') && operand.ends_with('"') {
                         let s = &operand[1..operand.len() - 1];
                         for ch in s.chars() {
                             self.emit_byte(ch as u8);
                         }
-                    } else {
+                    }
+                    // Handle single-quoted characters: 'A'
+                    else if operand.starts_with('\'') && operand.ends_with('\'') {
+                        let s = &operand[1..operand.len() - 1];
+                        if s.len() != 1 {
+                            return Err(AsmError::SyntaxError(
+                                format!("Single quotes must contain exactly one character: {}", operand)
+                            ));
+                        }
+                        self.emit_byte(s.chars().next().unwrap() as u8);
+                    }
+                    // Handle numeric expressions
+                    else {
                         let value = self.parse_expression(operand)?;
                         self.emit_byte(value as u8);
                     }
@@ -640,7 +676,7 @@ fn main() {
             }
         }
         Err(e) => {
-            eprintln!("\n✗ Assembly failed:");
+            eprintln!("✗ Assembly failed:");
             eprintln!("{}", e);
             std::process::exit(1);
         }

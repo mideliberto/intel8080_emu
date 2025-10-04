@@ -272,15 +272,37 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
     // FLAG HELPERS
     // ============================================
     
-    pub fn update_flags(&mut self, result: u8, carry: bool) {
+        pub fn update_flags(&mut self, result: u8, carry: bool) {
+            println!("update_flags: result={}, carry={}", result, carry);
+            self.flags = FLAG_BIT_1;
+            
+            if result == 0 { 
+                println!("  Setting FLAG_ZERO (0x{:02X})", FLAG_ZERO);
+                self.flags |= FLAG_ZERO; 
+            }
+            if result & 0x80 != 0 { self.flags |= FLAG_SIGN; }
+            if result.count_ones() % 2 == 0 { self.flags |= FLAG_PARITY; }
+            if carry { self.flags |= FLAG_CARRY; }
+            println!("  Final flags: {:08b}", self.flags);
+        }
+            fn update_flags_arithmetic(&mut self, result: u8, carry: bool, aux_carry: bool) {
+            self.flags = FLAG_BIT_1;
+            
+            if result == 0 { self.flags |= FLAG_ZERO; }
+            if result & 0x80 != 0 { self.flags |= FLAG_SIGN; }
+            if result.count_ones() % 2 == 0 { self.flags |= FLAG_PARITY; }
+            if carry { self.flags |= FLAG_CARRY; }
+            if aux_carry { self.flags |= FLAG_AUX_CARRY; }
+        }
+
+    fn update_flags_logical(&mut self, result: u8) {
         self.flags = FLAG_BIT_1;
         
         if result == 0 { self.flags |= FLAG_ZERO; }
         if result & 0x80 != 0 { self.flags |= FLAG_SIGN; }
         if result.count_ones() % 2 == 0 { self.flags |= FLAG_PARITY; }
-        if carry { self.flags |= FLAG_CARRY; }
+        // Carry and aux carry are cleared
     }
-    
     // ============================================
     // MAIN EXECUTION
     // ============================================
@@ -290,11 +312,21 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
             self.execute_one();
         }
     }
+//
+//    pub fn perform_mov(&mut self, opcode: u8) {
+ //       let dest = (opcode >> 3) & 0x07;
+  //      let src = opcode & 0x07;
+    //    let value = self.get_reg_by_code(src);
+     //   self.set_reg_by_code(dest, value);
+     //   5;
+  //  }
+
     
     pub fn execute_one(&mut self) {
         let opcode = self.fetch_byte();
-        
-        match opcode {
+println!("Executing {:02X} at PC {:04X}, flags before: {:08b}", 
+         opcode, self.pc.wrapping_sub(1), self.flags);
+            let cycles = match opcode {
             // ===== SPECIAL CASES FIRST =====
             0x00 => {},  // NOP
             0x76 => self.halted = true,  // HLT
@@ -318,41 +350,46 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
                 match operation {
                     0 => {  // ADD
                         let result = self.a as u16 + value as u16;
+                        let aux_carry = (self.a & 0x0F) + (value & 0x0F) > 0x0F;
                         self.a = result as u8;
-                        self.update_flags(self.a, result > 0xFF);
+                        self.update_flags_arithmetic(self.a, result > 0xFF, aux_carry);
                     }
                     1 => {  // ADC (add with carry)
-                        let carry = if self.flags & FLAG_CARRY != 0 { 1 } else { 0 };
-                        let result = self.a as u16 + value as u16 + carry;
+                        let carry_in = if self.flags & FLAG_CARRY != 0 { 1 } else { 0 };
+                        let result = self.a as u16 + value as u16 + carry_in;
+                        let aux_carry = (self.a & 0x0F) + (value & 0x0F) + carry_in as u8 > 0x0F;
                         self.a = result as u8;
-                        self.update_flags(self.a, result > 0xFF);
+                        self.update_flags_arithmetic(self.a, result > 0xFF, aux_carry);
                     }
                     2 => {  // SUB
                         let result = (self.a as i16) - (value as i16);
+                        let aux_borrow = (self.a & 0x0F) < (value & 0x0F);  // ← ADD THIS
                         self.a = result as u8;
-                        self.update_flags(self.a, result < 0);
+                        self.update_flags_arithmetic(self.a, result < 0,aux_borrow);
                     }
                     3 => {  // SBB (subtract with borrow)
                         let carry = if self.flags & FLAG_CARRY != 0 { 1 } else { 0 };
                         let result = (self.a as i16) - (value as i16) - carry;
+                        let aux_borrow = (self.a as i16 & 0x0F) - (value as i16 & 0x0F) - carry < 0;  // ← ADD THIS
                         self.a = result as u8;
-                        self.update_flags(self.a, result < 0);
+                        self.update_flags_arithmetic(self.a, result < 0, aux_borrow);  
                     }
                     4 => {  // ANA (AND)
                         self.a &= value;
-                        self.update_flags(self.a, false);
+    self.update_flags_logical(self.a);  // ← Uses logical version
                     }
-                    5 => {  // XRA (XOR)
+                    5 => {  // XRA
                         self.a ^= value;
-                        self.update_flags(self.a, false);
+    self.update_flags_logical(self.a);  // ← Uses logical version
                     }
                     6 => {  // ORA (OR)
                         self.a |= value;
-                        self.update_flags(self.a, false);
+    self.update_flags_logical(self.a);  // ← Uses logical version
                     }
                     7 => {  // CMP (compare)
                         let result = (self.a as i16) - (value as i16);
-                        self.update_flags(result as u8, result < 0);
+                        let aux_borrow = (self.a & 0x0F) < (value & 0x0F);  // ← ADD
+                        self.update_flags_arithmetic(result as u8, result < 0, aux_borrow); 
                         // CMP doesn't change A, only flags
                     }
                     _ => unreachable!(),
@@ -367,28 +404,29 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
             }
             
             // ===== INR FAMILY: 00RRR100 =====
-            b if (b & 0xC7) == 0x04 => {
+            b if (b & 0xC7) == 0x04 => {  // INR
                 let reg = (opcode >> 3) & 0x07;
                 let value = self.get_reg_by_code(reg);
                 let result = value.wrapping_add(1);
+                let aux_carry = (value & 0x0F) == 0x0F;  // Overflow from bit 3
+                
                 self.set_reg_by_code(reg, result);
                 
-                // INR doesn't affect carry
+                // Preserve carry, set everything else
                 let carry = self.flags & FLAG_CARRY;
-                self.update_flags(result, false);
+                self.update_flags_arithmetic(result, false, aux_carry);
                 self.flags = (self.flags & !FLAG_CARRY) | carry;
             }
             
-            // ===== DCR FAMILY: 00RRR101 =====
             b if (b & 0xC7) == 0x05 => {
                 let reg = (opcode >> 3) & 0x07;
                 let value = self.get_reg_by_code(reg);
                 let result = value.wrapping_sub(1);
+                let aux_carry = (value & 0x0F) == 0x00;  // ← ADD THIS
                 self.set_reg_by_code(reg, result);
                 
-                // DCR doesn't affect carry
                 let carry = self.flags & FLAG_CARRY;
-                self.update_flags(result, false);
+                self.update_flags_arithmetic(result, false, aux_carry);  // ← CHANGE THIS
                 self.flags = (self.flags & !FLAG_CARRY) | carry;
             }
             
@@ -449,18 +487,18 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
             
             // ===== CONDITIONAL JUMPS: 11CCC010 =====
             b if (b & 0xC7) == 0xC2 => {
-                let condition = (opcode >> 3) & 0x07;
+                let condition = Condition::from_code((opcode >> 3) & 0x07);
                 let addr = self.fetch_word();
-                if self.test_condition_by_code(condition) {
+                if self.test_condition(condition) {
                     self.pc = addr;
                 }
             }
             
             // ===== CONDITIONAL CALLS: 11CCC100 =====
             b if (b & 0xC7) == 0xC4 => {
-                let condition = (opcode >> 3) & 0x07;
+                let condition = Condition::from_code((opcode >> 3) & 0x07);
                 let addr = self.fetch_word();
-                if self.test_condition_by_code(condition) {
+                if self.test_condition(condition) {
                     self.sp = self.sp.wrapping_sub(2);
                     self.write_word(self.sp, self.pc);
                     self.pc = addr;
@@ -469,8 +507,8 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
             
             // ===== CONDITIONAL RETURNS: 11CCC000 =====
             b if (b & 0xC7) == 0xC0 => {
-                let condition = (opcode >> 3) & 0x07;
-                if self.test_condition_by_code(condition) {
+                let condition = Condition::from_code((opcode >> 3) & 0x07);
+                if self.test_condition(condition) {
                     self.pc = self.read_word(self.sp);
                     self.sp = self.sp.wrapping_add(2);
                 }
@@ -525,34 +563,40 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
             0xC6 => {  // ADI
                 let data = self.fetch_byte();
                 let result = self.a as u16 + data as u16;
+                let aux_carry = (self.a & 0x0F) + (data & 0x0F) > 0x0F;
                 self.a = result as u8;
-                self.update_flags(self.a, result > 0xFF);
+                self.update_flags_arithmetic(self.a, result > 0xFF, aux_carry);
             }
             0xD6 => {  // SUI
                 let data = self.fetch_byte();
                 let result = (self.a as i16) - (data as i16);
+                let aux_carry = (self.a & 0x0F) + (data & 0x0F) > 0x0F;
+
                 self.a = result as u8;
-                self.update_flags(self.a, result < 0);
+                self.update_flags_arithmetic(self.a, result > 0xFF, aux_carry);  // ← CHANGE THIS
             }
             0xE6 => {  // ANI
                 let data = self.fetch_byte();
                 self.a &= data;
-                self.update_flags(self.a, false);
+    self.update_flags_logical(self.a);  // ← Uses logical version
             }
             0xEE => {  // XRI
                 let data = self.fetch_byte();
                 self.a ^= data;
-                self.update_flags(self.a, false);
+    self.update_flags_logical(self.a);  // ← Uses logical version
             }
             0xF6 => {  // ORI
                 let data = self.fetch_byte();
                 self.a |= data;
-                self.update_flags(self.a, false);
+    self.update_flags_logical(self.a);  // ← Uses logical version
             }
             0xFE => {  // CPI
-                let data = self.fetch_byte();
-                let result = (self.a as i16) - (data as i16);
-                self.update_flags(result as u8, result < 0);
+    let data = self.fetch_byte();
+    println!("CPI: A={}, data={}", self.a, data);
+    let result = (self.a as i16) - (data as i16);
+    println!("CPI: result (i16)={}, result (u8)={}", result, result as u8);
+    self.update_flags(result as u8, result < 0);
+    println!("CPI: flags after update={:08b}", self.flags);
             }
             // Add these cases to your execute_one() function:
 
@@ -610,15 +654,19 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
                 let data = self.fetch_byte();
                 let carry = if self.flags & FLAG_CARRY != 0 { 1 } else { 0 };
                 let result = self.a as u16 + data as u16 + carry;
+                let aux_carry = (self.a & 0x0F) + (data & 0x0F) > 0x0F;  // ← ADD THIS
+
                 self.a = result as u8;
-                self.update_flags(self.a, result > 0xFF);
+                self.update_flags_arithmetic(self.a, result > 0xFF, aux_carry);  // ← CHANGE THIS
             }
             0xDE => {  // SBI - Subtract Immediate with Borrow
                 let data = self.fetch_byte();
                 let carry = if self.flags & FLAG_CARRY != 0 { 1 } else { 0 };
                 let result = (self.a as i16) - (data as i16) - carry;
+                                let aux_carry = (self.a & 0x0F) + (data & 0x0F) > 0x0F;  // ← ADD THIS
+
                 self.a = result as u8;
-                self.update_flags(self.a, result < 0);
+                self.update_flags_arithmetic(self.a, result > 0xFF, aux_carry);  // ← CHANGE THIS
             }
 
             // ===== I/O INSTRUCTIONS =====
@@ -665,7 +713,11 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
             }
             _ => panic!("Unknown opcode: 0x{:02X} at PC: 0x{:04X}", 
                        opcode, self.pc.wrapping_sub(1)),
-        }
+        };
+        self.cycles += 10;
+            println!("Flags after: {:08b}\n", self.flags);
+
+
     }
     
     // ============================================
@@ -796,10 +848,19 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
     // PUBLIC UTILITIES
     // ============================================
     
-    pub fn load_program(&mut self, program: &[u8], start_address: u16) {
-        for (i, &byte) in program.iter().enumerate() {
-            self.memory[start_address as usize + i] = byte;
-        }
-        self.pc = start_address;
+pub fn load_program(&mut self, program: &[u8], start_address: u16) {
+    println!("Loading {} bytes at 0x{:04X}: {:02X?}", 
+             program.len(), start_address, program);
+    for (i, &byte) in program.iter().enumerate() {
+        self.memory[start_address as usize + i] = byte;
     }
+    self.pc = start_address;
+    
+    // Verify what actually got loaded
+    print!("Verify: ");
+    for i in 0..program.len() {
+        print!("{:02X} ", self.memory[start_address as usize + i]);
+    }
+    println!();
+}
 }

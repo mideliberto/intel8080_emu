@@ -4,11 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "asm8080"
+name = "asm"
 path = "src/bin/asm8080.rs"
 
 [[bin]]
 name = "intel8080_emu"
 path = "src/main.rs"
+
+[lib]
+name = "intel8080_emu"
+path = "src/lib.rs"
 
 [dependencies]

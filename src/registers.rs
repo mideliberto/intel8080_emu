@@ -1,45 +1,28 @@
-//! Register definitions for the Intel 8080 processor.
-//! 
-//! This module defines the various register types used in the 8080:
-//! - 8-bit registers (A, B, C, D, E, H, L, M)
-//! - Register pairs for 16-bit operations (BC, DE, HL, SP)
-//! - Special pairs for PUSH/POP (includes PSW)
-//! - Condition codes for branching
+// Flag bit positions for the 8080
+pub const FLAG_CARRY: u8     = 0b00000001;  // Bit 0
+pub const FLAG_BIT_1: u8     = 0b00000010;  // Bit 1 (always 1)
+pub const FLAG_PARITY: u8    = 0b00000100;  // Bit 2
+pub const FLAG_BIT_3: u8     = 0b00000000;  // Bit 3 (always 0)
+pub const FLAG_AUX_CARRY: u8 = 0b00010000;  // Bit 4
+pub const FLAG_BIT_5: u8     = 0b00000000;  // Bit 5 (always 0)
+pub const FLAG_ZERO: u8      = 0b01000000;  // Bit 6
+pub const FLAG_SIGN: u8      = 0b10000000;  // Bit 7
 
-// ============================================
-// FLAG BIT DEFINITIONS
-// ============================================
-
-/// Flag bit positions in the 8080 flags register
-pub const FLAG_CARRY: u8     = 0b00000001;  // Bit 0: Carry flag
-pub const FLAG_BIT_1: u8     = 0b00000010;  // Bit 1: Always set to 1
-pub const FLAG_PARITY: u8    = 0b00000100;  // Bit 2: Parity flag (even parity)
-pub const FLAG_BIT_3: u8     = 0b00000000;  // Bit 3: Unused (always 0)
-pub const FLAG_AUX_CARRY: u8 = 0b00010000;  // Bit 4: Auxiliary carry (half-carry)
-pub const FLAG_BIT_5: u8     = 0b00000000;  // Bit 5: Unused (always 0)
-pub const FLAG_ZERO: u8      = 0b01000000;  // Bit 6: Zero flag
-pub const FLAG_SIGN: u8      = 0b10000000;  // Bit 7: Sign flag (negative)
-
-// ============================================
-// CONDITION CODES
-// ============================================
-
-/// Condition codes for conditional jumps, calls, and returns
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Condition {
-    NZ = 0,  // Not Zero (Z flag = 0)
-    Z  = 1,  // Zero (Z flag = 1)
-    NC = 2,  // No Carry (C flag = 0)
-    C  = 3,  // Carry (C flag = 1)
-    PO = 4,  // Parity Odd (P flag = 0)
-    PE = 5,  // Parity Even (P flag = 1)
-    P  = 6,  // Plus/Positive (S flag = 0)
-    M  = 7,  // Minus/Negative (S flag = 1)
+    NZ = 0,  // Not Zero
+    Z  = 1,  // Zero
+    NC = 2,  // No Carry
+    C  = 3,  // Carry
+    PO = 4,  // Parity Odd
+    PE = 5,  // Parity Even
+    P  = 6,  // Plus (positive)
+    M  = 7,  // Minus (negative)
 }
 
 impl Condition {
-    /// Decode condition from 3-bit field in instruction
+    /// Convert from 3-bit condition field in opcode
     pub fn from_code(code: u8) -> Self {
         match code & 0x07 {
             0 => Condition::NZ,
@@ -54,12 +37,12 @@ impl Condition {
         }
     }
     
-    /// Encode condition to 3-bit value
+    /// Get the 3-bit encoding
     pub fn to_code(self) -> u8 {
         self as u8
     }
     
-    /// Get assembly mnemonic (e.g., "NZ", "C")
+    /// Get mnemonic for disassembly
     pub fn name(self) -> &'static str {
         match self {
             Condition::NZ => "NZ",
@@ -87,7 +70,7 @@ impl Condition {
         }
     }
     
-    /// Get the flag bit this condition tests
+    /// Which flag bit this condition tests
     pub fn flag_mask(self) -> u8 {
         match self {
             Condition::NZ | Condition::Z  => FLAG_ZERO,
@@ -97,7 +80,7 @@ impl Condition {
         }
     }
     
-    /// Check if condition requires flag to be set (true) or clear (false)
+    /// Should the flag be set (true) or clear (false) for this condition
     pub fn flag_value(self) -> bool {
         match self {
             Condition::Z | Condition::C | Condition::PE | Condition::M => true,
@@ -106,26 +89,21 @@ impl Condition {
     }
 }
 
-// ============================================
-// 8-BIT REGISTERS
-// ============================================
-
-/// 8-bit register encoding as found in opcodes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Register {
-    B = 0,   // General purpose
-    C = 1,   // General purpose
-    D = 2,   // General purpose
-    E = 3,   // General purpose
-    H = 4,   // High byte of HL
-    L = 5,   // Low byte of HL
-    M = 6,   // Memory location pointed to by HL
-    A = 7,   // Accumulator
+    B = 0,
+    C = 1,
+    D = 2,
+    E = 3,
+    H = 4,
+    L = 5,
+    M = 6,  // Memory at HL
+    A = 7,
 }
 
 impl Register {
-    /// Decode register from 3-bit field in instruction
+    /// Convert from 3-bit opcode field to Register enum
     pub fn from_code(code: u8) -> Self {
         match code & 0x07 {
             0 => Register::B,
@@ -140,12 +118,12 @@ impl Register {
         }
     }
     
-    /// Encode register to 3-bit value
+    /// Get the 3-bit encoding for this register
     pub fn to_code(self) -> u8 {
         self as u8
     }
     
-    /// Get assembly mnemonic (e.g., "A", "B", "M")
+    /// Get register name for disassembly
     pub fn name(self) -> &'static str {
         match self {
             Register::B => "B",
@@ -158,18 +136,18 @@ impl Register {
             Register::A => "A",
         }
     }
-    
-    /// Check if this register refers to memory
+    /// Check if this is a memory reference
     pub fn is_memory(self) -> bool {
         matches!(self, Register::M)
     }
     
-    /// Extra cycles needed for memory operations
+    /// Get cycle count for operations with this register
+    /// (Memory operations take longer)
     pub fn cycle_modifier(self) -> u8 {
-        if self.is_memory() { 3 } else { 0 }
+        if self.is_memory() { 3 } else { 0 }  // Add 3 cycles for M
     }
     
-    /// Get human-readable description
+    /// For debugging/verbose output
     pub fn description(self) -> &'static str {
         match self {
             Register::B => "B register",
@@ -184,24 +162,18 @@ impl Register {
     }
 }
 
-// ============================================
-// REGISTER PAIRS
-// ============================================
-
-/// 16-bit register pairs for data operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RegisterPair {
-    BC = 0,  // B (high), C (low)
-    DE = 1,  // D (high), E (low)
-    HL = 2,  // H (high), L (low)
-    SP = 3,  // Stack pointer (note: becomes PSW for PUSH/POP)
+    BC = 0,
+    DE = 1,
+    HL = 2,
+    SP = 3,  // Note: Sometimes this is PSW instead
 }
 
 impl RegisterPair {
-    // ===== Conversion methods =====
-    
-    /// Decode register pair from 2-bit field in instruction
+    // Conversion methods
+
     pub fn from_code(code: u8) -> Self {
         match code & 0x03 {
             0 => RegisterPair::BC,
@@ -211,36 +183,28 @@ impl RegisterPair {
             _ => unreachable!(),
         }
     }
-    
-    /// Encode register pair to 2-bit value
     pub fn to_code(self) -> u8 {
         self as u8
     }
-    
-    /// Decode PUSH/POP pair from instruction (SP becomes PSW)
     pub fn from_push_pop_code(code: u8) -> PushPopPair {
         match code & 0x03 {
             0 => PushPopPair::BC,
             1 => PushPopPair::DE,
             2 => PushPopPair::HL,
-            3 => PushPopPair::PSW,  // Note: PSW not SP
+            3 => PushPopPair::PSW,  // PSW instead of SP!
             _ => unreachable!(),
         }
     }
-    
-    /// Convert to PUSH/POP encoding
     pub fn to_push_pop(self) -> PushPopPair {
         match self {
             RegisterPair::BC => PushPopPair::BC,
             RegisterPair::DE => PushPopPair::DE,
             RegisterPair::HL => PushPopPair::HL,
-            RegisterPair::SP => PushPopPair::PSW,  // SP becomes PSW
+            RegisterPair::SP => PushPopPair::PSW,  // This is the quirk!
         }
     }
 
-    // ===== Display methods =====
-    
-    /// Get assembly mnemonic (e.g., "BC", "HL")
+    //Display Methods
     pub fn name(self) -> &'static str {
         match self {
             RegisterPair::BC => "BC",
@@ -249,8 +213,6 @@ impl RegisterPair {
             RegisterPair::SP => "SP",
         }
     }
-    
-    /// Get human-readable description
     pub fn description(self) -> &'static str {
         match self {
             RegisterPair::BC => "BC register pair",
@@ -260,62 +222,57 @@ impl RegisterPair {
         }
     }
 
-    // ===== Component access =====
-    
-    /// Get the low byte register of this pair
+    //Component Methods
     pub fn low_register(self) -> Option<Register> {
         match self {
             RegisterPair::BC => Some(Register::C),
             RegisterPair::DE => Some(Register::E),
             RegisterPair::HL => Some(Register::L),
-            RegisterPair::SP => None,  // SP has no 8-bit components
+            RegisterPair::SP => None,
         }
     }
-    
-    /// Get the high byte register of this pair
     pub fn high_register(self) -> Option<Register> {
         match self {
             RegisterPair::BC => Some(Register::B),
             RegisterPair::DE => Some(Register::D),
             RegisterPair::HL => Some(Register::H),
-            RegisterPair::SP => None,  // SP has no 8-bit components
+            RegisterPair::SP => None,  // SP doesn't map to 8-bit registers
         }
     }
 
-    // ===== Capability queries =====
-    
-    /// Check if this pair matches a PUSH/POP pair
+    // Capability queries
     pub fn matches_push_pop(&self, pp: PushPopPair) -> bool {
         match (*self, pp) {
             (RegisterPair::BC, PushPopPair::BC) => true,
             (RegisterPair::DE, PushPopPair::DE) => true,
             (RegisterPair::HL, PushPopPair::HL) => true,
-            _ => false,  // SP and PSW don't match
+            _ => false,
         }
     }
-    
-    /// Check if this pair supports indirect addressing (LDAX/STAX)
     pub fn supports_indirect(self) -> bool {
         matches!(self, RegisterPair::BC | RegisterPair::DE)
     }
 }
 
-// ============================================
-// PUSH/POP REGISTER PAIRS
-// ============================================
 
-/// Register pairs for PUSH/POP operations (includes PSW)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PushPopPair {
-    BC = 0,   // BC pair
-    DE = 1,   // DE pair
-    HL = 2,   // HL pair
-    PSW = 3,  // Program Status Word (A + Flags)
+    BC = 0,
+    DE = 1,
+    HL = 2,
+    PSW = 3,  // AF for PUSH/POP
 }
 
 impl PushPopPair {
-    /// Decode PUSH/POP pair from 2-bit field in instruction
+    pub fn name(self) -> &'static str {
+        match self {
+            PushPopPair::BC => "BC",
+            PushPopPair::DE => "DE",
+            PushPopPair::HL => "HL",
+            PushPopPair::PSW => "PSW",
+        }
+    }
     pub fn from_code(code: u8) -> Self {
         match code & 0x03 {
             0 => PushPopPair::BC,
@@ -326,22 +283,11 @@ impl PushPopPair {
         }
     }
     
-    /// Encode PUSH/POP pair to 2-bit value
+    /// Get the 2-bit encoding
     pub fn to_code(self) -> u8 {
         self as u8
     }
     
-    /// Get assembly mnemonic (e.g., "BC", "PSW")
-    pub fn name(self) -> &'static str {
-        match self {
-            PushPopPair::BC => "BC",
-            PushPopPair::DE => "DE",
-            PushPopPair::HL => "HL",
-            PushPopPair::PSW => "PSW",
-        }
-    }
-    
-    /// Get human-readable description
     pub fn description(self) -> &'static str {
         match self {
             PushPopPair::BC => "BC register pair",
@@ -350,18 +296,17 @@ impl PushPopPair {
             PushPopPair::PSW => "Program Status Word (A + Flags)",
         }
     }
-    
-    /// Convert to regular register pair (if not PSW)
+    /// Convert to RegisterPair (if not PSW)
     pub fn to_register_pair(self) -> Option<RegisterPair> {
         match self {
             PushPopPair::BC => Some(RegisterPair::BC),
             PushPopPair::DE => Some(RegisterPair::DE),
             PushPopPair::HL => Some(RegisterPair::HL),
-            PushPopPair::PSW => None,  // PSW has no register pair equivalent
+            PushPopPair::PSW => None,  // PSW doesn't map to a register pair
         }
     }
     
-    /// Check if this is the PSW special case
+    /// Is this the PSW (special case)?
     pub fn is_psw(self) -> bool {
         matches!(self, PushPopPair::PSW)
     }
