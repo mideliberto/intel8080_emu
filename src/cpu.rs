@@ -1,7 +1,9 @@
 // cpu.rs - Intel 8080 CPU emulator core
 use crate::memory::{Memory, FlatMemory};
 use crate::io::IoBus;
-use crate::io::devices::timer::Timer;  
+use crate::io::devices::timer::Timer;
+use crate::io::IoDevice;
+
 
 use crate::registers::{Register, RegisterPair, PushPopPair, Condition};
 use crate::registers::{FLAG_CARRY, FLAG_BIT_1, FLAG_PARITY, FLAG_AUX_CARRY, FLAG_ZERO, FLAG_SIGN};
@@ -722,7 +724,7 @@ impl Intel8080 {
     pub fn perform_out(&mut self) -> u8{
         let port = self.fetch_byte();
         if port >= 0x30 && port <= 0x32 {
-            self.timer.write_port(port, self.a);
+            self.timer.write(port, self.a);
         } else {
             self.io_bus.write(port, self.a);
         }
@@ -732,7 +734,7 @@ impl Intel8080 {
     pub fn perform_in(&mut self) -> u8{
         let port = self.fetch_byte();
         self.a = if port >= 0x30 && port <= 0x32 {
-            self.timer.read_port(port)
+            self.timer.read(port)
         } else {
             self.io_bus.read(port)
         };
@@ -900,7 +902,7 @@ impl Intel8080 {
             _ => panic!("Unknown opcode: 0x{:02X} at PC: 0x{:04X}", 
                        opcode, self.pc.wrapping_sub(1)),
         };
-        self.timer.tick(cycles);
+        self.timer.tick(cycles as u64);
 
         self.cycles += cycles as u64;  // <-- ADD THIS
 
@@ -998,7 +1000,7 @@ impl Intel8080 {
                  if self.flags & 0x01 != 0 { "C" } else { "-" }); // Carry
         
         // Next instruction
-        let (mnemonic, size) = self.disassemble_at(self.pc);
+        let (mnemonic, _size) = self.disassemble_at(self.pc);
         println!("\nNext: [{:04X}] {}", self.pc, mnemonic);
         
         // Memory dump around PC

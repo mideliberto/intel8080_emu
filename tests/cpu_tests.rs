@@ -833,7 +833,6 @@ fn test_rc_taken() {
 // RST INSTRUCTIONS
 // ===========================================
 
-#[test]
 // FIXED: Standardized test_rst_7 and added RST 1-6
 // ===========================================
 // RST INSTRUCTIONS (ALL VECTORS)
