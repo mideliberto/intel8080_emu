@@ -1,4 +1,4 @@
-use intel8080_emu::intel8080cpu::Intel8080;
+use intel8080_emu::cpu::Intel8080;
 use intel8080_emu::registers::*;
 
 fn setup_cpu(program: &[u8]) -> Intel8080 {

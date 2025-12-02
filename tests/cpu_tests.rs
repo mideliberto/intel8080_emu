@@ -1,4 +1,4 @@
-use intel8080_emu::intel8080cpu::Intel8080;
+use intel8080_emu::cpu::Intel8080;
 use intel8080_emu::registers::*;
 
 fn setup_cpu(program: &[u8]) -> Intel8080 {
@@ -2678,7 +2678,6 @@ fn test_xra_sets_zero_clears_carry() {
     assert_eq!(cpu.flags & FLAG_CARRY, 0, "XRA clears carry");
 }
 
-#[test]
 #[test]
 fn test_cma_preserves_carry() {
     // Test 1: Carry set stays set

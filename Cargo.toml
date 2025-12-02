@@ -1,18 +1,16 @@
 [package]
 name = "intel8080_emu"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "Intel 8080 Emulator with Monitor ROM"
+authors = ["Mike"]
 
-[[bin]]
-name = "asm"
-path = "src/bin/asm8080.rs"
-
-[[bin]]
-name = "intel8080_emu"
-path = "src/main.rs"
+[dependencies]
 
 [lib]
 name = "intel8080_emu"
 path = "src/lib.rs"
 
-[dependencies]
+[[bin]]
+name = "intel8080"
+path = "src/main.rs"

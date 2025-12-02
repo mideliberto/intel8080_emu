@@ -1,4 +1,4 @@
-// 8080cpu.rs - Intel 8080 CPU emulator core
+// cpu.rs - Intel 8080 CPU emulator core
 use crate::memory::{Memory, FlatMemory};
 use crate::io::IoBus;
 use crate::io::devices::timer::Timer;  
@@ -149,105 +149,26 @@ impl Intel8080 {
             Condition::M  => (self.flags & FLAG_SIGN) != 0,
         }
     }
-    // ============================================
-// LAYER 2.5: Backward compatibility with codes
-// ============================================
-
-/// Get register by code (for instruction decoding)
-#[inline]
-pub fn get_reg_by_code(&mut self, code: u8) -> u8 {
-    match code & 0x07 {
-        0 => self.b,
-        1 => self.c,
-        2 => self.d,
-        3 => self.e,
-        4 => self.h,
-        5 => self.l,
-        6 => self.read_byte(self.get_hl()),//memory[self.get_hl() as usize],
-        7 => self.a,
-        _ => unreachable!(),
+    
+    #[inline]
+    pub fn get_push_pop_pair(&self, pair: PushPopPair) -> u16 {
+        match pair {
+            PushPopPair::BC => self.get_bc(),
+            PushPopPair::DE => self.get_de(),
+            PushPopPair::HL => self.get_hl(),
+            PushPopPair::PSW => self.get_psw(),
+        }
     }
-}
-
-/// Set register by code (for instruction decoding)
-#[inline]
-pub fn set_reg_by_code(&mut self, code: u8, val: u8) {
-    match code & 0x07 {
-        0 => self.b = val,
-        1 => self.c = val,
-        2 => self.d = val,
-        3 => self.e = val,
-        4 => self.h = val,
-        5 => self.l = val,
-        6 => self.write_byte(self.get_hl(), val),//memory[self.get_hl() as usize] = val,
-        7 => self.a = val,
-        _ => unreachable!(),
+    
+    #[inline]
+    pub fn set_push_pop_pair(&mut self, pair: PushPopPair, val: u16) {
+        match pair {
+            PushPopPair::BC => self.set_bc(val),
+            PushPopPair::DE => self.set_de(val),
+            PushPopPair::HL => self.set_hl(val),
+            PushPopPair::PSW => self.set_psw(val),
+        }
     }
-}
-
-/// Get pair by code
-#[inline]
-pub fn get_pair_by_code(&self, code: u8) -> u16 {
-    match code & 0x03 {
-        0 => self.get_bc(),
-        1 => self.get_de(),
-        2 => self.get_hl(),
-        3 => self.sp,
-        _ => unreachable!(),
-    }
-}
-
-/// Set pair by code
-#[inline]
-pub fn set_pair_by_code(&mut self, code: u8, val: u16) {
-    match code & 0x03 {
-        0 => self.set_bc(val),
-        1 => self.set_de(val),
-        2 => self.set_hl(val),
-        3 => self.sp = val,
-        _ => unreachable!(),
-    }
-}
-
-/// Get PUSH/POP pair by code
-#[inline]
-pub fn get_push_pop_pair_by_code(&self, code: u8) -> u16 {
-    match code & 0x03 {
-        0 => self.get_bc(),
-        1 => self.get_de(),
-        2 => self.get_hl(),
-        3 => self.get_psw(),  // PSW for PUSH/POP, not SP!
-        _ => unreachable!(),
-    }
-}
-
-/// Set PUSH/POP pair by code
-#[inline]
-pub fn set_push_pop_pair_by_code(&mut self, code: u8, val: u16) {
-    match code & 0x03 {
-        0 => self.set_bc(val),
-        1 => self.set_de(val),
-        2 => self.set_hl(val),
-        3 => self.set_psw(val),  // PSW for PUSH/POP
-        _ => unreachable!(),
-    }
-}
-
-/// Test condition by code
-#[inline]
-pub fn test_condition_by_code(&self, condition: u8) -> bool {
-    match condition & 0x07 {
-        0 => (self.flags & FLAG_ZERO) == 0,     // NZ
-        1 => (self.flags & FLAG_ZERO) != 0,     // Z
-        2 => (self.flags & FLAG_CARRY) == 0,    // NC
-        3 => (self.flags & FLAG_CARRY) != 0,    // C
-        4 => (self.flags & FLAG_PARITY) == 0,   // PO
-        5 => (self.flags & FLAG_PARITY) != 0,   // PE
-        6 => (self.flags & FLAG_SIGN) == 0,     // P
-        7 => (self.flags & FLAG_SIGN) != 0,     // M
-        _ => unreachable!(),
-    }
-}
     // ============================================
     // MEMORY HELPERS
     // ============================================
@@ -359,11 +280,11 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
     }
 
     pub fn perform_mov(&mut self, opcode: u8) -> u8 {
-        let dest = (opcode >> 3) & 0x07;
-        let src = opcode & 0x07;
-        let value = self.get_reg_by_code(src);
-        self.set_reg_by_code(dest, value);
-        if (dest == Register::M.to_code()) || (src == Register::M.to_code()) {
+        let dest = Register::from_code((opcode >> 3) & 0x07);
+        let src = Register::from_code(opcode & 0x07);
+        let value = self.get_reg(src);
+        self.set_reg(dest, value);
+        if dest == Register::M || src == Register::M {
             7
         } else {
             5
@@ -372,8 +293,8 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
 
     pub fn perform_alu(&mut self, opcode: u8) -> u8{
         let operation = (opcode >> 3) & 0x07;
-        let src = opcode & 0x07;
-        let value = self.get_reg_by_code(src);
+        let src = Register::from_code(opcode & 0x07);
+        let value = self.get_reg(src);
         
         match operation {
             0 => {  // ADD
@@ -391,38 +312,38 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
             }
             2 => {  // SUB
                 let result = (self.a as i16) - (value as i16);
-                let aux_borrow = (self.a & 0x0F) < (value & 0x0F);  // ← ADD THIS
+                let aux_borrow = (self.a & 0x0F) < (value & 0x0F);
                 self.a = result as u8;
                 self.update_flags_arithmetic(self.a, result < 0,aux_borrow);
             }
             3 => {  // SBB (subtract with borrow)
                 let carry = if self.flags & FLAG_CARRY != 0 { 1 } else { 0 };
                 let result = (self.a as i16) - (value as i16) - carry;
-                let aux_borrow = (self.a as i16 & 0x0F) - (value as i16 & 0x0F) - carry < 0;  // ← ADD THIS
+                let aux_borrow = (self.a as i16 & 0x0F) - (value as i16 & 0x0F) - carry < 0;
                 self.a = result as u8;
                 self.update_flags_arithmetic(self.a, result < 0, aux_borrow);  
             }
             4 => {  // ANA (AND)
                 self.a &= value;
-                self.update_flags_logical(self.a);  // ← Uses logical version
+                self.update_flags_logical(self.a);
             }
             5 => {  // XRA
                 self.a ^= value;
-                self.update_flags_logical(self.a);  // ← Uses logical version
+                self.update_flags_logical(self.a);
             }
             6 => {  // ORA (OR)
                 self.a |= value;
-                self.update_flags_logical(self.a);  // ← Uses logical version
+                self.update_flags_logical(self.a);
             }
             7 => {  // CMP (compare)
                 let result = (self.a as i16) - (value as i16);
-                let aux_borrow = (self.a & 0x0F) < (value & 0x0F);  // ← ADD
+                let aux_borrow = (self.a & 0x0F) < (value & 0x0F);
                 self.update_flags_arithmetic(result as u8, result < 0, aux_borrow); 
                 // CMP doesn't change A, only flags
             }
             _ => unreachable!(),
         }
-        if src == Register::M.to_code() {
+        if src == Register::M {
             7
         } else {
             4
@@ -430,10 +351,10 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
     }
 
     pub fn perform_mvi(&mut self, opcode: u8) -> u8{
-        let reg = (opcode >> 3) & 0x07;
+        let reg = Register::from_code((opcode >> 3) & 0x07);
         let value = self.fetch_byte();
-        self.set_reg_by_code(reg, value);
-        if reg == Register::M.to_code() {
+        self.set_reg(reg, value);
+        if reg == Register::M {
             10
         } else {
             7
@@ -441,19 +362,19 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
     }
 
     pub fn perform_inr(&mut self, opcode: u8) -> u8{
-        let reg = (opcode >> 3) & 0x07;
-        let value = self.get_reg_by_code(reg);
+        let reg = Register::from_code((opcode >> 3) & 0x07);
+        let value = self.get_reg(reg);
         let result = value.wrapping_add(1);
         let aux_carry = (value & 0x0F) == 0x0F;  // Overflow from bit 3
         
-        self.set_reg_by_code(reg, result);
+        self.set_reg(reg, result);
         
         // Preserve carry, set everything else
         let carry = self.flags & FLAG_CARRY;
         self.update_flags_arithmetic(result, false, aux_carry);
         self.flags = (self.flags & !FLAG_CARRY) | carry;
         
-        if reg == Register::M.to_code() {
+        if reg == Register::M {
             10
         } else {
             5
@@ -461,19 +382,19 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
     }
 
     pub fn perform_dcr(&mut self, opcode: u8) -> u8{
-        let reg = (opcode >> 3) & 0x07;
-        let value = self.get_reg_by_code(reg);
+        let reg = Register::from_code((opcode >> 3) & 0x07);
+        let value = self.get_reg(reg);
         let result = value.wrapping_sub(1);
         let aux_borrow = (value & 0x0F) == 0x00;  // Borrow from bit 4
         
-        self.set_reg_by_code(reg, result);
+        self.set_reg(reg, result);
         
         // Preserve carry, set everything else
         let carry = self.flags & FLAG_CARRY;
         self.update_flags_arithmetic(result, false, aux_borrow);
         self.flags = (self.flags & !FLAG_CARRY) | carry;
         
-        if reg == Register::M.to_code() {
+        if reg == Register::M {
             10
         } else {
             5
@@ -481,15 +402,15 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
     }
 
     pub fn perform_lxi(&mut self, opcode: u8) -> u8{
-        let pair = (opcode >> 4) & 0x03;
+        let pair = RegisterPair::from_code((opcode >> 4) & 0x03);
         let value = self.fetch_word();
-        self.set_pair_by_code(pair, value);
+        self.set_pair(pair, value);
         10
     }
     
     pub fn perform_dad(&mut self, opcode: u8) -> u8{
-        let pair = (opcode >> 4) & 0x03;
-        let value = self.get_pair_by_code(pair);
+        let pair = RegisterPair::from_code((opcode >> 4) & 0x03);
+        let value = self.get_pair(pair);
         let hl = self.get_hl();
         let result = hl as u32 + value as u32;
         self.set_hl(result as u16);
@@ -503,41 +424,41 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
     }
 
     pub fn perform_inx(&mut self, opcode: u8) -> u8{
-        let pair = (opcode >> 4) & 0x03;
-        let value = self.get_pair_by_code(pair).wrapping_add(1);
-        self.set_pair_by_code(pair, value);
+        let pair = RegisterPair::from_code((opcode >> 4) & 0x03);
+        let value = self.get_pair(pair).wrapping_add(1);
+        self.set_pair(pair, value);
         // INX doesn't affect flags
         5
     }
 
     pub fn perform_dcx(&mut self, opcode: u8) -> u8{
-        let pair = (opcode >> 4) & 0x03;
-        let value = self.get_pair_by_code(pair).wrapping_sub(1);
-        self.set_pair_by_code(pair, value);
+        let pair = RegisterPair::from_code((opcode >> 4) & 0x03);
+        let value = self.get_pair(pair).wrapping_sub(1);
+        self.set_pair(pair, value);
         // DCX doesn't affect flags
         5
     }
 
     pub fn perform_push(&mut self, opcode: u8) -> u8{
-        let pair = (opcode >> 4) & 0x03;
-        let value = self.get_push_pop_pair_by_code(pair);
+        let pair = PushPopPair::from_code((opcode >> 4) & 0x03);
+        let value = self.get_push_pop_pair(pair);
         self.sp = self.sp.wrapping_sub(2);
         self.write_word(self.sp, value);
         11
     }
 
     pub fn perform_pop(&mut self, opcode: u8) -> u8{
-        let pair = (opcode >> 4) & 0x03;
+        let pair = PushPopPair::from_code((opcode >> 4) & 0x03);
         let value = self.read_word(self.sp);
-        self.set_push_pop_pair_by_code(pair, value);
+        self.set_push_pop_pair(pair, value);
         self.sp = self.sp.wrapping_add(2);
         10
     }
 
     pub fn perform_conditional_jump(&mut self, opcode: u8) -> u8{
-        let condition = (opcode >> 3) & 0x07;
+        let condition = Condition::from_code((opcode >> 3) & 0x07);
         let addr = self.fetch_word();
-        if self.test_condition_by_code(condition) {
+        if self.test_condition(condition) {
             self.pc = addr;
             10
         } else {
@@ -546,9 +467,9 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
     }
     
     pub fn perform_conditional_call(&mut self, opcode: u8) -> u8{
-        let condition = (opcode >> 3) & 0x07;
+        let condition = Condition::from_code((opcode >> 3) & 0x07);
         let addr = self.fetch_word();
-        if self.test_condition_by_code(condition) {
+        if self.test_condition(condition) {
             self.sp = self.sp.wrapping_sub(2);
             self.write_word(self.sp, self.pc);
             self.pc = addr;
@@ -559,8 +480,8 @@ pub fn test_condition_by_code(&self, condition: u8) -> bool {
     }
 
     pub fn perform_conditional_return(&mut self, opcode: u8) -> u8{
-        let condition = (opcode >> 3) & 0x07;
-        if self.test_condition_by_code(condition) {
+        let condition = Condition::from_code((opcode >> 3) & 0x07);
+        if self.test_condition(condition) {
             self.pc = self.read_word(self.sp);
             self.sp = self.sp.wrapping_add(2);
             11
