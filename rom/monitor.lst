@@ -1,0 +1,187 @@
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 1 - 12/03/2025 09:16:09
+
+
+    1/   0 :                            ; monitor.asm - Intel 8080 Monitor ROM
+    2/   0 :                            ; Assemble with: make
+    3/   0 :                            ; 
+    4/   0 :                            ; Memory Map:
+    5/   0 :                            ;   0x0000-0x00FF: System workspace (RAM)
+    6/   0 :                            ;   0x0100-0xEFFF: User program area (RAM)
+    7/   0 :                            ;   0xF000-0xFFFF: Monitor ROM (this file)
+    8/   0 :                            ;
+    9/   0 :                            ; I/O Ports:
+   10/   0 :                            ;   0x00: Console data (read/write)
+   11/   0 :                            ;   0x01: Console status (bit 0 = input ready, bit 1 = output ready)
+   12/   0 :                            
+   13/   0 :                                    CPU     8080
+   14/F000 :                                    ORG     0F000H
+   15/F000 :                            
+   16/F000 :                            ; ============================================
+   17/F000 :                            ; CONSTANTS
+   18/F000 :                            ; ============================================
+   19/F000 :                            
+   20/F000 : =0H                        CONSOLE_DATA    EQU     00H
+   21/F000 : =1H                        CONSOLE_STATUS  EQU     01H
+   22/F000 :                            
+   23/F000 : =0F000H                    STACK_TOP       EQU     0F000H      ; Stack grows down from ROM
+   24/F000 :                            
+   25/F000 : =0DH                       CR              EQU     0DH
+   26/F000 : =0AH                       LF              EQU     0AH
+   27/F000 :                            
+   28/F000 :                            ; ============================================
+   29/F000 :                            ; COLD START
+   30/F000 :                            ; ============================================
+   31/F000 :                            
+   32/F000 :                            COLD_START:
+   33/F000 : 31 00 F0                           LXI     SP,STACK_TOP        ; Initialize stack pointer
+   34/F003 : CD 41 F0                           CALL    PRINT_BANNER        ; Show startup message
+   35/F006 :                                    
+   36/F006 :                            ; ============================================
+   37/F006 :                            ; MAIN LOOP
+   38/F006 :                            ; ============================================
+   39/F006 :                            
+   40/F006 :                            MAIN_LOOP:
+   41/F006 : 3E 3E                              MVI     A,'>'               ; Print prompt
+   42/F008 : CD 23 F0                           CALL    CONOUT
+   43/F00B : 3E 20                              MVI     A,' '
+   44/F00D : CD 23 F0                           CALL    CONOUT
+   45/F010 :                                    
+   46/F010 : CD 2F F0                           CALL    CONIN               ; Wait for character
+   47/F013 : CD 23 F0                           CALL    CONOUT              ; Echo it
+   48/F016 :                                    
+   49/F016 :                                    ; For now, just echo and loop
+   50/F016 :                                    ; TODO: Command parsing
+   51/F016 :                                    
+   52/F016 : FE 0D                              CPI     CR                  ; If Enter pressed
+   53/F018 : C2 06 F0                           JNZ     MAIN_LOOP           ; Keep reading if not
+   54/F01B :                                    
+   55/F01B : 3E 0A                              MVI     A,LF                ; Print newline
+   56/F01D : CD 23 F0                           CALL    CONOUT
+   57/F020 :                                    
+   58/F020 : C3 06 F0                           JMP     MAIN_LOOP
+   59/F023 :                            
+   60/F023 :                            ; ============================================
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 2 - 12/03/2025 09:16:09
+
+
+   61/F023 :                            ; CONSOLE I/O ROUTINES
+   62/F023 :                            ; ============================================
+   63/F023 :                            
+   64/F023 :                            ; CONOUT - Output character in A
+   65/F023 :                            ; Trashes: nothing
+   66/F023 :                            CONOUT:
+   67/F023 : F5                                 PUSH    PSW
+   68/F024 :                            CONOUT_WAIT:
+   69/F024 : DB 01                              IN      CONSOLE_STATUS
+   70/F026 : E6 02                              ANI     02H                 ; Check output ready bit
+   71/F028 : CA 24 F0                           JZ      CONOUT_WAIT
+   72/F02B : F1                                 POP     PSW
+   73/F02C : D3 00                              OUT     CONSOLE_DATA
+   74/F02E : C9                                 RET
+   75/F02F :                            
+   76/F02F :                            ; CONIN - Input character to A
+   77/F02F :                            ; Trashes: flags
+   78/F02F :                            CONIN:
+   79/F02F : DB 01                              IN      CONSOLE_STATUS
+   80/F031 : E6 01                              ANI     01H                 ; Check input ready bit
+   81/F033 : CA 2F F0                           JZ      CONIN
+   82/F036 : DB 00                              IN      CONSOLE_DATA
+   83/F038 : C9                                 RET
+   84/F039 :                            
+   85/F039 :                            ; CONST - Console status
+   86/F039 :                            ; Returns: A = 0xFF if char available, 0x00 if not
+   87/F039 :                            ; Trashes: flags
+   88/F039 :                            CONST:
+   89/F039 : DB 01                              IN      CONSOLE_STATUS
+   90/F03B : E6 01                              ANI     01H
+   91/F03D : C8                                 RZ                          ; Return 0 if no char
+   92/F03E : 3E FF                              MVI     A,0FFH              ; Return FF if char available
+   93/F040 : C9                                 RET
+   94/F041 :                            
+   95/F041 :                            ; ============================================
+   96/F041 :                            ; PRINT ROUTINES
+   97/F041 :                            ; ============================================
+   98/F041 :                            
+   99/F041 :                            ; PRINT_BANNER - Display startup message
+  100/F041 :                            PRINT_BANNER:
+  101/F041 : 21 52 F0                           LXI     H,MSG_BANNER
+  102/F044 : CD 48 F0                           CALL    PRINT_STRING
+  103/F047 : C9                                 RET
+  104/F048 :                            
+  105/F048 :                            ; PRINT_STRING - Print null-terminated string at HL
+  106/F048 :                            ; Trashes: A, HL, flags
+  107/F048 :                            PRINT_STRING:
+  108/F048 : 7E                                 MOV     A,M                 ; Get character
+  109/F049 : B7                                 ORA     A                   ; Check for null
+  110/F04A : C8                                 RZ                          ; Return if end of string
+  111/F04B : CD 23 F0                           CALL    CONOUT
+  112/F04E : 23                                 INX     H
+  113/F04F : C3 48 F0                           JMP     PRINT_STRING
+  114/F052 :                            
+  115/F052 :                            ; ============================================
+  116/F052 :                            ; STRINGS
+  117/F052 :                            ; ============================================
+  118/F052 :                            
+  119/F052 :                            MSG_BANNER:
+  120/F052 : 0D 0A                              DB      CR,LF
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 3 - 12/03/2025 09:16:09
+
+
+  121/F054 : 38 30 38 30 20 4D 6F 6E 69         DB      "8080 Monitor v0.1",CR,LF
+      F05D : 74 6F 72 20 76 30 2E 31 0D
+      F066 : 0A                        
+  122/F067 : 52 65 61 64 79 2E 0D 0A            DB      "Ready.",CR,LF
+  123/F06F : 00                                 DB      0
+  124/F070 :                            
+  125/F070 :                            ; ============================================
+  126/F070 :                            ; PADDING TO FILL ROM
+  127/F070 :                            ; ============================================
+  128/F070 :                            
+  129/F070 :                                    ; Ensure we don't exceed 4KB
+  130/F070 : =>FALSE                            IF      $ > 0FFFFH
+  131/F070 :                                    ERROR   "ROM exceeds 4KB!"
+  132/F070 : [130]                              ENDIF
+  133/F070 :                            
+  134/F070 :                                    END     COLD_START
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 4 - 12/03/2025 09:16:09
+
+
+  Symbol Table (* = unused):
+  --------------------------
+
+*ARCHITECTURE :                                      "aarch64-apple-darwin" - |
+*CASESENSITIVE :                  0 - |  COLD_START :                 0F000 C |
+ CONIN :                      0F02F C |  CONOUT :                     0F023 C |
+ CONOUT_WAIT :                0F024 C |  CONSOLE_DATA :                   0 - |
+ CONSOLE_STATUS :                 1 - | *CONST :                      0F039 C |
+*CONSTPI :        3.141592653589793 - |  CR :                            0D - |
+*DATE :                "12/03/2025" - | *FALSE :                          0 - |
+*FLOATMAX :      1.797693134866E308 - | *HAS64 :                          1 - |
+ LF :                            0A - | *LISTON :                         1 - |
+*MACEXP :                         7 - |  MAIN_LOOP :                  0F006 C |
+*MOMCPU :                      8080 - | *MOMCPUNAME :                "8080" - |
+ MSG_BANNER :                 0F052 C | *NESTMAX :                      100 - |
+ PRINT_BANNER :               0F041 C |  PRINT_STRING :               0F048 C |
+*RELAXED :                        0 - |  STACK_TOP :                  0F000 - |
+*TIME :                  "09:16:09" - | *TRUE :                           1 - |
+*VERSION :                     142F - | *Z80SYNTAX :                      0 - |
+
+     31 symbols
+     18 unused symbols
+
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 5 - 12/03/2025 09:16:09
+
+
+  Code Pages:
+  ----------
+
+STANDARD (0 changed characters)
+
+1 code page
+
+0.01 seconds assembly time
+
+    135 lines source file
+      2 passes
+      0 errors
+      0 warnings

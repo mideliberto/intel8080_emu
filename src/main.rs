@@ -23,7 +23,8 @@ fn main() {
     cpu.io_bus_mut().map_port(0x00, console.clone());
     cpu.io_bus_mut().map_port(0x01, console);
     
-    cpu.load_program(&program, 0x0000);
+    //cpu.load_program(&program, 0x0000);
+    cpu.load_program_from_file(std::path::Path::new("/Users/mike/intel8080_emu/rom/monitor.bin"), 0xF000).expect("Failed to load program");
     cpu.run();
     
     println!("Program finished!");

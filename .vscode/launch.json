@@ -1,21 +1,18 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'intel8080_emu'",
+            "name": "Debug executable 'intel8080'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=intel8080_emu",
+                    "--bin=intel8080",
                     "--package=intel8080_emu"
                 ],
                 "filter": {
-                    "name": "intel8080_emu",
+                    "name": "intel8080",
                     "kind": "bin"
                 }
             },
@@ -25,16 +22,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'intel8080_emu'",
+            "name": "Debug unit tests in executable 'intel8080'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=intel8080_emu",
+                    "--bin=intel8080",
                     "--package=intel8080_emu"
                 ],
                 "filter": {
-                    "name": "intel8080_emu",
+                    "name": "intel8080",
                     "kind": "bin"
                 }
             },

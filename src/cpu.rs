@@ -3,6 +3,8 @@ use crate::memory::{Memory, FlatMemory};
 use crate::io::IoBus;
 use crate::io::devices::timer::Timer;
 use crate::io::IoDevice;
+use std::io;
+use std::path::Path;
 
 
 use crate::registers::{Register, RegisterPair, PushPopPair, Condition};
@@ -1042,8 +1044,8 @@ impl Intel8080 {
     // ============================================
     
 pub fn load_program(&mut self, program: &[u8], start_address: u16) {
-    println!("Loading {} bytes at 0x{:04X}: {:02X?}", 
-             program.len(), start_address, program);
+    //println!("Loading {} bytes at 0x{:04X}: {:02X?}", 
+    //         program.len(), start_address, program);
     for (i, &byte) in program.iter().enumerate() {
         self.write_byte(start_address +i as u16, byte);   
         //self.memory[start_address as usize + i] = byte;
@@ -1051,11 +1053,16 @@ pub fn load_program(&mut self, program: &[u8], start_address: u16) {
     self.pc = start_address;
     
     // Verify what actually got loaded
-    print!("Verify: ");
+    //print!("Verify: ");
     for i in 0..program.len() {
-        print!("{:02X} ",self.read_byte(start_address + i as u16) );
+        //print!("{:02X} ",self.read_byte(start_address + i as u16) );
         //print!("{:02X} ", self.memory[start_address as usize + i]);
     }
-    println!();
+    //println!();
+}
+pub fn load_program_from_file(&mut self, path: &Path, start_address: u16) -> io::Result<usize> {
+    let program = std::fs::read(path)?;
+    self.load_program(&program, start_address);
+    Ok(program.len())
 }
 }
