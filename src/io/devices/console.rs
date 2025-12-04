@@ -52,7 +52,8 @@ impl IoDevice for Console {
                     status |= 0x01;  // Input available
                 }
                 status |= 0x02;  // Always ready to send (output never blocks)
-                status
+                //status
+                0x03
             }
             _ => 0xFF,
         }

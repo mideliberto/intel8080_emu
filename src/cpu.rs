@@ -279,6 +279,7 @@ impl Intel8080 {
     }
 
     pub fn perform_hlt(&mut self) -> u8{
+        println!("***SYSTEM HALTED*** at PC={:04X}", self.pc);
         self.halted = true;
         7
     }
@@ -1054,10 +1055,10 @@ pub fn load_program(&mut self, program: &[u8], start_address: u16) {
     
     // Verify what actually got loaded
     //print!("Verify: ");
-    for i in 0..program.len() {
+    //for i in 0..program.len() {
         //print!("{:02X} ",self.read_byte(start_address + i as u16) );
         //print!("{:02X} ", self.memory[start_address as usize + i]);
-    }
+    //}
     //println!();
 }
 pub fn load_program_from_file(&mut self, path: &Path, start_address: u16) -> io::Result<usize> {
