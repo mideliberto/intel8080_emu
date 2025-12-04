@@ -59,33 +59,7 @@ MAIN_LOOP:
         MVI     A,' '
         CALL    CONOUT
         
-        MVI     A,'A'               ; DEBUG: before READ_LINE
-        CALL    CONOUT
-        
         CALL    READ_LINE           ; Read command into LINE_BUFFER
-        
-        MVI     A,'B'               ; DEBUG: after READ_LINE
-        CALL    CONOUT
-        HLT
-
-RL_DEBUG:
-        MVI     A,'X'
-        CALL    CONOUT
-
-                ; DEBUG: dump first 4 bytes of buffer
-        LXI     H,LINE_BUFFER
-        MOV     A,M
-        CALL    PRINT_HEX_BYTE
-        INX     H
-        MOV     A,M
-        CALL    PRINT_HEX_BYTE
-        INX     H
-        MOV     A,M
-        CALL    PRINT_HEX_BYTE
-        INX     H
-        MOV     A,M
-        CALL    PRINT_HEX_BYTE
-        CALL    PRINT_CRLF
         
         LXI     H,LINE_BUFFER       ; Point to start of buffer
         CALL    SKIP_SPACES         ; Skip leading spaces
@@ -234,7 +208,7 @@ PRINT_HEX_WORD:
 ; READ_LINE - Read line into LINE_BUFFER
 ; Handles: BS (backspace), CR (end of line)
 ; Returns: LINE_BUFFER contains null-terminated string
-; Trashes: A, B, HL, flags
+; Trashes: A, B, C, HL, flags
 READ_LINE:
         LXI     H,LINE_BUFFER       ; Point to buffer start
         MVI     B,0                 ; Character count
@@ -247,6 +221,9 @@ RL_LOOP:
         JZ      RL_DONE
         CPI     LF
         JZ      RL_DONE
+        
+        CPI     BS                  ; Backspace?
+        JZ      RL_BACKSPACE
         
         CPI     SPACE               ; Ignore control chars
         JC      RL_LOOP
@@ -284,8 +261,6 @@ RL_BACKSPACE:
 RL_DONE:
         MVI     M,0                 ; Null terminate
         CALL    PRINT_CRLF          ; Echo newline
-        MVI     A,'Z'               ; DEBUG: made it to end
-        CALL    CONOUT
         RET
 
 ; ============================================
@@ -322,31 +297,35 @@ RHW_LOOP:
         ; DE = DE * 16 + A
         PUSH    PSW                 ; Save digit
         
-        ; Shift DE left 4 bits
-        MOV     A,D
-        RLC
-        RLC
-        RLC
-        RLC
-        ANI     0F0H
-        MOV     D,A
-        
+        ; Get E's high nibble (will go to D's low nibble)
         MOV     A,E
-        RLC
-        RLC
-        RLC
-        RLC
-        MOV     C,A                 ; Save shifted E
-        ANI     0F0H
-        ORA     D                   ; Combine with D bits
+        ANI     0F0H                ; Isolate high nibble
+        RRC
+        RRC
+        RRC
+        RRC                         ; Move to low nibble position
+        MOV     C,A                 ; Save it
+        
+        ; Shift D left 4 bits
+        MOV     A,D
+        ADD     A
+        ADD     A
+        ADD     A
+        ADD     A                   ; D << 4
+        ORA     C                   ; OR in E's high nibble
         MOV     D,A
         
-        MOV     A,C
-        ANI     0FH                 ; Low nibble of shifted E
+        ; Shift E left 4 bits
+        MOV     A,E
+        ADD     A
+        ADD     A
+        ADD     A
+        ADD     A                   ; E << 4
         MOV     E,A
         
-        POP     PSW                 ; Restore digit
-        ORA     E                   ; Add digit to low nibble
+        ; Add new digit
+        POP     PSW
+        ORA     E
         MOV     E,A
         
         INX     H                   ; Advance buffer pointer
@@ -409,11 +388,6 @@ THD_FAIL:
 ; If one arg, dumps 128 bytes from start
 ; If two args, dumps from start to end
 CMD_DUMP:
-
-        MVI     A,'!'               ; DEBUG: Did we get here?
-        CALL    CONOUT
-        CALL    PRINT_CRLF
-
         CALL    SKIP_SPACES
         MOV     A,M
         ORA     A                   ; End of line?
@@ -441,7 +415,7 @@ CD_NO_ARGS:
         ; Continue from last address
         LHLD    LAST_DUMP_ADDR
         LXI     D,007FH             ; 128 bytes
-        DAD     D                   ; HL = start, calculate end
+        DAD     D                   ; HL = start + 127 = end
         XCHG                        ; DE = end
         LHLD    LAST_DUMP_ADDR      ; HL = start
         JMP     CD_DUMP_RANGE
@@ -519,18 +493,15 @@ CD_PRINT_CHAR:
         POP     D                   ; DE = end address
         PUSH    D                   ; Keep it on stack
         
-        ; Compare HL to DE
-        MOV     A,H
-        CMP     D
-        JC      CD_LINE             ; H < D, continue
-        JNZ     CD_DONE             ; H > D, done
-        MOV     A,L
-        CMP     E
-        JC      CD_LINE             ; L < E, continue
-        JZ      CD_LINE             ; L == E, do one more line... 
-                                    ; Actually should stop. Let me think.
-        ; If HL > DE, we're done
-        ; If HL <= DE, continue
+        ; Compare HL to DE: if HL > DE, we're done
+        MOV     A,D
+        CMP     H
+        JC      CD_DONE             ; D < H, done
+        JNZ     CD_LINE             ; D > H, continue
+        MOV     A,E
+        CMP     L
+        JC      CD_DONE             ; E < L, done (D == H)
+        JMP     CD_LINE             ; E >= L, continue
         
 CD_DONE:
         POP     D                   ; Clean up stack
