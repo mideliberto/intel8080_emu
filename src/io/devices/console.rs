@@ -1,11 +1,16 @@
-// console.rs - Console I/O device (merged terminal output + keyboard input)
+// console.rs - Console I/O device
 //
-// Port 0x00: Data - write to output char, read to get input char
-// Port 0x01: Status - bit 0 = char available, bit 1 = ready to send
+// Port 0x00: Data Out   - write to output char
+// Port 0x01: Data In    - read to get input char
+// Port 0x02: Status     - bit 0 = RX ready, bit 1 = TX ready
 
 use crate::io::IoDevice;
-use std::io::{self, Read, Write};
+use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyModifiers};
+use crossterm::terminal::disable_raw_mode;
 use std::collections::VecDeque;
+use std::io::Write;
+use std::time::Duration;
 
 pub struct Console {
     input_buffer: VecDeque<u8>,
@@ -17,12 +22,12 @@ impl Console {
             input_buffer: VecDeque::new(),
         }
     }
-    
+
     /// Queue a character for input (useful for testing or pasting)
     pub fn queue_input(&mut self, c: u8) {
         self.input_buffer.push_back(c);
     }
-    
+
     /// Check if input is available
     pub fn has_input(&self) -> bool {
         !self.input_buffer.is_empty()
@@ -32,44 +37,50 @@ impl Console {
 impl IoDevice for Console {
     fn read(&mut self, port: u8) -> u8 {
         match port {
-            0x00 => {
-                // Data port - return buffered char or try to read from stdin
-                if let Some(c) = self.input_buffer.pop_front() {
-                    c
-                } else {
-                    // Blocking read from stdin
-                    let mut buffer = [0u8; 1];
-                    match io::stdin().read_exact(&mut buffer) {
-                        Ok(_) => buffer[0],
-                        Err(_) => 0x00,
+            0x01 => self.input_buffer.pop_front().unwrap_or(0),
+            0x02 => {
+                // Drain all pending events into buffer
+                while poll(Duration::from_millis(1)).unwrap_or(false) {
+                    if let Ok(event) = read() {
+                        if let Event::Key(key_event) = event {
+                            if key_event.kind == KeyEventKind::Press {  // ADD THIS
+                                if let Some(c) = key_to_byte(key_event) {
+                                    self.input_buffer.push_back(c);
+                                }
+                            }
+                        }
                     }
                 }
-            }
-            0x01 => {
-                // Status port
-                let mut status = 0u8;
+
+                // Status purely reflects buffer state
+                let mut status = 0x02; // TX always ready
                 if !self.input_buffer.is_empty() {
-                    status |= 0x01;  // Input available
+                    status |= 0x01;
                 }
-                status |= 0x02;  // Always ready to send (output never blocks)
-                //status
-                0x03
+                status
             }
             _ => 0xFF,
         }
     }
-    
+
     fn write(&mut self, port: u8, value: u8) {
-        match port {
-            0x00 => {
-                // Data port - output character
-                print!("{}", value as char);
-                io::stdout().flush().unwrap();
-            }
-            0x01 => {
-                // Status port - ignore writes
-            }
-            _ => {}
+        if port == 0x00 {
+            print!("{}", value as char);
+            std::io::stdout().flush().ok();
         }
+    }
+}
+
+fn key_to_byte(key_event: KeyEvent) -> Option<u8> {
+    match key_event.code {
+        KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Restore terminal before exit
+            let _ = disable_raw_mode();
+            std::process::exit(0);
+        }
+        KeyCode::Char(c) => Some(c as u8),
+        KeyCode::Enter => Some(0x0D),
+        KeyCode::Backspace => Some(0x08),
+        _ => None,
     }
 }

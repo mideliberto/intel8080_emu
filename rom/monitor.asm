@@ -7,8 +7,9 @@
 ;   0xF000-0xFFFF: Monitor ROM (this file)
 ;
 ; I/O Ports:
-;   0x00: Console data (read/write)
-;   0x01: Console status (bit 0 = input ready, bit 1 = output ready)
+;   0x00: Console data out (write only)
+;   0x01: Console data in (read only)
+;   0x02: Console status (bit 0 = RX ready, bit 1 = TX ready)
 
         CPU     8080
         ORG     0F000H
@@ -17,8 +18,9 @@
 ; CONSTANTS
 ; ============================================
 
-CONSOLE_DATA    EQU     00H
-CONSOLE_STATUS  EQU     01H
+CONSOLE_DATA_OUT    EQU     00H
+CONSOLE_DATA_IN     EQU     01H
+CONSOLE_STATUS      EQU     02H
 
 STACK_TOP       EQU     0F000H      ; Stack grows down from ROM
 
@@ -32,7 +34,7 @@ SPACE           EQU     20H
 ; ============================================
 
 LINE_BUFFER     EQU     0080H       ; 80 bytes for command line
-LINE_LENGTH     EQU     50          ; Max 80 chars
+LINE_LENGTH     EQU     80          ; Max 80 chars
 BUFFER_PTR      EQU     00D0H       ; Current position in buffer (2 bytes)
 LAST_DUMP_ADDR  EQU     00D2H       ; Last dump address (2 bytes)
 
@@ -103,19 +105,19 @@ CONOUT:
         PUSH    PSW
 CONOUT_WAIT:
         IN      CONSOLE_STATUS
-        ANI     02H                 ; Check output ready bit
+        ANI     02H
         JZ      CONOUT_WAIT
         POP     PSW
-        OUT     CONSOLE_DATA
+        OUT     CONSOLE_DATA_OUT
         RET
 
 ; CONIN - Input character to A
 ; Trashes: flags
 CONIN:
         IN      CONSOLE_STATUS
-        ANI     01H                 ; Check input ready bit
+        ANI     01H
         JZ      CONIN
-        IN      CONSOLE_DATA
+        IN      CONSOLE_DATA_IN
         RET
 
 ; CONST - Console status
@@ -533,6 +535,7 @@ CMD_HELP:
 MSG_BANNER:
         DB      CR,LF
         DB      "8080 Monitor v0.1",CR,LF
+        DB      'Built: ', DATE, ' ', TIME, CR, LF
         DB      "Ready.",CR,LF
         DB      0
 

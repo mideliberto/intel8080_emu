@@ -6,6 +6,7 @@ description = "Intel 8080 Emulator with Monitor ROM"
 authors = ["Mike"]
 
 [dependencies]
+crossterm = "0.27"
 
 [lib]
 name = "intel8080_emu"
