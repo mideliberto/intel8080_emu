@@ -279,7 +279,7 @@ impl Intel8080 {
     }
 
     pub fn perform_hlt(&mut self) -> u8{
-        println!("***SYSTEM HALTED*** at PC={:04X}", self.pc);
+        println!("\r\n***SYSTEM HALTED*** at PC={:04X}", self.pc);
         self.halted = true;
         7
     }
@@ -983,7 +983,7 @@ impl Intel8080 {
         }
     
     pub fn debug_state(&mut self) {
-        println!("\n========== CPU STATE ==========");
+        println!("\r\n========== CPU STATE ==========");
         
         // Main registers
         println!("A:{:02X}  B:{:02X}  C:{:02X}  D:{:02X}  E:{:02X}  H:{:02X}  L:{:02X}",
@@ -1004,10 +1004,10 @@ impl Intel8080 {
         
         // Next instruction
         let (mnemonic, _size) = self.disassemble_at(self.pc);
-        println!("\nNext: [{:04X}] {}", self.pc, mnemonic);
+        println!("\r\nNext: [{:04X}] {}", self.pc, mnemonic);
         
         // Memory dump around PC
-        println!("\nMemory at PC:");
+        println!("\r\nMemory at PC:");
         for offset in (0..16).step_by(8) {
             let addr = self.pc.wrapping_add(offset);
             print!("  {:04X}: ", addr);
@@ -1027,7 +1027,7 @@ impl Intel8080 {
         
         // Stack preview
         if self.sp < 0xFFFC && self.sp > 0 {
-            println!("\nStack (top 3 words):");
+            println!("\r\nStack (top 3 words):");
             for i in 0..3 {
                 let addr = self.sp.wrapping_add(i * 2);
                 if addr < 0xFFFE {

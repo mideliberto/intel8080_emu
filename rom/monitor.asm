@@ -37,6 +37,7 @@ LINE_BUFFER     EQU     0080H       ; 80 bytes for command line
 LINE_LENGTH     EQU     80          ; Max 80 chars
 BUFFER_PTR      EQU     00D0H       ; Current position in buffer (2 bytes)
 LAST_DUMP_ADDR  EQU     00D2H       ; Last dump address (2 bytes)
+LAST_EXAM_ADDR  EQU     00D4H       ; Last examine address (2 bytes)
 
 ; ============================================
 ; COLD START
@@ -48,6 +49,7 @@ COLD_START:
         ; Initialize workspace
         LXI     H,0000H
         SHLD    LAST_DUMP_ADDR      ; Default dump address = 0
+        SHLD    LAST_EXAM_ADDR      ; Default exam address = 0   
         
         CALL    PRINT_BANNER        ; Show startup message
         
@@ -510,23 +512,156 @@ CD_DONE:
         SHLD    LAST_DUMP_ADDR      ; Save for next time
         JMP     MAIN_LOOP
 
-; CMD_EXAMINE - Placeholder
+; CMD_EXAMINE - Examine/modify memory
+; Syntax: E [addr]
+; Shows "ADDR: XX-" and waits for input
+; Enter hex to modify, CR to advance, period to exit
 CMD_EXAMINE:
-        LXI     H,MSG_NOT_IMPL
+        CALL    SKIP_SPACES
+        MOV     A,M
+        ORA     A                   ; Any address given?
+        JZ      CE_USE_LAST
+        
+        CALL    READ_HEX_WORD       ; Parse address into DE
+        JC      CE_ERROR            ; Invalid hex
+        XCHG                        ; HL = address to examine
+        JMP     CE_LOOP
+        
+CE_USE_LAST:
+        LHLD    LAST_EXAM_ADDR
+        
+CE_LOOP:
+        CALL    PRINT_HEX_WORD      ; Print address
+        MVI     A,':'
+        CALL    CONOUT
+        MVI     A,' '
+        CALL    CONOUT
+        MOV     A,M                 ; Get current byte
+        CALL    PRINT_HEX_BYTE
+        MVI     A,'-'
+        CALL    CONOUT
+        
+        CALL    READ_EXAM_BYTE      ; Get user input
+        JC      CE_EXIT             ; Carry = exit requested
+        MOV     A,B                 ; Check digit count
+        ORA     A
+        JZ      CE_NEXT             ; No digits = don't modify
+        MOV     A,C                 ; Get the value from C
+        MOV     M,A                 ; Store it
+        
+CE_NEXT:
+        INX     H
+        CALL    PRINT_CRLF
+        JMP     CE_LOOP
+        
+CE_EXIT:
+        SHLD    LAST_EXAM_ADDR
+        CALL    PRINT_CRLF
+        JMP     MAIN_LOOP
+        
+CE_ERROR:
+        LXI     H,MSG_BAD_ADDR
         CALL    PRINT_STRING
         JMP     MAIN_LOOP
 
-; CMD_GO - Placeholder
+; CMD_GO - Execute at address
+; Syntax: G [addr]
+; If no address, defaults to 0100H (TPA)
 CMD_GO:
-        LXI     H,MSG_NOT_IMPL
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
+        CALL    READ_HEX_WORD       ; Parse address into DE
+        JC      CG_DEFAULT          ; No address given
+        XCHG                        ; HL = parsed address
+        PCHL                        ; Jump and never return
+        
+CG_DEFAULT:
+        LXI     H,0100H             ; Default to TPA
+        PCHL
 
 ; CMD_HELP - Show help
 CMD_HELP:
         LXI     H,MSG_HELP
         CALL    PRINT_STRING
         JMP     MAIN_LOOP
+
+; ============================================
+; HELPER ROUTINES
+; ============================================
+
+; READ_EXAM_BYTE - Read byte value for examine command
+; Reads up to 2 hex digits from console
+; Output: Carry set = exit (period pressed)
+;         Carry clear: B = digit count, C = value
+;         (caller checks B: 0 = no modification, >0 = store C)
+; Trashes: A, B, C, D, flags
+READ_EXAM_BYTE:
+        MVI     B,0                 ; Digit count
+        MVI     C,0                 ; Accumulated value
+        
+REB_LOOP:
+        CALL    CONIN
+        MOV     D,A                 ; Save original for echo
+        
+        CPI     '.'                 ; Exit?
+        JZ      REB_EXIT
+        CPI     CR                  ; Enter?
+        JZ      REB_DONE
+        CPI     BS                  ; Backspace?
+        JZ      REB_BS
+        
+        CALL    TO_HEX_DIGIT        ; Convert to 0-15
+        JC      REB_LOOP            ; Not hex, ignore
+        
+        ; Valid hex digit in A
+        PUSH    PSW
+        MOV     A,C
+        ADD     A                   ; Shift left 4
+        ADD     A
+        ADD     A
+        ADD     A
+        MOV     C,A
+        POP     PSW
+        ORA     C                   ; Add new digit
+        MOV     C,A
+        
+        INR     B                   ; Count digit
+        MOV     A,D                 ; Echo original char
+        CALL    CONOUT
+        
+        MOV     A,B
+        CPI     2                   ; Two digits entered?
+        JC      REB_LOOP            ; No, keep reading
+        ; Fall through with 2 digits
+        
+REB_DONE:
+        ; Carry clear, B = digit count, C = value
+        ORA     A                   ; Clear carry
+        RET
+        
+REB_EXIT:
+        STC                         ; Set carry = exit
+        RET
+        
+REB_BS:
+        MOV     A,B
+        ORA     A
+        JZ      REB_LOOP            ; Nothing to delete
+        
+        DCR     B
+        MOV     A,C                 ; Undo the shift
+        RRC
+        RRC
+        RRC
+        RRC
+        ANI     0FH
+        MOV     C,A
+        
+        MVI     A,BS                ; Erase on screen
+        CALL    CONOUT
+        MVI     A,' '
+        CALL    CONOUT
+        MVI     A,BS
+        CALL    CONOUT
+        JMP     REB_LOOP
 
 ; ============================================
 ; STRINGS
