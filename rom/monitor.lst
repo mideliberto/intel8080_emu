@@ -1,4 +1,4 @@
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 1 - 12/10/2025 19:16:31
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 1 - 12/11/2025 19:06:00
 
 
     1/   0 :                            ; monitor.asm - Intel 8080 Monitor ROM
@@ -42,727 +42,868 @@
    39/F000 : =0D2H                      LAST_DUMP_ADDR  EQU     00D2H       ; Last dump address (2 bytes)
    40/F000 : =0D4H                      LAST_EXAM_ADDR  EQU     00D4H       ; Last examine address (2 bytes)
    41/F000 :                            
-   42/F000 :                            ; ============================================
-   43/F000 :                            ; COLD START
-   44/F000 :                            ; ============================================
+   42/F000 :                            ; I/O stubs (self-modifying code)
+   43/F000 : =0D6H                      IO_IN_STUB      EQU     00D6H       ; 3 bytes: IN xx / RET
+   44/F000 : =0D9H                      IO_OUT_STUB     EQU     00D9H       ; 3 bytes: OUT xx / RET
    45/F000 :                            
-   46/F000 :                            COLD_START:
-   47/F000 : 31 00 F0                           LXI     SP,STACK_TOP        ; Initialize stack pointer
-   48/F003 :                                    
-   49/F003 :                                    ; Initialize workspace
-   50/F003 : 21 00 00                           LXI     H,0000H
-   51/F006 : 22 D2 00                           SHLD    LAST_DUMP_ADDR      ; Default dump address = 0
-   52/F009 : 22 D4 00                           SHLD    LAST_EXAM_ADDR      ; Default exam address = 0   
-   53/F00C :                                    
-   54/F00C : CD 6F F0                           CALL    PRINT_BANNER        ; Show startup message
-   55/F00F :                                    
-   56/F00F :                            ; ============================================
-   57/F00F :                            ; MAIN LOOP
-   58/F00F :                            ; ============================================
-   59/F00F :                            
-   60/F00F :                            MAIN_LOOP:
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 2 - 12/10/2025 19:16:31
+   46/F000 :                            ; ============================================
+   47/F000 :                            ; COLD START
+   48/F000 :                            ; ============================================
+   49/F000 :                            
+   50/F000 :                            COLD_START:
+   51/F000 : 31 00 F0                           LXI     SP,STACK_TOP        ; Initialize stack pointer
+   52/F003 :                                    
+   53/F003 :                                    ; Initialize workspace
+   54/F003 : 21 00 00                           LXI     H,0000H
+   55/F006 : 22 D2 00                           SHLD    LAST_DUMP_ADDR      ; Default dump address = 0
+   56/F009 : 22 D4 00                           SHLD    LAST_EXAM_ADDR      ; Default exam address = 0
+   57/F00C :                                    
+   58/F00C :                                    ; Initialize I/O stubs
+   59/F00C : 3E DB                              MVI     A,0DBH              ; IN opcode
+   60/F00E : 32 D6 00                           STA     IO_IN_STUB
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 2 - 12/11/2025 19:06:00
 
 
-   61/F00F : 3E 3E                              MVI     A,'>'               ; Print prompt
-   62/F011 : CD 51 F0                           CALL    CONOUT
-   63/F014 : 3E 20                              MVI     A,' '
-   64/F016 : CD 51 F0                           CALL    CONOUT
-   65/F019 :                                    
-   66/F019 : CD B6 F0                           CALL    READ_LINE           ; Read command into LINE_BUFFER
-   67/F01C :                                    
-   68/F01C : 21 80 00                           LXI     H,LINE_BUFFER       ; Point to start of buffer
-   69/F01F : CD 02 F1                           CALL    SKIP_SPACES         ; Skip leading spaces
-   70/F022 :                                    
-   71/F022 : 7E                                 MOV     A,M                 ; Get command character
-   72/F023 : B7                                 ORA     A                   ; Empty line?
-   73/F024 : CA 0F F0                           JZ      MAIN_LOOP           ; Yes, just prompt again
-   74/F027 :                                    
-   75/F027 :                                    ; Convert to uppercase if lowercase
-   76/F027 : FE 61                              CPI     'a'
-   77/F029 : DA 33 F0                           JC      NOT_LOWER
-   78/F02C : FE 7B                              CPI     'z'+1
-   79/F02E : D2 33 F0                           JNC     NOT_LOWER
-   80/F031 : D6 20                              SUI     20H                 ; Convert to uppercase
-   81/F033 :                            NOT_LOWER:
-   82/F033 :                                    
-   83/F033 : 23                                 INX     H                   ; Point past command char
-   84/F034 :                                    
-   85/F034 :                                    ; Command dispatch
-   86/F034 : FE 44                              CPI     'D'
-   87/F036 : CA 67 F1                           JZ      CMD_DUMP
-   88/F039 : FE 45                              CPI     'E'
-   89/F03B : CA 06 F2                           JZ      CMD_EXAMINE
-   90/F03E : FE 47                              CPI     'G'
-   91/F040 : CA 57 F2                           JZ      CMD_GO
-   92/F043 : FE 3F                              CPI     '?'
-   93/F045 : CA 63 F2                           JZ      CMD_HELP
-   94/F048 :                                    
-   95/F048 :                                    ; Unknown command
-   96/F048 : 21 FC F2                           LXI     H,MSG_UNKNOWN
-   97/F04B : CD 76 F0                           CALL    PRINT_STRING
-   98/F04E : C3 0F F0                           JMP     MAIN_LOOP
-   99/F051 :                            
-  100/F051 :                            ; ============================================
-  101/F051 :                            ; CONSOLE I/O ROUTINES
-  102/F051 :                            ; ============================================
-  103/F051 :                            
-  104/F051 :                            ; CONOUT - Output character in A
-  105/F051 :                            ; Preserves: all registers
-  106/F051 :                            CONOUT:
-  107/F051 : F5                                 PUSH    PSW
-  108/F052 :                            CONOUT_WAIT:
-  109/F052 : DB 02                              IN      CONSOLE_STATUS
-  110/F054 : E6 02                              ANI     02H
-  111/F056 : CA 52 F0                           JZ      CONOUT_WAIT
-  112/F059 : F1                                 POP     PSW
-  113/F05A : D3 00                              OUT     CONSOLE_DATA_OUT
-  114/F05C : C9                                 RET
-  115/F05D :                            
-  116/F05D :                            ; CONIN - Input character to A
-  117/F05D :                            ; Trashes: flags
-  118/F05D :                            CONIN:
-  119/F05D : DB 02                              IN      CONSOLE_STATUS
-  120/F05F : E6 01                              ANI     01H
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 3 - 12/10/2025 19:16:31
+   61/F011 : 3E 00                              MVI     A,00H               ; Default port 0
+   62/F013 : 32 D7 00                           STA     IO_IN_STUB+1
+   63/F016 : 3E C9                              MVI     A,0C9H              ; RET opcode
+   64/F018 : 32 D8 00                           STA     IO_IN_STUB+2
+   65/F01B :                                    
+   66/F01B : 3E D3                              MVI     A,0D3H              ; OUT opcode
+   67/F01D : 32 D9 00                           STA     IO_OUT_STUB
+   68/F020 : 3E 00                              MVI     A,00H               ; Default port 0
+   69/F022 : 32 DA 00                           STA     IO_OUT_STUB+1
+   70/F025 : 3E C9                              MVI     A,0C9H              ; RET opcode
+   71/F027 : 32 DB 00                           STA     IO_OUT_STUB+2
+   72/F02A :                                    
+   73/F02A : CD 9C F0                           CALL    PRINT_BANNER        ; Show startup message
+   74/F02D :                            
+   75/F02D :                            ; ============================================
+   76/F02D :                            ; MAIN LOOP
+   77/F02D :                            ; ============================================
+   78/F02D :                            
+   79/F02D :                            MAIN_LOOP:
+   80/F02D : 3E 3E                              MVI     A,'>'               ; Print prompt
+   81/F02F : CD 7E F0                           CALL    CONOUT
+   82/F032 : 3E 20                              MVI     A,' '
+   83/F034 : CD 7E F0                           CALL    CONOUT
+   84/F037 :                                    
+   85/F037 : CD E3 F0                           CALL    READ_LINE           ; Read command into LINE_BUFFER
+   86/F03A :                                    
+   87/F03A : 21 80 00                           LXI     H,LINE_BUFFER       ; Point to start of buffer
+   88/F03D : CD 2F F1                           CALL    SKIP_SPACES         ; Skip leading spaces
+   89/F040 :                                    
+   90/F040 : 7E                                 MOV     A,M                 ; Get command character
+   91/F041 : B7                                 ORA     A                   ; Empty line?
+   92/F042 : CA 2D F0                           JZ      MAIN_LOOP           ; Yes, just prompt again
+   93/F045 :                                    
+   94/F045 :                                    ; Convert to uppercase if lowercase
+   95/F045 : FE 61                              CPI     'a'
+   96/F047 : DA 51 F0                           JC      NOT_LOWER
+   97/F04A : FE 7B                              CPI     'z'+1
+   98/F04C : D2 51 F0                           JNC     NOT_LOWER
+   99/F04F : D6 20                              SUI     20H                 ; Convert to uppercase
+  100/F051 :                            NOT_LOWER:
+  101/F051 :                                    
+  102/F051 : 23                                 INX     H                   ; Point past command char
+  103/F052 :                                    
+  104/F052 :                                    ; Command dispatch
+  105/F052 : FE 44                              CPI     'D'
+  106/F054 : CA 94 F1                           JZ      CMD_DUMP
+  107/F057 : FE 45                              CPI     'E'
+  108/F059 : CA 33 F2                           JZ      CMD_EXAMINE
+  109/F05C : FE 47                              CPI     'G'
+  110/F05E : CA 84 F2                           JZ      CMD_GO
+  111/F061 : FE 48                              CPI     'H'
+  112/F063 : CA 93 F2                           JZ      CMD_HEX_MATH
+  113/F066 : FE 49                              CPI     'I'
+  114/F068 : CA CB F2                           JZ      CMD_INPUT
+  115/F06B : FE 4F                              CPI     'O'
+  116/F06D : CA ED F2                           JZ      CMD_OUTPUT
+  117/F070 : FE 3F                              CPI     '?'
+  118/F072 : CA 13 F3                           JZ      CMD_HELP
+  119/F075 :                                    
+  120/F075 :                                    ; Unknown command
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 3 - 12/11/2025 19:06:00
 
 
-  121/F061 : CA 5D F0                           JZ      CONIN
-  122/F064 : DB 01                              IN      CONSOLE_DATA_IN
-  123/F066 : C9                                 RET
-  124/F067 :                            
-  125/F067 :                            ; CONST - Console status
-  126/F067 :                            ; Returns: A = 0xFF if char available, 0x00 if not
-  127/F067 :                            ; Trashes: flags
-  128/F067 :                            CONST:
-  129/F067 : DB 02                              IN      CONSOLE_STATUS
-  130/F069 : E6 01                              ANI     01H
-  131/F06B : C8                                 RZ                          ; Return 0 if no char
-  132/F06C : 3E FF                              MVI     A,0FFH              ; Return FF if char available
-  133/F06E : C9                                 RET
-  134/F06F :                            
-  135/F06F :                            ; ============================================
-  136/F06F :                            ; PRINT ROUTINES
-  137/F06F :                            ; ============================================
-  138/F06F :                            
-  139/F06F :                            ; PRINT_BANNER - Display startup message
-  140/F06F :                            PRINT_BANNER:
-  141/F06F : 21 C2 F2                           LXI     H,MSG_BANNER
-  142/F072 : CD 76 F0                           CALL    PRINT_STRING
-  143/F075 : C9                                 RET
-  144/F076 :                            
-  145/F076 :                            ; PRINT_STRING - Print null-terminated string at HL
-  146/F076 :                            ; Trashes: A, HL, flags
-  147/F076 :                            PRINT_STRING:
-  148/F076 : 7E                                 MOV     A,M                 ; Get character
-  149/F077 : B7                                 ORA     A                   ; Check for null
-  150/F078 : C8                                 RZ                          ; Return if end of string
-  151/F079 : CD 51 F0                           CALL    CONOUT
-  152/F07C : 23                                 INX     H
-  153/F07D : C3 76 F0                           JMP     PRINT_STRING
-  154/F080 :                            
-  155/F080 :                            ; PRINT_CRLF - Print carriage return and line feed
-  156/F080 :                            ; Trashes: A, flags
-  157/F080 :                            PRINT_CRLF:
-  158/F080 : 3E 0D                              MVI     A,CR
-  159/F082 : CD 51 F0                           CALL    CONOUT
-  160/F085 : 3E 0A                              MVI     A,LF
-  161/F087 : CD 51 F0                           CALL    CONOUT
-  162/F08A : C9                                 RET
-  163/F08B :                            
-  164/F08B :                            ; PRINT_SPACE - Print a space
-  165/F08B :                            ; Trashes: A, flags
-  166/F08B :                            PRINT_SPACE:
-  167/F08B : 3E 20                              MVI     A,SPACE
-  168/F08D : CD 51 F0                           CALL    CONOUT
-  169/F090 : C9                                 RET
-  170/F091 :                            
-  171/F091 :                            ; PRINT_HEX_BYTE - Print A as two hex digits
-  172/F091 :                            ; Input: A = byte to print
-  173/F091 :                            ; Trashes: A, flags
-  174/F091 :                            PRINT_HEX_BYTE:
-  175/F091 : F5                                 PUSH    PSW                 ; Save original byte
-  176/F092 : 0F                                 RRC                         ; Shift high nibble to low
-  177/F093 : 0F                                 RRC
-  178/F094 : 0F                                 RRC
-  179/F095 : 0F                                 RRC
-  180/F096 : CD 9E F0                           CALL    PRINT_HEX_NIBBLE    ; Print high nibble
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 4 - 12/10/2025 19:16:31
+  121/F075 : 21 AD F4                           LXI     H,MSG_UNKNOWN
+  122/F078 : CD A3 F0                           CALL    PRINT_STRING
+  123/F07B : C3 2D F0                           JMP     MAIN_LOOP
+  124/F07E :                            
+  125/F07E :                            ; ============================================
+  126/F07E :                            ; CONSOLE I/O ROUTINES
+  127/F07E :                            ; ============================================
+  128/F07E :                            
+  129/F07E :                            ; CONOUT - Output character in A
+  130/F07E :                            ; Preserves: all registers
+  131/F07E :                            CONOUT:
+  132/F07E : F5                                 PUSH    PSW
+  133/F07F :                            CONOUT_WAIT:
+  134/F07F : DB 02                              IN      CONSOLE_STATUS
+  135/F081 : E6 02                              ANI     02H
+  136/F083 : CA 7F F0                           JZ      CONOUT_WAIT
+  137/F086 : F1                                 POP     PSW
+  138/F087 : D3 00                              OUT     CONSOLE_DATA_OUT
+  139/F089 : C9                                 RET
+  140/F08A :                            
+  141/F08A :                            ; CONIN - Input character to A
+  142/F08A :                            ; Trashes: flags
+  143/F08A :                            CONIN:
+  144/F08A : DB 02                              IN      CONSOLE_STATUS
+  145/F08C : E6 01                              ANI     01H
+  146/F08E : CA 8A F0                           JZ      CONIN
+  147/F091 : DB 01                              IN      CONSOLE_DATA_IN
+  148/F093 : C9                                 RET
+  149/F094 :                            
+  150/F094 :                            ; CONST - Console status
+  151/F094 :                            ; Returns: A = 0xFF if char available, 0x00 if not
+  152/F094 :                            ; Trashes: flags
+  153/F094 :                            CONST:
+  154/F094 : DB 02                              IN      CONSOLE_STATUS
+  155/F096 : E6 01                              ANI     01H
+  156/F098 : C8                                 RZ                          ; Return 0 if no char
+  157/F099 : 3E FF                              MVI     A,0FFH              ; Return FF if char available
+  158/F09B : C9                                 RET
+  159/F09C :                            
+  160/F09C :                            ; ============================================
+  161/F09C :                            ; PRINT ROUTINES
+  162/F09C :                            ; ============================================
+  163/F09C :                            
+  164/F09C :                            ; PRINT_BANNER - Display startup message
+  165/F09C :                            ; Trashes: A, HL, flags
+  166/F09C :                            PRINT_BANNER:
+  167/F09C : 21 72 F3                           LXI     H,MSG_BANNER
+  168/F09F : CD A3 F0                           CALL    PRINT_STRING
+  169/F0A2 : C9                                 RET
+  170/F0A3 :                            
+  171/F0A3 :                            ; PRINT_STRING - Print null-terminated string at HL
+  172/F0A3 :                            ; Trashes: A, HL, flags
+  173/F0A3 :                            PRINT_STRING:
+  174/F0A3 : 7E                                 MOV     A,M                 ; Get character
+  175/F0A4 : B7                                 ORA     A                   ; Check for null
+  176/F0A5 : C8                                 RZ                          ; Return if end of string
+  177/F0A6 : CD 7E F0                           CALL    CONOUT
+  178/F0A9 : 23                                 INX     H
+  179/F0AA : C3 A3 F0                           JMP     PRINT_STRING
+  180/F0AD :                            
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 4 - 12/11/2025 19:06:00
 
 
-  181/F099 : F1                                 POP     PSW                 ; Restore original
-  182/F09A : CD 9E F0                           CALL    PRINT_HEX_NIBBLE    ; Print low nibble
-  183/F09D : C9                                 RET
-  184/F09E :                            
-  185/F09E :                            ; PRINT_HEX_NIBBLE - Print low nibble of A as hex digit
-  186/F09E :                            ; Input: A = value (low 4 bits used)
-  187/F09E :                            ; Trashes: A, flags
-  188/F09E :                            PRINT_HEX_NIBBLE:
-  189/F09E : E6 0F                              ANI     0FH                 ; Mask to low nibble
-  190/F0A0 : FE 0A                              CPI     0AH                 ; Is it A-F?
-  191/F0A2 : DA A7 F0                           JC      PHN_DIGIT           ; No, it's 0-9
-  192/F0A5 : C6 07                              ADI     07H                 ; Adjust for A-F
-  193/F0A7 :                            PHN_DIGIT:
-  194/F0A7 : C6 30                              ADI     '0'                 ; Convert to ASCII
-  195/F0A9 : CD 51 F0                           CALL    CONOUT
-  196/F0AC : C9                                 RET
-  197/F0AD :                            
-  198/F0AD :                            ; PRINT_HEX_WORD - Print HL as four hex digits
-  199/F0AD :                            ; Input: HL = word to print
-  200/F0AD :                            ; Trashes: A, flags
-  201/F0AD :                            PRINT_HEX_WORD:
-  202/F0AD : 7C                                 MOV     A,H
-  203/F0AE : CD 91 F0                           CALL    PRINT_HEX_BYTE
-  204/F0B1 : 7D                                 MOV     A,L
-  205/F0B2 : CD 91 F0                           CALL    PRINT_HEX_BYTE
-  206/F0B5 : C9                                 RET
-  207/F0B6 :                            
-  208/F0B6 :                            ; ============================================
-  209/F0B6 :                            ; INPUT ROUTINES
-  210/F0B6 :                            ; ============================================
-  211/F0B6 :                            
-  212/F0B6 :                            ; READ_LINE - Read line into LINE_BUFFER
-  213/F0B6 :                            ; Handles: BS (backspace), CR (end of line)
-  214/F0B6 :                            ; Returns: LINE_BUFFER contains null-terminated string
-  215/F0B6 :                            ; Trashes: A, B, C, HL, flags
-  216/F0B6 :                            READ_LINE:
-  217/F0B6 : 21 80 00                           LXI     H,LINE_BUFFER       ; Point to buffer start
-  218/F0B9 : 06 00                              MVI     B,0                 ; Character count
-  219/F0BB :                                    
-  220/F0BB :                            RL_LOOP:
-  221/F0BB : CD 5D F0                           CALL    CONIN               ; Get character
-  222/F0BE : 4F                                 MOV     C,A                 ; Save it in C
-  223/F0BF :                                    
-  224/F0BF : FE 0D                              CPI     CR                  ; Enter pressed?
-  225/F0C1 : CA FC F0                           JZ      RL_DONE
-  226/F0C4 : FE 0A                              CPI     LF
-  227/F0C6 : CA FC F0                           JZ      RL_DONE
-  228/F0C9 :                                    
-  229/F0C9 : FE 08                              CPI     BS                  ; Backspace?
-  230/F0CB : CA E3 F0                           JZ      RL_BACKSPACE
-  231/F0CE :                                    
-  232/F0CE : FE 20                              CPI     SPACE               ; Ignore control chars
-  233/F0D0 : DA BB F0                           JC      RL_LOOP
-  234/F0D3 :                                    
-  235/F0D3 :                                    ; Check buffer full
-  236/F0D3 : 78                                 MOV     A,B
-  237/F0D4 : FE 4F                              CPI     LINE_LENGTH-1       ; Room for char + null?
-  238/F0D6 : D2 BB F0                           JNC     RL_LOOP             ; Buffer full, ignore
-  239/F0D9 :                                    
-  240/F0D9 :                                    ; Store and echo character
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 5 - 12/10/2025 19:16:31
+  181/F0AD :                            ; PRINT_CRLF - Print carriage return and line feed
+  182/F0AD :                            ; Trashes: A, flags
+  183/F0AD :                            PRINT_CRLF:
+  184/F0AD : 3E 0D                              MVI     A,CR
+  185/F0AF : CD 7E F0                           CALL    CONOUT
+  186/F0B2 : 3E 0A                              MVI     A,LF
+  187/F0B4 : CD 7E F0                           CALL    CONOUT
+  188/F0B7 : C9                                 RET
+  189/F0B8 :                            
+  190/F0B8 :                            ; PRINT_SPACE - Print a space
+  191/F0B8 :                            ; Trashes: A, flags
+  192/F0B8 :                            PRINT_SPACE:
+  193/F0B8 : 3E 20                              MVI     A,SPACE
+  194/F0BA : CD 7E F0                           CALL    CONOUT
+  195/F0BD : C9                                 RET
+  196/F0BE :                            
+  197/F0BE :                            ; PRINT_HEX_BYTE - Print A as two hex digits
+  198/F0BE :                            ; Input: A = byte to print
+  199/F0BE :                            ; Trashes: A, flags
+  200/F0BE :                            PRINT_HEX_BYTE:
+  201/F0BE : F5                                 PUSH    PSW                 ; Save original byte
+  202/F0BF : 0F                                 RRC                         ; Shift high nibble to low
+  203/F0C0 : 0F                                 RRC
+  204/F0C1 : 0F                                 RRC
+  205/F0C2 : 0F                                 RRC
+  206/F0C3 : CD CB F0                           CALL    PRINT_HEX_NIBBLE    ; Print high nibble
+  207/F0C6 : F1                                 POP     PSW                 ; Restore original
+  208/F0C7 : CD CB F0                           CALL    PRINT_HEX_NIBBLE    ; Print low nibble
+  209/F0CA : C9                                 RET
+  210/F0CB :                            
+  211/F0CB :                            ; PRINT_HEX_NIBBLE - Print low nibble of A as hex digit
+  212/F0CB :                            ; Input: A = value (low 4 bits used)
+  213/F0CB :                            ; Trashes: A, flags
+  214/F0CB :                            PRINT_HEX_NIBBLE:
+  215/F0CB : E6 0F                              ANI     0FH                 ; Mask to low nibble
+  216/F0CD : FE 0A                              CPI     0AH                 ; Is it A-F?
+  217/F0CF : DA D4 F0                           JC      PHN_DIGIT           ; No, it's 0-9
+  218/F0D2 : C6 07                              ADI     07H                 ; Adjust for A-F
+  219/F0D4 :                            PHN_DIGIT:
+  220/F0D4 : C6 30                              ADI     '0'                 ; Convert to ASCII
+  221/F0D6 : CD 7E F0                           CALL    CONOUT
+  222/F0D9 : C9                                 RET
+  223/F0DA :                            
+  224/F0DA :                            ; PRINT_HEX_WORD - Print HL as four hex digits
+  225/F0DA :                            ; Input: HL = word to print
+  226/F0DA :                            ; Trashes: A, flags
+  227/F0DA :                            PRINT_HEX_WORD:
+  228/F0DA : 7C                                 MOV     A,H
+  229/F0DB : CD BE F0                           CALL    PRINT_HEX_BYTE
+  230/F0DE : 7D                                 MOV     A,L
+  231/F0DF : CD BE F0                           CALL    PRINT_HEX_BYTE
+  232/F0E2 : C9                                 RET
+  233/F0E3 :                            
+  234/F0E3 :                            ; ============================================
+  235/F0E3 :                            ; INPUT ROUTINES
+  236/F0E3 :                            ; ============================================
+  237/F0E3 :                            
+  238/F0E3 :                            ; READ_LINE - Read line into LINE_BUFFER
+  239/F0E3 :                            ; Handles: BS (backspace), CR (end of line)
+  240/F0E3 :                            ; Returns: LINE_BUFFER contains null-terminated string
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 5 - 12/11/2025 19:06:00
 
 
-  241/F0D9 : 71                                 MOV     M,C                 ; Store in buffer
-  242/F0DA : 23                                 INX     H                   ; Advance pointer
-  243/F0DB : 04                                 INR     B                   ; Increment count
-  244/F0DC : 79                                 MOV     A,C                 ; Echo character
-  245/F0DD : CD 51 F0                           CALL    CONOUT
-  246/F0E0 : C3 BB F0                           JMP     RL_LOOP
-  247/F0E3 :                                    
-  248/F0E3 :                            RL_BACKSPACE:
-  249/F0E3 : 78                                 MOV     A,B                 ; Check if buffer empty
-  250/F0E4 : B7                                 ORA     A
-  251/F0E5 : CA BB F0                           JZ      RL_LOOP             ; Nothing to delete
-  252/F0E8 :                                    
-  253/F0E8 : 2B                                 DCX     H                   ; Back up pointer
-  254/F0E9 : 05                                 DCR     B                   ; Decrement count
-  255/F0EA :                                    
-  256/F0EA :                                    ; Erase character on screen: BS, space, BS
-  257/F0EA : 3E 08                              MVI     A,BS
-  258/F0EC : CD 51 F0                           CALL    CONOUT
-  259/F0EF : 3E 20                              MVI     A,SPACE
-  260/F0F1 : CD 51 F0                           CALL    CONOUT
-  261/F0F4 : 3E 08                              MVI     A,BS
-  262/F0F6 : CD 51 F0                           CALL    CONOUT
-  263/F0F9 : C3 BB F0                           JMP     RL_LOOP
-  264/F0FC :                                    
-  265/F0FC :                            RL_DONE:
-  266/F0FC : 36 00                              MVI     M,0                 ; Null terminate
-  267/F0FE : CD 80 F0                           CALL    PRINT_CRLF          ; Echo newline
-  268/F101 : C9                                 RET
-  269/F102 :                            
-  270/F102 :                            ; ============================================
-  271/F102 :                            ; PARSING ROUTINES
-  272/F102 :                            ; ============================================
-  273/F102 :                            
-  274/F102 :                            ; SKIP_SPACES - Skip spaces in buffer
-  275/F102 :                            ; Input: HL = pointer into buffer
-  276/F102 :                            ; Output: HL = pointer to first non-space (or null)
-  277/F102 :                            ; Trashes: A, flags
-  278/F102 :                            SKIP_SPACES:
-  279/F102 : 7E                                 MOV     A,M
-  280/F103 : FE 20                              CPI     SPACE
-  281/F105 : C0                                 RNZ                         ; Return if not a space
-  282/F106 : 23                                 INX     H
-  283/F107 : C3 02 F1                           JMP     SKIP_SPACES
-  284/F10A :                            
-  285/F10A :                            ; READ_HEX_WORD - Parse hex number from buffer
-  286/F10A :                            ; Input: HL = pointer into buffer
-  287/F10A :                            ; Output: DE = parsed value, HL = advanced past number
-  288/F10A :                            ;         Carry set if no valid hex digits found
-  289/F10A :                            ; Trashes: A, BC, flags
-  290/F10A :                            READ_HEX_WORD:
-  291/F10A : CD 02 F1                           CALL    SKIP_SPACES         ; Skip leading spaces
-  292/F10D : 11 00 00                           LXI     D,0                 ; Initialize result
-  293/F110 : 06 00                              MVI     B,0                 ; Digit count
-  294/F112 :                                    
-  295/F112 :                            RHW_LOOP:
-  296/F112 : 7E                                 MOV     A,M                 ; Get character
-  297/F113 : CD 3D F1                           CALL    TO_HEX_DIGIT        ; Convert to 0-15
-  298/F116 : DA 37 F1                           JC      RHW_DONE            ; Not a hex digit, done
-  299/F119 :                                    
-  300/F119 :                                    ; Shift DE left 4 bits and add new digit
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 6 - 12/10/2025 19:16:31
+  241/F0E3 :                            ; Trashes: A, B, C, HL, flags
+  242/F0E3 :                            READ_LINE:
+  243/F0E3 : 21 80 00                           LXI     H,LINE_BUFFER       ; Point to buffer start
+  244/F0E6 : 06 00                              MVI     B,0                 ; Character count
+  245/F0E8 :                                    
+  246/F0E8 :                            RL_LOOP:
+  247/F0E8 : CD 8A F0                           CALL    CONIN               ; Get character
+  248/F0EB : 4F                                 MOV     C,A                 ; Save it in C
+  249/F0EC :                                    
+  250/F0EC : FE 0D                              CPI     CR                  ; Enter pressed?
+  251/F0EE : CA 29 F1                           JZ      RL_DONE
+  252/F0F1 : FE 0A                              CPI     LF
+  253/F0F3 : CA 29 F1                           JZ      RL_DONE
+  254/F0F6 :                                    
+  255/F0F6 : FE 08                              CPI     BS                  ; Backspace?
+  256/F0F8 : CA 10 F1                           JZ      RL_BACKSPACE
+  257/F0FB :                                    
+  258/F0FB : FE 20                              CPI     SPACE               ; Ignore control chars
+  259/F0FD : DA E8 F0                           JC      RL_LOOP
+  260/F100 :                                    
+  261/F100 :                                    ; Check buffer full
+  262/F100 : 78                                 MOV     A,B
+  263/F101 : FE 4F                              CPI     LINE_LENGTH-1       ; Room for char + null?
+  264/F103 : D2 E8 F0                           JNC     RL_LOOP             ; Buffer full, ignore
+  265/F106 :                                    
+  266/F106 :                                    ; Store and echo character
+  267/F106 : 71                                 MOV     M,C                 ; Store in buffer
+  268/F107 : 23                                 INX     H                   ; Advance pointer
+  269/F108 : 04                                 INR     B                   ; Increment count
+  270/F109 : 79                                 MOV     A,C                 ; Echo character
+  271/F10A : CD 7E F0                           CALL    CONOUT
+  272/F10D : C3 E8 F0                           JMP     RL_LOOP
+  273/F110 :                                    
+  274/F110 :                            RL_BACKSPACE:
+  275/F110 : 78                                 MOV     A,B                 ; Check if buffer empty
+  276/F111 : B7                                 ORA     A
+  277/F112 : CA E8 F0                           JZ      RL_LOOP             ; Nothing to delete
+  278/F115 :                                    
+  279/F115 : 2B                                 DCX     H                   ; Back up pointer
+  280/F116 : 05                                 DCR     B                   ; Decrement count
+  281/F117 :                                    
+  282/F117 :                                    ; Erase character on screen: BS, space, BS
+  283/F117 : 3E 08                              MVI     A,BS
+  284/F119 : CD 7E F0                           CALL    CONOUT
+  285/F11C : 3E 20                              MVI     A,SPACE
+  286/F11E : CD 7E F0                           CALL    CONOUT
+  287/F121 : 3E 08                              MVI     A,BS
+  288/F123 : CD 7E F0                           CALL    CONOUT
+  289/F126 : C3 E8 F0                           JMP     RL_LOOP
+  290/F129 :                                    
+  291/F129 :                            RL_DONE:
+  292/F129 : 36 00                              MVI     M,0                 ; Null terminate
+  293/F12B : CD AD F0                           CALL    PRINT_CRLF          ; Echo newline
+  294/F12E : C9                                 RET
+  295/F12F :                            
+  296/F12F :                            ; ============================================
+  297/F12F :                            ; PARSING ROUTINES
+  298/F12F :                            ; ============================================
+  299/F12F :                            
+  300/F12F :                            ; SKIP_SPACES - Skip spaces in buffer
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 6 - 12/11/2025 19:06:00
 
 
-  301/F119 :                                    ; DE = DE * 16 + A
-  302/F119 : F5                                 PUSH    PSW                 ; Save digit
-  303/F11A :                                    
-  304/F11A :                                    ; Get E's high nibble (will go to D's low nibble)
-  305/F11A : 7B                                 MOV     A,E
-  306/F11B : E6 F0                              ANI     0F0H                ; Isolate high nibble
-  307/F11D : 0F                                 RRC
-  308/F11E : 0F                                 RRC
-  309/F11F : 0F                                 RRC
-  310/F120 : 0F                                 RRC                         ; Move to low nibble position
-  311/F121 : 4F                                 MOV     C,A                 ; Save it
-  312/F122 :                                    
-  313/F122 :                                    ; Shift D left 4 bits
-  314/F122 : 7A                                 MOV     A,D
-  315/F123 : 87                                 ADD     A
-  316/F124 : 87                                 ADD     A
-  317/F125 : 87                                 ADD     A
-  318/F126 : 87                                 ADD     A                   ; D << 4
-  319/F127 : B1                                 ORA     C                   ; OR in E's high nibble
-  320/F128 : 57                                 MOV     D,A
-  321/F129 :                                    
-  322/F129 :                                    ; Shift E left 4 bits
-  323/F129 : 7B                                 MOV     A,E
-  324/F12A : 87                                 ADD     A
-  325/F12B : 87                                 ADD     A
-  326/F12C : 87                                 ADD     A
-  327/F12D : 87                                 ADD     A                   ; E << 4
-  328/F12E : 5F                                 MOV     E,A
-  329/F12F :                                    
-  330/F12F :                                    ; Add new digit
-  331/F12F : F1                                 POP     PSW
-  332/F130 : B3                                 ORA     E
-  333/F131 : 5F                                 MOV     E,A
-  334/F132 :                                    
-  335/F132 : 23                                 INX     H                   ; Advance buffer pointer
-  336/F133 : 04                                 INR     B                   ; Count digit
-  337/F134 : C3 12 F1                           JMP     RHW_LOOP
-  338/F137 :                                    
-  339/F137 :                            RHW_DONE:
-  340/F137 : 78                                 MOV     A,B                 ; Check digit count
-  341/F138 : B7                                 ORA     A
-  342/F139 : 37                                 STC                         ; Set carry (no digits)
-  343/F13A : C8                                 RZ                          ; Return with carry if no digits
-  344/F13B : B7                                 ORA     A                   ; Clear carry (success)
-  345/F13C : C9                                 RET
-  346/F13D :                            
-  347/F13D :                            ; TO_HEX_DIGIT - Convert ASCII to hex value
-  348/F13D :                            ; Input: A = ASCII character
-  349/F13D :                            ; Output: A = hex value (0-15), Carry clear
-  350/F13D :                            ;         Carry set if not a hex digit
-  351/F13D :                            ; Trashes: flags
-  352/F13D :                            TO_HEX_DIGIT:
-  353/F13D : FE 30                              CPI     '0'
-  354/F13F : DA 65 F1                           JC      THD_FAIL            ; Below '0'
-  355/F142 : FE 3A                              CPI     '9'+1
-  356/F144 : DA 61 F1                           JC      THD_DIGIT           ; '0'-'9'
-  357/F147 :                                    
-  358/F147 : FE 41                              CPI     'A'
-  359/F149 : DA 65 F1                           JC      THD_FAIL            ; Between '9' and 'A'
-  360/F14C : FE 47                              CPI     'F'+1
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 7 - 12/10/2025 19:16:31
+  301/F12F :                            ; Input: HL = pointer into buffer
+  302/F12F :                            ; Output: HL = pointer to first non-space (or null)
+  303/F12F :                            ; Trashes: A, flags
+  304/F12F :                            SKIP_SPACES:
+  305/F12F : 7E                                 MOV     A,M
+  306/F130 : FE 20                              CPI     SPACE
+  307/F132 : C0                                 RNZ                         ; Return if not a space
+  308/F133 : 23                                 INX     H
+  309/F134 : C3 2F F1                           JMP     SKIP_SPACES
+  310/F137 :                            
+  311/F137 :                            ; READ_HEX_WORD - Parse hex number from buffer
+  312/F137 :                            ; Input: HL = pointer into buffer
+  313/F137 :                            ; Output: DE = parsed value, HL = advanced past number
+  314/F137 :                            ;         Carry set if no valid hex digits found
+  315/F137 :                            ; Trashes: A, BC, flags
+  316/F137 :                            READ_HEX_WORD:
+  317/F137 : CD 2F F1                           CALL    SKIP_SPACES         ; Skip leading spaces
+  318/F13A : 11 00 00                           LXI     D,0                 ; Initialize result
+  319/F13D : 06 00                              MVI     B,0                 ; Digit count
+  320/F13F :                                    
+  321/F13F :                            RHW_LOOP:
+  322/F13F : 7E                                 MOV     A,M                 ; Get character
+  323/F140 : CD 6A F1                           CALL    TO_HEX_DIGIT        ; Convert to 0-15
+  324/F143 : DA 64 F1                           JC      RHW_DONE            ; Not a hex digit, done
+  325/F146 :                                    
+  326/F146 :                                    ; Shift DE left 4 bits and add new digit
+  327/F146 :                                    ; DE = DE * 16 + A
+  328/F146 : F5                                 PUSH    PSW                 ; Save digit
+  329/F147 :                                    
+  330/F147 :                                    ; Get E's high nibble (will go to D's low nibble)
+  331/F147 : 7B                                 MOV     A,E
+  332/F148 : E6 F0                              ANI     0F0H                ; Isolate high nibble
+  333/F14A : 0F                                 RRC
+  334/F14B : 0F                                 RRC
+  335/F14C : 0F                                 RRC
+  336/F14D : 0F                                 RRC                         ; Move to low nibble position
+  337/F14E : 4F                                 MOV     C,A                 ; Save it
+  338/F14F :                                    
+  339/F14F :                                    ; Shift D left 4 bits
+  340/F14F : 7A                                 MOV     A,D
+  341/F150 : 87                                 ADD     A
+  342/F151 : 87                                 ADD     A
+  343/F152 : 87                                 ADD     A
+  344/F153 : 87                                 ADD     A                   ; D << 4
+  345/F154 : B1                                 ORA     C                   ; OR in E's high nibble
+  346/F155 : 57                                 MOV     D,A
+  347/F156 :                                    
+  348/F156 :                                    ; Shift E left 4 bits
+  349/F156 : 7B                                 MOV     A,E
+  350/F157 : 87                                 ADD     A
+  351/F158 : 87                                 ADD     A
+  352/F159 : 87                                 ADD     A
+  353/F15A : 87                                 ADD     A                   ; E << 4
+  354/F15B : 5F                                 MOV     E,A
+  355/F15C :                                    
+  356/F15C :                                    ; Add new digit
+  357/F15C : F1                                 POP     PSW
+  358/F15D : B3                                 ORA     E
+  359/F15E : 5F                                 MOV     E,A
+  360/F15F :                                    
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 7 - 12/11/2025 19:06:00
 
 
-  361/F14E : DA 5D F1                           JC      THD_ALPHA           ; 'A'-'F'
-  362/F151 :                                    
-  363/F151 : FE 61                              CPI     'a'
-  364/F153 : DA 65 F1                           JC      THD_FAIL            ; Between 'F' and 'a'
-  365/F156 : FE 67                              CPI     'f'+1
-  366/F158 : D2 65 F1                           JNC     THD_FAIL            ; Above 'f'
-  367/F15B :                                    
-  368/F15B :                                    ; 'a'-'f': convert to uppercase first
-  369/F15B : D6 20                              SUI     20H
-  370/F15D :                                    
-  371/F15D :                            THD_ALPHA:
-  372/F15D : D6 37                              SUI     'A'-10              ; Convert 'A'-'F' to 10-15
-  373/F15F : B7                                 ORA     A                   ; Clear carry
-  374/F160 : C9                                 RET
-  375/F161 :                                    
-  376/F161 :                            THD_DIGIT:
-  377/F161 : D6 30                              SUI     '0'                 ; Convert '0'-'9' to 0-9
-  378/F163 : B7                                 ORA     A                   ; Clear carry
-  379/F164 : C9                                 RET
-  380/F165 :                                    
-  381/F165 :                            THD_FAIL:
-  382/F165 : 37                                 STC                         ; Set carry = not hex
-  383/F166 : C9                                 RET
-  384/F167 :                            
-  385/F167 :                            ; ============================================
-  386/F167 :                            ; COMMANDS
-  387/F167 :                            ; ============================================
-  388/F167 :                            
-  389/F167 :                            ; CMD_DUMP - Dump memory
-  390/F167 :                            ; Syntax: D [start] [end]
-  391/F167 :                            ; If no args, continues from last address
-  392/F167 :                            ; If one arg, dumps 128 bytes from start
-  393/F167 :                            ; If two args, dumps from start to end
-  394/F167 :                            CMD_DUMP:
-  395/F167 : CD 02 F1                           CALL    SKIP_SPACES
-  396/F16A : 7E                                 MOV     A,M
-  397/F16B : B7                                 ORA     A                   ; End of line?
-  398/F16C : CA 88 F1                           JZ      CD_NO_ARGS
-  399/F16F :                                    
-  400/F16F :                                    ; Parse start address
-  401/F16F : CD 0A F1                           CALL    READ_HEX_WORD
-  402/F172 : DA A2 F1                           JC      CD_ERROR            ; No valid address
-  403/F175 : D5                                 PUSH    D                   ; Save start address
-  404/F176 :                                    
-  405/F176 : CD 02 F1                           CALL    SKIP_SPACES
-  406/F179 : 7E                                 MOV     A,M
-  407/F17A : B7                                 ORA     A                   ; End of line?
-  408/F17B : CA 96 F1                           JZ      CD_ONE_ARG
-  409/F17E :                                    
-  410/F17E :                                    ; Parse end address
-  411/F17E : CD 0A F1                           CALL    READ_HEX_WORD
-  412/F181 : DA A1 F1                           JC      CD_POP_ERROR        ; Invalid end address
-  413/F184 :                                    
-  414/F184 :                                    ; Two args: start in stack, end in DE
-  415/F184 : E1                                 POP     H                   ; HL = start
-  416/F185 : C3 AB F1                           JMP     CD_DUMP_RANGE
-  417/F188 :                                    
-  418/F188 :                            CD_NO_ARGS:
-  419/F188 :                                    ; Continue from last address
-  420/F188 : 2A D2 00                           LHLD    LAST_DUMP_ADDR
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 8 - 12/10/2025 19:16:31
+  361/F15F : 23                                 INX     H                   ; Advance buffer pointer
+  362/F160 : 04                                 INR     B                   ; Count digit
+  363/F161 : C3 3F F1                           JMP     RHW_LOOP
+  364/F164 :                                    
+  365/F164 :                            RHW_DONE:
+  366/F164 : 78                                 MOV     A,B                 ; Check digit count
+  367/F165 : B7                                 ORA     A
+  368/F166 : 37                                 STC                         ; Set carry (no digits)
+  369/F167 : C8                                 RZ                          ; Return with carry if no digits
+  370/F168 : B7                                 ORA     A                   ; Clear carry (success)
+  371/F169 : C9                                 RET
+  372/F16A :                            
+  373/F16A :                            ; TO_HEX_DIGIT - Convert ASCII to hex value
+  374/F16A :                            ; Input: A = ASCII character
+  375/F16A :                            ; Output: A = hex value (0-15), Carry clear
+  376/F16A :                            ;         Carry set if not a hex digit
+  377/F16A :                            ; Trashes: flags
+  378/F16A :                            TO_HEX_DIGIT:
+  379/F16A : FE 30                              CPI     '0'
+  380/F16C : DA 92 F1                           JC      THD_FAIL            ; Below '0'
+  381/F16F : FE 3A                              CPI     '9'+1
+  382/F171 : DA 8E F1                           JC      THD_DIGIT           ; '0'-'9'
+  383/F174 :                                    
+  384/F174 : FE 41                              CPI     'A'
+  385/F176 : DA 92 F1                           JC      THD_FAIL            ; Between '9' and 'A'
+  386/F179 : FE 47                              CPI     'F'+1
+  387/F17B : DA 8A F1                           JC      THD_ALPHA           ; 'A'-'F'
+  388/F17E :                                    
+  389/F17E : FE 61                              CPI     'a'
+  390/F180 : DA 92 F1                           JC      THD_FAIL            ; Between 'F' and 'a'
+  391/F183 : FE 67                              CPI     'f'+1
+  392/F185 : D2 92 F1                           JNC     THD_FAIL            ; Above 'f'
+  393/F188 :                                    
+  394/F188 :                                    ; 'a'-'f': convert to uppercase first
+  395/F188 : D6 20                              SUI     20H
+  396/F18A :                                    
+  397/F18A :                            THD_ALPHA:
+  398/F18A : D6 37                              SUI     'A'-10              ; Convert 'A'-'F' to 10-15
+  399/F18C : B7                                 ORA     A                   ; Clear carry
+  400/F18D : C9                                 RET
+  401/F18E :                                    
+  402/F18E :                            THD_DIGIT:
+  403/F18E : D6 30                              SUI     '0'                 ; Convert '0'-'9' to 0-9
+  404/F190 : B7                                 ORA     A                   ; Clear carry
+  405/F191 : C9                                 RET
+  406/F192 :                                    
+  407/F192 :                            THD_FAIL:
+  408/F192 : 37                                 STC                         ; Set carry = not hex
+  409/F193 : C9                                 RET
+  410/F194 :                            
+  411/F194 :                            ; ============================================
+  412/F194 :                            ; COMMANDS
+  413/F194 :                            ; ============================================
+  414/F194 :                            
+  415/F194 :                            ; CMD_DUMP - Dump memory
+  416/F194 :                            ; Syntax: D [start] [end]
+  417/F194 :                            ; If no args, continues from last address
+  418/F194 :                            ; If one arg, dumps 128 bytes from start
+  419/F194 :                            ; If two args, dumps from start to end
+  420/F194 :                            CMD_DUMP:
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 8 - 12/11/2025 19:06:00
 
 
-  421/F18B : 11 7F 00                           LXI     D,007FH             ; 128 bytes
-  422/F18E : 19                                 DAD     D                   ; HL = start + 127 = end
-  423/F18F : EB                                 XCHG                        ; DE = end
-  424/F190 : 2A D2 00                           LHLD    LAST_DUMP_ADDR      ; HL = start
-  425/F193 : C3 AB F1                           JMP     CD_DUMP_RANGE
-  426/F196 :                                    
-  427/F196 :                            CD_ONE_ARG:
-  428/F196 : E1                                 POP     H                   ; HL = start
-  429/F197 : E5                                 PUSH    H                   ; Save start again
-  430/F198 : 11 7F 00                           LXI     D,007FH
-  431/F19B : 19                                 DAD     D                   ; HL = start + 127 = end
-  432/F19C : EB                                 XCHG                        ; DE = end
-  433/F19D : E1                                 POP     H                   ; HL = start
-  434/F19E : C3 AB F1                           JMP     CD_DUMP_RANGE
-  435/F1A1 :                                    
-  436/F1A1 :                            CD_POP_ERROR:
-  437/F1A1 : D1                                 POP     D                   ; Clean up stack
-  438/F1A2 :                            CD_ERROR:
-  439/F1A2 : 21 20 F3                           LXI     H,MSG_BAD_ADDR
-  440/F1A5 : CD 76 F0                           CALL    PRINT_STRING
-  441/F1A8 : C3 0F F0                           JMP     MAIN_LOOP
-  442/F1AB :                            
-  443/F1AB :                            ; CD_DUMP_RANGE - Dump memory from HL to DE
-  444/F1AB :                            ; Input: HL = start address, DE = end address
-  445/F1AB :                            CD_DUMP_RANGE:
-  446/F1AB : D5                                 PUSH    D                   ; Save end address
-  447/F1AC :                            
-  448/F1AC :                            CD_LINE:
-  449/F1AC :                                    ; Print address
-  450/F1AC : CD AD F0                           CALL    PRINT_HEX_WORD
-  451/F1AF : 3E 3A                              MVI     A,':'
-  452/F1B1 : CD 51 F0                           CALL    CONOUT
-  453/F1B4 : CD 8B F0                           CALL    PRINT_SPACE
-  454/F1B7 :                                    
-  455/F1B7 :                                    ; Print 16 hex bytes
-  456/F1B7 : E5                                 PUSH    H                   ; Save line start for ASCII
-  457/F1B8 : 0E 10                              MVI     C,16                ; Byte counter
-  458/F1BA :                                    
-  459/F1BA :                            CD_HEX_BYTE:
-  460/F1BA : 7E                                 MOV     A,M                 ; Get byte
-  461/F1BB : CD 91 F0                           CALL    PRINT_HEX_BYTE
-  462/F1BE : CD 8B F0                           CALL    PRINT_SPACE
-  463/F1C1 :                                    
-  464/F1C1 :                                    ; Extra space after 8th byte
-  465/F1C1 : 79                                 MOV     A,C
-  466/F1C2 : FE 09                              CPI     9
-  467/F1C4 : C2 CA F1                           JNZ     CD_NO_GAP
-  468/F1C7 : CD 8B F0                           CALL    PRINT_SPACE
-  469/F1CA :                            CD_NO_GAP:
-  470/F1CA :                                    
-  471/F1CA : 23                                 INX     H
-  472/F1CB : 0D                                 DCR     C
-  473/F1CC : C2 BA F1                           JNZ     CD_HEX_BYTE
-  474/F1CF :                                    
-  475/F1CF :                                    ; Print ASCII representation
-  476/F1CF : CD 8B F0                           CALL    PRINT_SPACE
-  477/F1D2 : E1                                 POP     H                   ; Restore line start
-  478/F1D3 : 0E 10                              MVI     C,16
-  479/F1D5 :                                    
-  480/F1D5 :                            CD_ASCII:
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 9 - 12/10/2025 19:16:31
+  421/F194 : CD 2F F1                           CALL    SKIP_SPACES
+  422/F197 : 7E                                 MOV     A,M
+  423/F198 : B7                                 ORA     A                   ; End of line?
+  424/F199 : CA B5 F1                           JZ      CD_NO_ARGS
+  425/F19C :                                    
+  426/F19C :                                    ; Parse start address
+  427/F19C : CD 37 F1                           CALL    READ_HEX_WORD
+  428/F19F : DA CF F1                           JC      CD_ERROR            ; No valid address
+  429/F1A2 : D5                                 PUSH    D                   ; Save start address
+  430/F1A3 :                                    
+  431/F1A3 : CD 2F F1                           CALL    SKIP_SPACES
+  432/F1A6 : 7E                                 MOV     A,M
+  433/F1A7 : B7                                 ORA     A                   ; End of line?
+  434/F1A8 : CA C3 F1                           JZ      CD_ONE_ARG
+  435/F1AB :                                    
+  436/F1AB :                                    ; Parse end address
+  437/F1AB : CD 37 F1                           CALL    READ_HEX_WORD
+  438/F1AE : DA CE F1                           JC      CD_POP_ERROR        ; Invalid end address
+  439/F1B1 :                                    
+  440/F1B1 :                                    ; Two args: start in stack, end in DE
+  441/F1B1 : E1                                 POP     H                   ; HL = start
+  442/F1B2 : C3 D8 F1                           JMP     CD_DUMP_RANGE
+  443/F1B5 :                                    
+  444/F1B5 :                            CD_NO_ARGS:
+  445/F1B5 :                                    ; Continue from last address
+  446/F1B5 : 2A D2 00                           LHLD    LAST_DUMP_ADDR
+  447/F1B8 : 11 7F 00                           LXI     D,007FH             ; 128 bytes
+  448/F1BB : 19                                 DAD     D                   ; HL = start + 127 = end
+  449/F1BC : EB                                 XCHG                        ; DE = end
+  450/F1BD : 2A D2 00                           LHLD    LAST_DUMP_ADDR      ; HL = start
+  451/F1C0 : C3 D8 F1                           JMP     CD_DUMP_RANGE
+  452/F1C3 :                                    
+  453/F1C3 :                            CD_ONE_ARG:
+  454/F1C3 : E1                                 POP     H                   ; HL = start
+  455/F1C4 : E5                                 PUSH    H                   ; Save start again
+  456/F1C5 : 11 7F 00                           LXI     D,007FH
+  457/F1C8 : 19                                 DAD     D                   ; HL = start + 127 = end
+  458/F1C9 : EB                                 XCHG                        ; DE = end
+  459/F1CA : E1                                 POP     H                   ; HL = start
+  460/F1CB : C3 D8 F1                           JMP     CD_DUMP_RANGE
+  461/F1CE :                                    
+  462/F1CE :                            CD_POP_ERROR:
+  463/F1CE : D1                                 POP     D                   ; Clean up stack
+  464/F1CF :                            CD_ERROR:
+  465/F1CF : 21 D1 F4                           LXI     H,MSG_BAD_ADDR
+  466/F1D2 : CD A3 F0                           CALL    PRINT_STRING
+  467/F1D5 : C3 2D F0                           JMP     MAIN_LOOP
+  468/F1D8 :                            
+  469/F1D8 :                            ; CD_DUMP_RANGE - Dump memory from HL to DE
+  470/F1D8 :                            ; Input: HL = start address, DE = end address
+  471/F1D8 :                            CD_DUMP_RANGE:
+  472/F1D8 : D5                                 PUSH    D                   ; Save end address
+  473/F1D9 :                            
+  474/F1D9 :                            CD_LINE:
+  475/F1D9 :                                    ; Print address
+  476/F1D9 : CD DA F0                           CALL    PRINT_HEX_WORD
+  477/F1DC : 3E 3A                              MVI     A,':'
+  478/F1DE : CD 7E F0                           CALL    CONOUT
+  479/F1E1 : CD B8 F0                           CALL    PRINT_SPACE
+  480/F1E4 :                                    
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 9 - 12/11/2025 19:06:00
 
 
-  481/F1D5 : 7E                                 MOV     A,M
-  482/F1D6 : FE 20                              CPI     SPACE               ; Printable? (>= 0x20)
-  483/F1D8 : DA E0 F1                           JC      CD_DOT
-  484/F1DB : FE 7F                              CPI     07FH                ; Printable? (< 0x7F)
-  485/F1DD : DA E2 F1                           JC      CD_PRINT_CHAR
-  486/F1E0 :                            CD_DOT:
-  487/F1E0 : 3E 2E                              MVI     A,'.'
-  488/F1E2 :                            CD_PRINT_CHAR:
-  489/F1E2 : CD 51 F0                           CALL    CONOUT
-  490/F1E5 : 23                                 INX     H
-  491/F1E6 : 0D                                 DCR     C
-  492/F1E7 : C2 D5 F1                           JNZ     CD_ASCII
-  493/F1EA :                                    
-  494/F1EA : CD 80 F0                           CALL    PRINT_CRLF
-  495/F1ED :                                    
-  496/F1ED :                                    ; Check if done (HL > end address)
-  497/F1ED : D1                                 POP     D                   ; DE = end address
-  498/F1EE : D5                                 PUSH    D                   ; Keep it on stack
-  499/F1EF :                                    
-  500/F1EF :                                    ; Compare HL to DE: if HL > DE, we're done
-  501/F1EF : 7A                                 MOV     A,D
-  502/F1F0 : BC                                 CMP     H
-  503/F1F1 : DA FF F1                           JC      CD_DONE             ; D < H, done
-  504/F1F4 : C2 AC F1                           JNZ     CD_LINE             ; D > H, continue
-  505/F1F7 : 7B                                 MOV     A,E
-  506/F1F8 : BD                                 CMP     L
-  507/F1F9 : DA FF F1                           JC      CD_DONE             ; E < L, done (D == H)
-  508/F1FC : C3 AC F1                           JMP     CD_LINE             ; E >= L, continue
-  509/F1FF :                                    
-  510/F1FF :                            CD_DONE:
-  511/F1FF : D1                                 POP     D                   ; Clean up stack
-  512/F200 : 22 D2 00                           SHLD    LAST_DUMP_ADDR      ; Save for next time
-  513/F203 : C3 0F F0                           JMP     MAIN_LOOP
-  514/F206 :                            
-  515/F206 :                            ; CMD_EXAMINE - Examine/modify memory
-  516/F206 :                            ; Syntax: E [addr]
-  517/F206 :                            ; Shows "ADDR: XX-" and waits for input
-  518/F206 :                            ; Enter hex to modify, CR to advance, period to exit
-  519/F206 :                            CMD_EXAMINE:
-  520/F206 : CD 02 F1                           CALL    SKIP_SPACES
-  521/F209 : 7E                                 MOV     A,M
-  522/F20A : B7                                 ORA     A                   ; Any address given?
-  523/F20B : CA 18 F2                           JZ      CE_USE_LAST
-  524/F20E :                                    
-  525/F20E : CD 0A F1                           CALL    READ_HEX_WORD       ; Parse address into DE
-  526/F211 : DA 4E F2                           JC      CE_ERROR            ; Invalid hex
-  527/F214 : EB                                 XCHG                        ; HL = address to examine
-  528/F215 : C3 1B F2                           JMP     CE_LOOP
-  529/F218 :                                    
-  530/F218 :                            CE_USE_LAST:
-  531/F218 : 2A D4 00                           LHLD    LAST_EXAM_ADDR
-  532/F21B :                                    
-  533/F21B :                            CE_LOOP:
-  534/F21B : CD AD F0                           CALL    PRINT_HEX_WORD      ; Print address
-  535/F21E : 3E 3A                              MVI     A,':'
-  536/F220 : CD 51 F0                           CALL    CONOUT
-  537/F223 : 3E 20                              MVI     A,' '
-  538/F225 : CD 51 F0                           CALL    CONOUT
-  539/F228 : 7E                                 MOV     A,M                 ; Get current byte
-  540/F229 : CD 91 F0                           CALL    PRINT_HEX_BYTE
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 10 - 12/10/2025 19:16:31
+  481/F1E4 :                                    ; Print 16 hex bytes
+  482/F1E4 : E5                                 PUSH    H                   ; Save line start for ASCII
+  483/F1E5 : 0E 10                              MVI     C,16                ; Byte counter
+  484/F1E7 :                                    
+  485/F1E7 :                            CD_HEX_BYTE:
+  486/F1E7 : 7E                                 MOV     A,M                 ; Get byte
+  487/F1E8 : CD BE F0                           CALL    PRINT_HEX_BYTE
+  488/F1EB : CD B8 F0                           CALL    PRINT_SPACE
+  489/F1EE :                                    
+  490/F1EE :                                    ; Extra space after 8th byte
+  491/F1EE : 79                                 MOV     A,C
+  492/F1EF : FE 09                              CPI     9
+  493/F1F1 : C2 F7 F1                           JNZ     CD_NO_GAP
+  494/F1F4 : CD B8 F0                           CALL    PRINT_SPACE
+  495/F1F7 :                            CD_NO_GAP:
+  496/F1F7 :                                    
+  497/F1F7 : 23                                 INX     H
+  498/F1F8 : 0D                                 DCR     C
+  499/F1F9 : C2 E7 F1                           JNZ     CD_HEX_BYTE
+  500/F1FC :                                    
+  501/F1FC :                                    ; Print ASCII representation
+  502/F1FC : CD B8 F0                           CALL    PRINT_SPACE
+  503/F1FF : E1                                 POP     H                   ; Restore line start
+  504/F200 : 0E 10                              MVI     C,16
+  505/F202 :                                    
+  506/F202 :                            CD_ASCII:
+  507/F202 : 7E                                 MOV     A,M
+  508/F203 : FE 20                              CPI     SPACE               ; Printable? (>= 0x20)
+  509/F205 : DA 0D F2                           JC      CD_DOT
+  510/F208 : FE 7F                              CPI     07FH                ; Printable? (< 0x7F)
+  511/F20A : DA 0F F2                           JC      CD_PRINT_CHAR
+  512/F20D :                            CD_DOT:
+  513/F20D : 3E 2E                              MVI     A,'.'
+  514/F20F :                            CD_PRINT_CHAR:
+  515/F20F : CD 7E F0                           CALL    CONOUT
+  516/F212 : 23                                 INX     H
+  517/F213 : 0D                                 DCR     C
+  518/F214 : C2 02 F2                           JNZ     CD_ASCII
+  519/F217 :                                    
+  520/F217 : CD AD F0                           CALL    PRINT_CRLF
+  521/F21A :                                    
+  522/F21A :                                    ; Check if done (HL > end address)
+  523/F21A : D1                                 POP     D                   ; DE = end address
+  524/F21B : D5                                 PUSH    D                   ; Keep it on stack
+  525/F21C :                                    
+  526/F21C :                                    ; Compare HL to DE: if HL > DE, we're done
+  527/F21C : 7A                                 MOV     A,D
+  528/F21D : BC                                 CMP     H
+  529/F21E : DA 2C F2                           JC      CD_DONE             ; D < H, done
+  530/F221 : C2 D9 F1                           JNZ     CD_LINE             ; D > H, continue
+  531/F224 : 7B                                 MOV     A,E
+  532/F225 : BD                                 CMP     L
+  533/F226 : DA 2C F2                           JC      CD_DONE             ; E < L, done (D == H)
+  534/F229 : C3 D9 F1                           JMP     CD_LINE             ; E >= L, continue
+  535/F22C :                                    
+  536/F22C :                            CD_DONE:
+  537/F22C : D1                                 POP     D                   ; Clean up stack
+  538/F22D : 22 D2 00                           SHLD    LAST_DUMP_ADDR      ; Save for next time
+  539/F230 : C3 2D F0                           JMP     MAIN_LOOP
+  540/F233 :                            
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 10 - 12/11/2025 19:06:00
 
 
-  541/F22C : 3E 2D                              MVI     A,'-'
-  542/F22E : CD 51 F0                           CALL    CONOUT
-  543/F231 :                                    
-  544/F231 : CD 6C F2                           CALL    READ_EXAM_BYTE      ; Get user input
-  545/F234 : DA 45 F2                           JC      CE_EXIT             ; Carry = exit requested
-  546/F237 : 78                                 MOV     A,B                 ; Check digit count
-  547/F238 : B7                                 ORA     A
-  548/F239 : CA 3E F2                           JZ      CE_NEXT             ; No digits = don't modify
-  549/F23C : 79                                 MOV     A,C                 ; Get the value from C
-  550/F23D : 77                                 MOV     M,A                 ; Store it
-  551/F23E :                                    
-  552/F23E :                            CE_NEXT:
-  553/F23E : 23                                 INX     H
-  554/F23F : CD 80 F0                           CALL    PRINT_CRLF
-  555/F242 : C3 1B F2                           JMP     CE_LOOP
-  556/F245 :                                    
-  557/F245 :                            CE_EXIT:
-  558/F245 : 22 D4 00                           SHLD    LAST_EXAM_ADDR
-  559/F248 : CD 80 F0                           CALL    PRINT_CRLF
-  560/F24B : C3 0F F0                           JMP     MAIN_LOOP
-  561/F24E :                                    
-  562/F24E :                            CE_ERROR:
-  563/F24E : 21 20 F3                           LXI     H,MSG_BAD_ADDR
-  564/F251 : CD 76 F0                           CALL    PRINT_STRING
-  565/F254 : C3 0F F0                           JMP     MAIN_LOOP
-  566/F257 :                            
-  567/F257 :                            ; CMD_GO - Execute at address
-  568/F257 :                            ; Syntax: G [addr]
-  569/F257 :                            ; If no address, defaults to 0100H (TPA)
-  570/F257 :                            CMD_GO:
-  571/F257 : CD 0A F1                           CALL    READ_HEX_WORD       ; Parse address into DE
-  572/F25A : DA 5F F2                           JC      CG_DEFAULT          ; No address given
-  573/F25D : EB                                 XCHG                        ; HL = parsed address
-  574/F25E : E9                                 PCHL                        ; Jump and never return
-  575/F25F :                                    
-  576/F25F :                            CG_DEFAULT:
-  577/F25F : 21 00 01                           LXI     H,0100H             ; Default to TPA
-  578/F262 : E9                                 PCHL
-  579/F263 :                            
-  580/F263 :                            ; CMD_HELP - Show help
-  581/F263 :                            CMD_HELP:
-  582/F263 : 21 44 F3                           LXI     H,MSG_HELP
-  583/F266 : CD 76 F0                           CALL    PRINT_STRING
-  584/F269 : C3 0F F0                           JMP     MAIN_LOOP
-  585/F26C :                            
-  586/F26C :                            ; ============================================
-  587/F26C :                            ; HELPER ROUTINES
-  588/F26C :                            ; ============================================
-  589/F26C :                            
-  590/F26C :                            ; READ_EXAM_BYTE - Read byte value for examine command
-  591/F26C :                            ; Reads up to 2 hex digits from console
-  592/F26C :                            ; Output: Carry set = exit (period pressed)
-  593/F26C :                            ;         Carry clear: B = digit count, C = value
-  594/F26C :                            ;         (caller checks B: 0 = no modification, >0 = store C)
-  595/F26C :                            ; Trashes: A, B, C, D, flags
-  596/F26C :                            READ_EXAM_BYTE:
-  597/F26C : 06 00                              MVI     B,0                 ; Digit count
-  598/F26E : 0E 00                              MVI     C,0                 ; Accumulated value
-  599/F270 :                                    
-  600/F270 :                            REB_LOOP:
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 11 - 12/10/2025 19:16:31
+  541/F233 :                            ; CMD_EXAMINE - Examine/modify memory
+  542/F233 :                            ; Syntax: E [addr]
+  543/F233 :                            ; Shows "ADDR: XX-" and waits for input
+  544/F233 :                            ; Enter hex to modify, CR to advance, period to exit
+  545/F233 :                            CMD_EXAMINE:
+  546/F233 : CD 2F F1                           CALL    SKIP_SPACES
+  547/F236 : 7E                                 MOV     A,M
+  548/F237 : B7                                 ORA     A                   ; Any address given?
+  549/F238 : CA 45 F2                           JZ      CE_USE_LAST
+  550/F23B :                                    
+  551/F23B : CD 37 F1                           CALL    READ_HEX_WORD       ; Parse address into DE
+  552/F23E : DA 7B F2                           JC      CE_ERROR            ; Invalid hex
+  553/F241 : EB                                 XCHG                        ; HL = address to examine
+  554/F242 : C3 48 F2                           JMP     CE_LOOP
+  555/F245 :                                    
+  556/F245 :                            CE_USE_LAST:
+  557/F245 : 2A D4 00                           LHLD    LAST_EXAM_ADDR
+  558/F248 :                                    
+  559/F248 :                            CE_LOOP:
+  560/F248 : CD DA F0                           CALL    PRINT_HEX_WORD      ; Print address
+  561/F24B : 3E 3A                              MVI     A,':'
+  562/F24D : CD 7E F0                           CALL    CONOUT
+  563/F250 : 3E 20                              MVI     A,' '
+  564/F252 : CD 7E F0                           CALL    CONOUT
+  565/F255 : 7E                                 MOV     A,M                 ; Get current byte
+  566/F256 : CD BE F0                           CALL    PRINT_HEX_BYTE
+  567/F259 : 3E 2D                              MVI     A,'-'
+  568/F25B : CD 7E F0                           CALL    CONOUT
+  569/F25E :                                    
+  570/F25E : CD 1C F3                           CALL    READ_EXAM_BYTE      ; Get user input
+  571/F261 : DA 72 F2                           JC      CE_EXIT             ; Carry = exit requested
+  572/F264 : 78                                 MOV     A,B                 ; Check digit count
+  573/F265 : B7                                 ORA     A
+  574/F266 : CA 6B F2                           JZ      CE_NEXT             ; No digits = don't modify
+  575/F269 : 79                                 MOV     A,C                 ; Get the value from C
+  576/F26A : 77                                 MOV     M,A                 ; Store it
+  577/F26B :                                    
+  578/F26B :                            CE_NEXT:
+  579/F26B : 23                                 INX     H
+  580/F26C : CD AD F0                           CALL    PRINT_CRLF
+  581/F26F : C3 48 F2                           JMP     CE_LOOP
+  582/F272 :                                    
+  583/F272 :                            CE_EXIT:
+  584/F272 : 22 D4 00                           SHLD    LAST_EXAM_ADDR
+  585/F275 : CD AD F0                           CALL    PRINT_CRLF
+  586/F278 : C3 2D F0                           JMP     MAIN_LOOP
+  587/F27B :                                    
+  588/F27B :                            CE_ERROR:
+  589/F27B : 21 D1 F4                           LXI     H,MSG_BAD_ADDR
+  590/F27E : CD A3 F0                           CALL    PRINT_STRING
+  591/F281 : C3 2D F0                           JMP     MAIN_LOOP
+  592/F284 :                            
+  593/F284 :                            ; CMD_GO - Execute at address
+  594/F284 :                            ; Syntax: G [addr]
+  595/F284 :                            ; If no address, defaults to 0100H (TPA)
+  596/F284 :                            CMD_GO:
+  597/F284 : CD 2F F1                           CALL    SKIP_SPACES
+  598/F287 : CD 37 F1                           CALL    READ_HEX_WORD       ; Parse address into DE
+  599/F28A : DA 8F F2                           JC      CG_DEFAULT          ; No address given
+  600/F28D : EB                                 XCHG                        ; HL = parsed address
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 11 - 12/11/2025 19:06:00
 
 
-  601/F270 : CD 5D F0                           CALL    CONIN
-  602/F273 : 57                                 MOV     D,A                 ; Save original for echo
-  603/F274 :                                    
-  604/F274 : FE 2E                              CPI     '.'                 ; Exit?
-  605/F276 : CA A0 F2                           JZ      REB_EXIT
-  606/F279 : FE 0D                              CPI     CR                  ; Enter?
-  607/F27B : CA 9E F2                           JZ      REB_DONE
-  608/F27E : FE 08                              CPI     BS                  ; Backspace?
-  609/F280 : CA A2 F2                           JZ      REB_BS
-  610/F283 :                                    
-  611/F283 : CD 3D F1                           CALL    TO_HEX_DIGIT        ; Convert to 0-15
-  612/F286 : DA 70 F2                           JC      REB_LOOP            ; Not hex, ignore
-  613/F289 :                                    
-  614/F289 :                                    ; Valid hex digit in A
-  615/F289 : F5                                 PUSH    PSW
-  616/F28A : 79                                 MOV     A,C
-  617/F28B : 87                                 ADD     A                   ; Shift left 4
-  618/F28C : 87                                 ADD     A
-  619/F28D : 87                                 ADD     A
-  620/F28E : 87                                 ADD     A
-  621/F28F : 4F                                 MOV     C,A
-  622/F290 : F1                                 POP     PSW
-  623/F291 : B1                                 ORA     C                   ; Add new digit
-  624/F292 : 4F                                 MOV     C,A
-  625/F293 :                                    
-  626/F293 : 04                                 INR     B                   ; Count digit
-  627/F294 : 7A                                 MOV     A,D                 ; Echo original char
-  628/F295 : CD 51 F0                           CALL    CONOUT
-  629/F298 :                                    
-  630/F298 : 78                                 MOV     A,B
-  631/F299 : FE 02                              CPI     2                   ; Two digits entered?
-  632/F29B : DA 70 F2                           JC      REB_LOOP            ; No, keep reading
-  633/F29E :                                    ; Fall through with 2 digits
-  634/F29E :                                    
-  635/F29E :                            REB_DONE:
-  636/F29E :                                    ; Carry clear, B = digit count, C = value
-  637/F29E : B7                                 ORA     A                   ; Clear carry
-  638/F29F : C9                                 RET
-  639/F2A0 :                                    
-  640/F2A0 :                            REB_EXIT:
-  641/F2A0 : 37                                 STC                         ; Set carry = exit
-  642/F2A1 : C9                                 RET
-  643/F2A2 :                                    
-  644/F2A2 :                            REB_BS:
-  645/F2A2 : 78                                 MOV     A,B
-  646/F2A3 : B7                                 ORA     A
-  647/F2A4 : CA 70 F2                           JZ      REB_LOOP            ; Nothing to delete
-  648/F2A7 :                                    
-  649/F2A7 : 05                                 DCR     B
-  650/F2A8 : 79                                 MOV     A,C                 ; Undo the shift
-  651/F2A9 : 0F                                 RRC
-  652/F2AA : 0F                                 RRC
-  653/F2AB : 0F                                 RRC
-  654/F2AC : 0F                                 RRC
-  655/F2AD : E6 0F                              ANI     0FH
-  656/F2AF : 4F                                 MOV     C,A
-  657/F2B0 :                                    
-  658/F2B0 : 3E 08                              MVI     A,BS                ; Erase on screen
-  659/F2B2 : CD 51 F0                           CALL    CONOUT
-  660/F2B5 : 3E 20                              MVI     A,' '
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 12 - 12/10/2025 19:16:31
+  601/F28E : E9                                 PCHL                        ; Jump and never return
+  602/F28F :                                    
+  603/F28F :                            CG_DEFAULT:
+  604/F28F : 21 00 01                           LXI     H,0100H             ; Default to TPA
+  605/F292 : E9                                 PCHL
+  606/F293 :                            
+  607/F293 :                            ; CMD_HEX_MATH - Hex addition and subtraction
+  608/F293 :                            ; Syntax: H num1 num2
+  609/F293 :                            ; Output: sum difference
+  610/F293 :                            CMD_HEX_MATH:
+  611/F293 : CD 2F F1                           CALL    SKIP_SPACES
+  612/F296 : CD 37 F1                           CALL    READ_HEX_WORD       ; First number -> DE
+  613/F299 : DA C2 F2                           JC      CH_ERROR
+  614/F29C : D5                                 PUSH    D                   ; Save first number
+  615/F29D :                                    
+  616/F29D : CD 2F F1                           CALL    SKIP_SPACES
+  617/F2A0 : CD 37 F1                           CALL    READ_HEX_WORD       ; Second number -> DE
+  618/F2A3 : DA C1 F2                           JC      CH_POP_ERROR
+  619/F2A6 :                                    
+  620/F2A6 :                                    ; DE = second, stack = first
+  621/F2A6 : E1                                 POP     H                   ; HL = first
+  622/F2A7 : E5                                 PUSH    H                   ; Save first again
+  623/F2A8 : D5                                 PUSH    D                   ; Save second
+  624/F2A9 :                                    
+  625/F2A9 : 19                                 DAD     D                   ; HL = first + second
+  626/F2AA : CD DA F0                           CALL    PRINT_HEX_WORD
+  627/F2AD : CD B8 F0                           CALL    PRINT_SPACE
+  628/F2B0 :                                    
+  629/F2B0 : D1                                 POP     D                   ; DE = second
+  630/F2B1 : E1                                 POP     H                   ; HL = first
+  631/F2B2 :                                    
+  632/F2B2 :                                    ; HL = first - second
+  633/F2B2 : 7D                                 MOV     A,L
+  634/F2B3 : 93                                 SUB     E
+  635/F2B4 : 6F                                 MOV     L,A
+  636/F2B5 : 7C                                 MOV     A,H
+  637/F2B6 : 9A                                 SBB     D
+  638/F2B7 : 67                                 MOV     H,A
+  639/F2B8 :                                    
+  640/F2B8 : CD DA F0                           CALL    PRINT_HEX_WORD
+  641/F2BB : CD AD F0                           CALL    PRINT_CRLF
+  642/F2BE : C3 2D F0                           JMP     MAIN_LOOP
+  643/F2C1 :                            
+  644/F2C1 :                            CH_POP_ERROR:
+  645/F2C1 : D1                                 POP     D                   ; Clean stack
+  646/F2C2 :                            CH_ERROR:
+  647/F2C2 : 21 E3 F4                           LXI     H,MSG_BAD_HEX
+  648/F2C5 : CD A3 F0                           CALL    PRINT_STRING
+  649/F2C8 : C3 2D F0                           JMP     MAIN_LOOP
+  650/F2CB :                            
+  651/F2CB :                            ; CMD_INPUT - Read from I/O port
+  652/F2CB :                            ; Syntax: I port
+  653/F2CB :                            CMD_INPUT:
+  654/F2CB : CD 2F F1                           CALL    SKIP_SPACES
+  655/F2CE : CD 37 F1                           CALL    READ_HEX_WORD       ; Port -> DE (use E only)
+  656/F2D1 : DA E4 F2                           JC      CI_ERROR
+  657/F2D4 :                                    
+  658/F2D4 : 7B                                 MOV     A,E                 ; Get port number (0-255)
+  659/F2D5 : 32 D7 00                           STA     IO_IN_STUB+1        ; Patch the IN instruction
+  660/F2D8 : CD D6 00                           CALL    IO_IN_STUB          ; Execute: IN port / RET
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 12 - 12/11/2025 19:06:00
 
 
-  661/F2B7 : CD 51 F0                           CALL    CONOUT
-  662/F2BA : 3E 08                              MVI     A,BS
-  663/F2BC : CD 51 F0                           CALL    CONOUT
-  664/F2BF : C3 70 F2                           JMP     REB_LOOP
-  665/F2C2 :                            
-  666/F2C2 :                            ; ============================================
-  667/F2C2 :                            ; STRINGS
-  668/F2C2 :                            ; ============================================
-  669/F2C2 :                            
-  670/F2C2 :                            MSG_BANNER:
-  671/F2C2 : 0D 0A                              DB      CR,LF
-  672/F2C4 : 38 30 38 30 20 4D 6F 6E 69         DB      "8080 Monitor v0.1",CR,LF
-      F2CD : 74 6F 72 20 76 30 2E 31 0D
-      F2D6 : 0A                        
-  673/F2D7 : 42 75 69 6C 74 3A 20 31 32         DB      'Built: ', DATE, ' ', TIME, CR, LF
-      F2E0 : 2F 31 30 2F 32 30 32 35 20
-      F2E9 : 31 39 3A 31 36 3A 33 31 0D
-      F2F2 : 0A                        
-  674/F2F3 : 52 65 61 64 79 2E 0D 0A            DB      "Ready.",CR,LF
-  675/F2FB : 00                                 DB      0
-  676/F2FC :                            
-  677/F2FC :                            MSG_UNKNOWN:
-  678/F2FC : 55 6E 6B 6E 6F 77 6E 20 63         DB      "Unknown command. Type ? for help.",CR,LF,0
-      F305 : 6F 6D 6D 61 6E 64 2E 20 54
-      F30E : 79 70 65 20 3F 20 66 6F 72
-      F317 : 20 68 65 6C 70 2E 0D 0A 00
-  679/F320 :                            
-  680/F320 :                            MSG_BAD_ADDR:
-  681/F320 : 49 6E 76 61 6C 69 64 20 61         DB      "Invalid address",CR,LF,0
-      F329 : 64 64 72 65 73 73 0D 0A 00
-  682/F332 :                            
-  683/F332 :                            MSG_NOT_IMPL:
-  684/F332 : 4E 6F 74 20 69 6D 70 6C 65         DB      "Not implemented",CR,LF,0
-      F33B : 6D 65 6E 74 65 64 0D 0A 00
-  685/F344 :                            
-  686/F344 :                            MSG_HELP:
-  687/F344 : 43 6F 6D 6D 61 6E 64 73 3A         DB      "Commands:",CR,LF
-      F34D : 0D 0A                     
-  688/F34F : 20 20 44 20 5B 73 74 61 72         DB      "  D [start] [end]  - Dump memory",CR,LF
-      F358 : 74 5D 20 5B 65 6E 64 5D 20
-      F361 : 20 2D 20 44 75 6D 70 20 6D
-      F36A : 65 6D 6F 72 79 0D 0A      
-  689/F371 : 20 20 45 20 5B 61 64 64 72         DB      "  E [addr]         - Examine/modify",CR,LF
-      F37A : 5D 20 20 20 20 20 20 20 20
-      F383 : 20 2D 20 45 78 61 6D 69 6E
-      F38C : 65 2F 6D 6F 64 69 66 79 0D
-      F395 : 0A                        
-  690/F396 : 20 20 47 20 5B 61 64 64 72         DB      "  G [addr]         - Go (execute)",CR,LF
-      F39F : 5D 20 20 20 20 20 20 20 20
-      F3A8 : 20 2D 20 47 6F 20 28 65 78
-      F3B1 : 65 63 75 74 65 29 0D 0A   
-  691/F3B9 : 20 20 3F 20 20 20 20 20 20         DB      "  ?                - Help",CR,LF
-      F3C2 : 20 20 20 20 20 20 20 20 20
-      F3CB : 20 2D 20 48 65 6C 70 0D 0A
-  692/F3D4 : 00                                 DB      0
-  693/F3D5 :                            
-  694/F3D5 :                            ; ============================================
-  695/F3D5 :                            ; PADDING
-  696/F3D5 :                            ; ============================================
-  697/F3D5 :                            
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 13 - 12/10/2025 19:16:31
+  661/F2DB :                                    
+  662/F2DB : CD BE F0                           CALL    PRINT_HEX_BYTE      ; Print result
+  663/F2DE : CD AD F0                           CALL    PRINT_CRLF
+  664/F2E1 : C3 2D F0                           JMP     MAIN_LOOP
+  665/F2E4 :                            
+  666/F2E4 :                            CI_ERROR:
+  667/F2E4 : 21 F7 F4                           LXI     H,MSG_BAD_PORT
+  668/F2E7 : CD A3 F0                           CALL    PRINT_STRING
+  669/F2EA : C3 2D F0                           JMP     MAIN_LOOP
+  670/F2ED :                            
+  671/F2ED :                            ; CMD_OUTPUT - Write to I/O port
+  672/F2ED :                            ; Syntax: O port value
+  673/F2ED :                            CMD_OUTPUT:
+  674/F2ED : CD 2F F1                           CALL    SKIP_SPACES
+  675/F2F0 : CD 37 F1                           CALL    READ_HEX_WORD       ; Port -> DE
+  676/F2F3 : DA 0A F3                           JC      CO_ERROR
+  677/F2F6 : 7B                                 MOV     A,E
+  678/F2F7 : 32 DA 00                           STA     IO_OUT_STUB+1       ; Patch port
+  679/F2FA :                                    
+  680/F2FA : CD 2F F1                           CALL    SKIP_SPACES
+  681/F2FD : CD 37 F1                           CALL    READ_HEX_WORD       ; Value -> DE
+  682/F300 : DA 0A F3                           JC      CO_ERROR
+  683/F303 :                                    
+  684/F303 : 7B                                 MOV     A,E                 ; Value to output
+  685/F304 : CD D9 00                           CALL    IO_OUT_STUB         ; Execute: OUT port / RET
+  686/F307 : C3 2D F0                           JMP     MAIN_LOOP
+  687/F30A :                            
+  688/F30A :                            CO_ERROR:
+  689/F30A : 21 F7 F4                           LXI     H,MSG_BAD_PORT
+  690/F30D : CD A3 F0                           CALL    PRINT_STRING
+  691/F310 : C3 2D F0                           JMP     MAIN_LOOP
+  692/F313 :                            
+  693/F313 :                            ; CMD_HELP - Show help
+  694/F313 :                            ; Syntax: ?
+  695/F313 :                            CMD_HELP:
+  696/F313 : 21 AC F3                           LXI     H,MSG_HELP
+  697/F316 : CD A3 F0                           CALL    PRINT_STRING
+  698/F319 : C3 2D F0                           JMP     MAIN_LOOP
+  699/F31C :                            
+  700/F31C :                            ; ============================================
+  701/F31C :                            ; HELPER ROUTINES
+  702/F31C :                            ; ============================================
+  703/F31C :                            
+  704/F31C :                            ; READ_EXAM_BYTE - Read byte value for examine command
+  705/F31C :                            ; Reads up to 2 hex digits from console
+  706/F31C :                            ; Output: Carry set = exit (period pressed)
+  707/F31C :                            ;         Carry clear: B = digit count, C = value
+  708/F31C :                            ;         (caller checks B: 0 = no modification, >0 = store C)
+  709/F31C :                            ; Trashes: A, B, C, D, flags
+  710/F31C :                            READ_EXAM_BYTE:
+  711/F31C : 06 00                              MVI     B,0                 ; Digit count
+  712/F31E : 0E 00                              MVI     C,0                 ; Accumulated value
+  713/F320 :                                    
+  714/F320 :                            REB_LOOP:
+  715/F320 : CD 8A F0                           CALL    CONIN
+  716/F323 : 57                                 MOV     D,A                 ; Save original for echo
+  717/F324 :                                    
+  718/F324 : FE 2E                              CPI     '.'                 ; Exit?
+  719/F326 : CA 50 F3                           JZ      REB_EXIT
+  720/F329 : FE 0D                              CPI     CR                  ; Enter?
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 13 - 12/11/2025 19:06:00
 
 
-  698/F3D5 : =>FALSE                            IF      $ > 0FFFFH
-  699/F3D5 :                                    ERROR   "ROM exceeds 4KB!"
-  700/F3D5 : [698]                              ENDIF
-  701/F3D5 :                            
-  702/F3D5 :                                    END     COLD_START
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 14 - 12/10/2025 19:16:31
+  721/F32B : CA 4E F3                           JZ      REB_DONE
+  722/F32E : FE 08                              CPI     BS                  ; Backspace?
+  723/F330 : CA 52 F3                           JZ      REB_BS
+  724/F333 :                                    
+  725/F333 : CD 6A F1                           CALL    TO_HEX_DIGIT        ; Convert to 0-15
+  726/F336 : DA 20 F3                           JC      REB_LOOP            ; Not hex, ignore
+  727/F339 :                                    
+  728/F339 :                                    ; Valid hex digit in A
+  729/F339 : F5                                 PUSH    PSW
+  730/F33A : 79                                 MOV     A,C
+  731/F33B : 87                                 ADD     A                   ; Shift left 4
+  732/F33C : 87                                 ADD     A
+  733/F33D : 87                                 ADD     A
+  734/F33E : 87                                 ADD     A
+  735/F33F : 4F                                 MOV     C,A
+  736/F340 : F1                                 POP     PSW
+  737/F341 : B1                                 ORA     C                   ; Add new digit
+  738/F342 : 4F                                 MOV     C,A
+  739/F343 :                                    
+  740/F343 : 04                                 INR     B                   ; Count digit
+  741/F344 : 7A                                 MOV     A,D                 ; Echo original char
+  742/F345 : CD 7E F0                           CALL    CONOUT
+  743/F348 :                                    
+  744/F348 : 78                                 MOV     A,B
+  745/F349 : FE 02                              CPI     2                   ; Two digits entered?
+  746/F34B : DA 20 F3                           JC      REB_LOOP            ; No, keep reading
+  747/F34E :                                    ; Fall through with 2 digits
+  748/F34E :                                    
+  749/F34E :                            REB_DONE:
+  750/F34E :                                    ; Carry clear, B = digit count, C = value
+  751/F34E : B7                                 ORA     A                   ; Clear carry
+  752/F34F : C9                                 RET
+  753/F350 :                                    
+  754/F350 :                            REB_EXIT:
+  755/F350 : 37                                 STC                         ; Set carry = exit
+  756/F351 : C9                                 RET
+  757/F352 :                                    
+  758/F352 :                            REB_BS:
+  759/F352 : 78                                 MOV     A,B
+  760/F353 : B7                                 ORA     A
+  761/F354 : CA 20 F3                           JZ      REB_LOOP            ; Nothing to delete
+  762/F357 :                                    
+  763/F357 : 05                                 DCR     B
+  764/F358 : 79                                 MOV     A,C                 ; Undo the shift
+  765/F359 : 0F                                 RRC
+  766/F35A : 0F                                 RRC
+  767/F35B : 0F                                 RRC
+  768/F35C : 0F                                 RRC
+  769/F35D : E6 0F                              ANI     0FH
+  770/F35F : 4F                                 MOV     C,A
+  771/F360 :                                    
+  772/F360 : 3E 08                              MVI     A,BS                ; Erase on screen
+  773/F362 : CD 7E F0                           CALL    CONOUT
+  774/F365 : 3E 20                              MVI     A,' '
+  775/F367 : CD 7E F0                           CALL    CONOUT
+  776/F36A : 3E 08                              MVI     A,BS
+  777/F36C : CD 7E F0                           CALL    CONOUT
+  778/F36F : C3 20 F3                           JMP     REB_LOOP
+  779/F372 :                            
+  780/F372 :                            ; ============================================
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 14 - 12/11/2025 19:06:00
+
+
+  781/F372 :                            ; STRINGS
+  782/F372 :                            ; ============================================
+  783/F372 :                            
+  784/F372 :                            MSG_BANNER:
+  785/F372 : 0D 0A                              DB      CR,LF
+  786/F374 : 38 30 38 30 20 4D 6F 6E 69         DB      "8080 Monitor v0.1",CR,LF
+      F37D : 74 6F 72 20 76 30 2E 31 0D
+      F386 : 0A                        
+  787/F387 : 42 75 69 6C 74 3A 20 31 32         DB      'Built: ', DATE, ' ', TIME, CR, LF
+      F390 : 2F 31 31 2F 32 30 32 35 20
+      F399 : 31 39 3A 30 36 3A 30 30 0D
+      F3A2 : 0A                        
+  788/F3A3 : 52 65 61 64 79 2E 0D 0A            DB      "Ready.",CR,LF
+  789/F3AB : 00                                 DB      0
+  790/F3AC :                            
+  791/F3AC :                            MSG_HELP:
+  792/F3AC : 43 6F 6D 6D 61 6E 64 73 3A         DB      "Commands:",CR,LF
+      F3B5 : 0D 0A                     
+  793/F3B7 : 20 20 44 20 5B 73 74 61 72         DB      "  D [start] [end]  - Dump memory",CR,LF
+      F3C0 : 74 5D 20 5B 65 6E 64 5D 20
+      F3C9 : 20 2D 20 44 75 6D 70 20 6D
+      F3D2 : 65 6D 6F 72 79 0D 0A      
+  794/F3D9 : 20 20 45 20 5B 61 64 64 72         DB      "  E [addr]         - Examine/modify",CR,LF
+      F3E2 : 5D 20 20 20 20 20 20 20 20
+      F3EB : 20 2D 20 45 78 61 6D 69 6E
+      F3F4 : 65 2F 6D 6F 64 69 66 79 0D
+      F3FD : 0A                        
+  795/F3FE : 20 20 47 20 5B 61 64 64 72         DB      "  G [addr]         - Go (execute)",CR,LF
+      F407 : 5D 20 20 20 20 20 20 20 20
+      F410 : 20 2D 20 47 6F 20 28 65 78
+      F419 : 65 63 75 74 65 29 0D 0A   
+  796/F421 : 20 20 48 20 6E 75 6D 31 20         DB      "  H num1 num2      - Hex math (+/-)",CR,LF
+      F42A : 6E 75 6D 32 20 20 20 20 20
+      F433 : 20 2D 20 48 65 78 20 6D 61
+      F43C : 74 68 20 28 2B 2F 2D 29 0D
+      F445 : 0A                        
+  797/F446 : 20 20 49 20 70 6F 72 74 20         DB      "  I port           - Input from port",CR,LF
+      F44F : 20 20 20 20 20 20 20 20 20
+      F458 : 20 2D 20 49 6E 70 75 74 20
+      F461 : 66 72 6F 6D 20 70 6F 72 74
+      F46A : 0D 0A                     
+  798/F46C : 20 20 4F 20 70 6F 72 74 20         DB      "  O port value     - Output to port",CR,LF
+      F475 : 76 61 6C 75 65 20 20 20 20
+      F47E : 20 2D 20 4F 75 74 70 75 74
+      F487 : 20 74 6F 20 70 6F 72 74 0D
+      F490 : 0A                        
+  799/F491 : 20 20 3F 20 20 20 20 20 20         DB      "  ?                - Help",CR,LF
+      F49A : 20 20 20 20 20 20 20 20 20
+      F4A3 : 20 2D 20 48 65 6C 70 0D 0A
+  800/F4AC : 00                                 DB      0
+  801/F4AD :                            
+  802/F4AD :                            MSG_UNKNOWN:
+  803/F4AD : 55 6E 6B 6E 6F 77 6E 20 63         DB      "Unknown command. Type ? for help.",CR,LF,0
+      F4B6 : 6F 6D 6D 61 6E 64 2E 20 54
+      F4BF : 79 70 65 20 3F 20 66 6F 72
+      F4C8 : 20 68 65 6C 70 2E 0D 0A 00
+  804/F4D1 :                            
+  805/F4D1 :                            MSG_BAD_ADDR:
+  806/F4D1 : 49 6E 76 61 6C 69 64 20 61         DB      "Invalid address",CR,LF,0
+      F4DA : 64 64 72 65 73 73 0D 0A 00
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 15 - 12/11/2025 19:06:00
+
+
+  807/F4E3 :                            
+  808/F4E3 :                            MSG_BAD_HEX:
+  809/F4E3 : 49 6E 76 61 6C 69 64 20 68         DB      "Invalid hex value",CR,LF,0
+      F4EC : 65 78 20 76 61 6C 75 65 0D
+      F4F5 : 0A 00                     
+  810/F4F7 :                            
+  811/F4F7 :                            MSG_BAD_PORT:
+  812/F4F7 : 49 6E 76 61 6C 69 64 20 70         DB      "Invalid port/value",CR,LF,0
+      F500 : 6F 72 74 2F 76 61 6C 75 65
+      F509 : 0D 0A 00                  
+  813/F50C :                            
+  814/F50C :                            ; ============================================
+  815/F50C :                            ; PADDING
+  816/F50C :                            ; ============================================
+  817/F50C :                            
+  818/F50C : =>FALSE                            IF      $ > 0FFFFH
+  819/F50C :                                    ERROR   "ROM exceeds 4KB!"
+  820/F50C : [818]                              ENDIF
+  821/F50C :                            
+  822/F50C :                                    END     COLD_START
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 16 - 12/11/2025 19:06:00
 
 
   Symbol Table (* = unused):
@@ -770,54 +911,59 @@
 
 *ARCHITECTURE :                                      "aarch64-apple-darwin" - |
  BS :                             8 - | *BUFFER_PTR :                   0D0 - |
-*CASESENSITIVE :                  0 - |  CD_ASCII :                   0F1D5 C |
- CD_DONE :                    0F1FF C |  CD_DOT :                     0F1E0 C |
- CD_DUMP_RANGE :              0F1AB C |  CD_ERROR :                   0F1A2 C |
- CD_HEX_BYTE :                0F1BA C |  CD_LINE :                    0F1AC C |
- CD_NO_ARGS :                 0F188 C |  CD_NO_GAP :                  0F1CA C |
- CD_ONE_ARG :                 0F196 C |  CD_POP_ERROR :               0F1A1 C |
- CD_PRINT_CHAR :              0F1E2 C |  CE_ERROR :                   0F24E C |
- CE_EXIT :                    0F245 C |  CE_LOOP :                    0F21B C |
- CE_NEXT :                    0F23E C |  CE_USE_LAST :                0F218 C |
- CG_DEFAULT :                 0F25F C |  CMD_DUMP :                   0F167 C |
- CMD_EXAMINE :                0F206 C |  CMD_GO :                     0F257 C |
- CMD_HELP :                   0F263 C |  COLD_START :                 0F000 C |
- CONIN :                      0F05D C |  CONOUT :                     0F051 C |
- CONOUT_WAIT :                0F052 C |  CONSOLE_DATA_IN :                1 - |
+*CASESENSITIVE :                  0 - |  CD_ASCII :                   0F202 C |
+ CD_DONE :                    0F22C C |  CD_DOT :                     0F20D C |
+ CD_DUMP_RANGE :              0F1D8 C |  CD_ERROR :                   0F1CF C |
+ CD_HEX_BYTE :                0F1E7 C |  CD_LINE :                    0F1D9 C |
+ CD_NO_ARGS :                 0F1B5 C |  CD_NO_GAP :                  0F1F7 C |
+ CD_ONE_ARG :                 0F1C3 C |  CD_POP_ERROR :               0F1CE C |
+ CD_PRINT_CHAR :              0F20F C |  CE_ERROR :                   0F27B C |
+ CE_EXIT :                    0F272 C |  CE_LOOP :                    0F248 C |
+ CE_NEXT :                    0F26B C |  CE_USE_LAST :                0F245 C |
+ CG_DEFAULT :                 0F28F C |  CH_ERROR :                   0F2C2 C |
+ CH_POP_ERROR :               0F2C1 C |  CI_ERROR :                   0F2E4 C |
+ CMD_DUMP :                   0F194 C |  CMD_EXAMINE :                0F233 C |
+ CMD_GO :                     0F284 C |  CMD_HELP :                   0F313 C |
+ CMD_HEX_MATH :               0F293 C |  CMD_INPUT :                  0F2CB C |
+ CMD_OUTPUT :                 0F2ED C |  COLD_START :                 0F000 C |
+ CONIN :                      0F08A C |  CONOUT :                     0F07E C |
+ CONOUT_WAIT :                0F07F C |  CONSOLE_DATA_IN :                1 - |
  CONSOLE_DATA_OUT :               0 - |  CONSOLE_STATUS :                 2 - |
-*CONST :                      0F067 C | *CONSTPI :        3.141592653589793 - |
- CR :                            0D - |  DATE :                "12/10/2025" - |
-*FALSE :                          0 - | *FLOATMAX :      1.797693134866E308 - |
-*HAS64 :                          1 - |  LAST_DUMP_ADDR :               0D2 - |
- LAST_EXAM_ADDR :               0D4 - |  LF :                            0A - |
- LINE_BUFFER :                   80 - |  LINE_LENGTH :                   50 - |
-*LISTON :                         1 - | *MACEXP :                         7 - |
- MAIN_LOOP :                  0F00F C | *MOMCPU :                      8080 - |
-*MOMCPUNAME :                "8080" - |  MSG_BAD_ADDR :               0F320 C |
- MSG_BANNER :                 0F2C2 C |  MSG_HELP :                   0F344 C |
-*MSG_NOT_IMPL :               0F332 C |  MSG_UNKNOWN :                0F2FC C |
-*NESTMAX :                      100 - |  NOT_LOWER :                  0F033 C |
- PHN_DIGIT :                  0F0A7 C |  PRINT_BANNER :               0F06F C |
- PRINT_CRLF :                 0F080 C |  PRINT_HEX_BYTE :             0F091 C |
- PRINT_HEX_NIBBLE :           0F09E C |  PRINT_HEX_WORD :             0F0AD C |
- PRINT_SPACE :                0F08B C |  PRINT_STRING :               0F076 C |
- READ_EXAM_BYTE :             0F26C C |  READ_HEX_WORD :              0F10A C |
- READ_LINE :                  0F0B6 C |  REB_BS :                     0F2A2 C |
- REB_DONE :                   0F29E C |  REB_EXIT :                   0F2A0 C |
- REB_LOOP :                   0F270 C | *RELAXED :                        0 - |
- RHW_DONE :                   0F137 C |  RHW_LOOP :                   0F112 C |
- RL_BACKSPACE :               0F0E3 C |  RL_DONE :                    0F0FC C |
- RL_LOOP :                    0F0BB C |  SKIP_SPACES :                0F102 C |
+*CONST :                      0F094 C | *CONSTPI :        3.141592653589793 - |
+ CO_ERROR :                   0F30A C |  CR :                            0D - |
+ DATE :                "12/11/2025" - | *FALSE :                          0 - |
+*FLOATMAX :      1.797693134866E308 - | *HAS64 :                          1 - |
+ IO_IN_STUB :                   0D6 - |  IO_OUT_STUB :                  0D9 - |
+ LAST_DUMP_ADDR :               0D2 - |  LAST_EXAM_ADDR :               0D4 - |
+ LF :                            0A - |  LINE_BUFFER :                   80 - |
+ LINE_LENGTH :                   50 - | *LISTON :                         1 - |
+*MACEXP :                         7 - |  MAIN_LOOP :                  0F02D C |
+*MOMCPU :                      8080 - | *MOMCPUNAME :                "8080" - |
+ MSG_BAD_ADDR :               0F4D1 C |  MSG_BAD_HEX :                0F4E3 C |
+ MSG_BAD_PORT :               0F4F7 C |  MSG_BANNER :                 0F372 C |
+ MSG_HELP :                   0F3AC C |  MSG_UNKNOWN :                0F4AD C |
+*NESTMAX :                      100 - |  NOT_LOWER :                  0F051 C |
+ PHN_DIGIT :                  0F0D4 C |  PRINT_BANNER :               0F09C C |
+ PRINT_CRLF :                 0F0AD C |  PRINT_HEX_BYTE :             0F0BE C |
+ PRINT_HEX_NIBBLE :           0F0CB C |  PRINT_HEX_WORD :             0F0DA C |
+ PRINT_SPACE :                0F0B8 C |  PRINT_STRING :               0F0A3 C |
+ READ_EXAM_BYTE :             0F31C C |  READ_HEX_WORD :              0F137 C |
+ READ_LINE :                  0F0E3 C |  REB_BS :                     0F352 C |
+ REB_DONE :                   0F34E C |  REB_EXIT :                   0F350 C |
+ REB_LOOP :                   0F320 C | *RELAXED :                        0 - |
+ RHW_DONE :                   0F164 C |  RHW_LOOP :                   0F13F C |
+ RL_BACKSPACE :               0F110 C |  RL_DONE :                    0F129 C |
+ RL_LOOP :                    0F0E8 C |  SKIP_SPACES :                0F12F C |
  SPACE :                         20 - |  STACK_TOP :                  0F000 - |
- THD_ALPHA :                  0F15D C |  THD_DIGIT :                  0F161 C |
- THD_FAIL :                   0F165 C |  TIME :                  "19:16:31" - |
- TO_HEX_DIGIT :               0F13D C | *TRUE :                           1 - |
+ THD_ALPHA :                  0F18A C |  THD_DIGIT :                  0F18E C |
+ THD_FAIL :                   0F192 C |  TIME :                  "19:06:00" - |
+ TO_HEX_DIGIT :               0F16A C | *TRUE :                           1 - |
 *VERSION :                     142F - | *Z80SYNTAX :                      0 - |
 
-     89 symbols
-     18 unused symbols
+     99 symbols
+     17 unused symbols
 
- AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 15 - 12/10/2025 19:16:31
+ AS V1.42 Beta [Bld 295] - Source File monitor.asm - Page 17 - 12/11/2025 19:06:00
 
 
   Code Pages:
@@ -829,7 +975,7 @@ STANDARD (0 changed characters)
 
 0.00 seconds assembly time
 
-    702 lines source file
+    822 lines source file
       2 passes
       0 errors
       0 warnings

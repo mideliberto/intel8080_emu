@@ -39,6 +39,10 @@ BUFFER_PTR      EQU     00D0H       ; Current position in buffer (2 bytes)
 LAST_DUMP_ADDR  EQU     00D2H       ; Last dump address (2 bytes)
 LAST_EXAM_ADDR  EQU     00D4H       ; Last examine address (2 bytes)
 
+; I/O stubs (self-modifying code)
+IO_IN_STUB      EQU     00D6H       ; 3 bytes: IN xx / RET
+IO_OUT_STUB     EQU     00D9H       ; 3 bytes: OUT xx / RET
+
 ; ============================================
 ; COLD START
 ; ============================================
@@ -49,10 +53,25 @@ COLD_START:
         ; Initialize workspace
         LXI     H,0000H
         SHLD    LAST_DUMP_ADDR      ; Default dump address = 0
-        SHLD    LAST_EXAM_ADDR      ; Default exam address = 0   
+        SHLD    LAST_EXAM_ADDR      ; Default exam address = 0
+        
+        ; Initialize I/O stubs
+        MVI     A,0DBH              ; IN opcode
+        STA     IO_IN_STUB
+        MVI     A,00H               ; Default port 0
+        STA     IO_IN_STUB+1
+        MVI     A,0C9H              ; RET opcode
+        STA     IO_IN_STUB+2
+        
+        MVI     A,0D3H              ; OUT opcode
+        STA     IO_OUT_STUB
+        MVI     A,00H               ; Default port 0
+        STA     IO_OUT_STUB+1
+        MVI     A,0C9H              ; RET opcode
+        STA     IO_OUT_STUB+2
         
         CALL    PRINT_BANNER        ; Show startup message
-        
+
 ; ============================================
 ; MAIN LOOP
 ; ============================================
@@ -89,6 +108,12 @@ NOT_LOWER:
         JZ      CMD_EXAMINE
         CPI     'G'
         JZ      CMD_GO
+        CPI     'H'
+        JZ      CMD_HEX_MATH
+        CPI     'I'
+        JZ      CMD_INPUT
+        CPI     'O'
+        JZ      CMD_OUTPUT
         CPI     '?'
         JZ      CMD_HELP
         
@@ -137,6 +162,7 @@ CONST:
 ; ============================================
 
 ; PRINT_BANNER - Display startup message
+; Trashes: A, HL, flags
 PRINT_BANNER:
         LXI     H,MSG_BANNER
         CALL    PRINT_STRING
@@ -568,6 +594,7 @@ CE_ERROR:
 ; Syntax: G [addr]
 ; If no address, defaults to 0100H (TPA)
 CMD_GO:
+        CALL    SKIP_SPACES
         CALL    READ_HEX_WORD       ; Parse address into DE
         JC      CG_DEFAULT          ; No address given
         XCHG                        ; HL = parsed address
@@ -577,7 +604,94 @@ CG_DEFAULT:
         LXI     H,0100H             ; Default to TPA
         PCHL
 
+; CMD_HEX_MATH - Hex addition and subtraction
+; Syntax: H num1 num2
+; Output: sum difference
+CMD_HEX_MATH:
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD       ; First number -> DE
+        JC      CH_ERROR
+        PUSH    D                   ; Save first number
+        
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD       ; Second number -> DE
+        JC      CH_POP_ERROR
+        
+        ; DE = second, stack = first
+        POP     H                   ; HL = first
+        PUSH    H                   ; Save first again
+        PUSH    D                   ; Save second
+        
+        DAD     D                   ; HL = first + second
+        CALL    PRINT_HEX_WORD
+        CALL    PRINT_SPACE
+        
+        POP     D                   ; DE = second
+        POP     H                   ; HL = first
+        
+        ; HL = first - second
+        MOV     A,L
+        SUB     E
+        MOV     L,A
+        MOV     A,H
+        SBB     D
+        MOV     H,A
+        
+        CALL    PRINT_HEX_WORD
+        CALL    PRINT_CRLF
+        JMP     MAIN_LOOP
+
+CH_POP_ERROR:
+        POP     D                   ; Clean stack
+CH_ERROR:
+        LXI     H,MSG_BAD_HEX
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+
+; CMD_INPUT - Read from I/O port
+; Syntax: I port
+CMD_INPUT:
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD       ; Port -> DE (use E only)
+        JC      CI_ERROR
+        
+        MOV     A,E                 ; Get port number (0-255)
+        STA     IO_IN_STUB+1        ; Patch the IN instruction
+        CALL    IO_IN_STUB          ; Execute: IN port / RET
+        
+        CALL    PRINT_HEX_BYTE      ; Print result
+        CALL    PRINT_CRLF
+        JMP     MAIN_LOOP
+
+CI_ERROR:
+        LXI     H,MSG_BAD_PORT
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+
+; CMD_OUTPUT - Write to I/O port
+; Syntax: O port value
+CMD_OUTPUT:
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD       ; Port -> DE
+        JC      CO_ERROR
+        MOV     A,E
+        STA     IO_OUT_STUB+1       ; Patch port
+        
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD       ; Value -> DE
+        JC      CO_ERROR
+        
+        MOV     A,E                 ; Value to output
+        CALL    IO_OUT_STUB         ; Execute: OUT port / RET
+        JMP     MAIN_LOOP
+
+CO_ERROR:
+        LXI     H,MSG_BAD_PORT
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+
 ; CMD_HELP - Show help
+; Syntax: ?
 CMD_HELP:
         LXI     H,MSG_HELP
         CALL    PRINT_STRING
@@ -674,22 +788,28 @@ MSG_BANNER:
         DB      "Ready.",CR,LF
         DB      0
 
+MSG_HELP:
+        DB      "Commands:",CR,LF
+        DB      "  D [start] [end]  - Dump memory",CR,LF
+        DB      "  E [addr]         - Examine/modify",CR,LF
+        DB      "  G [addr]         - Go (execute)",CR,LF
+        DB      "  H num1 num2      - Hex math (+/-)",CR,LF
+        DB      "  I port           - Input from port",CR,LF
+        DB      "  O port value     - Output to port",CR,LF
+        DB      "  ?                - Help",CR,LF
+        DB      0
+
 MSG_UNKNOWN:
         DB      "Unknown command. Type ? for help.",CR,LF,0
 
 MSG_BAD_ADDR:
         DB      "Invalid address",CR,LF,0
 
-MSG_NOT_IMPL:
-        DB      "Not implemented",CR,LF,0
+MSG_BAD_HEX:
+        DB      "Invalid hex value",CR,LF,0
 
-MSG_HELP:
-        DB      "Commands:",CR,LF
-        DB      "  D [start] [end]  - Dump memory",CR,LF
-        DB      "  E [addr]         - Examine/modify",CR,LF
-        DB      "  G [addr]         - Go (execute)",CR,LF
-        DB      "  ?                - Help",CR,LF
-        DB      0
+MSG_BAD_PORT:
+        DB      "Invalid port/value",CR,LF,0
 
 ; ============================================
 ; PADDING
