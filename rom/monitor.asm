@@ -446,6 +446,9 @@ CD_NO_ARGS:
         LHLD    LAST_DUMP_ADDR
         LXI     D,007FH             ; 128 bytes
         DAD     D                   ; HL = start + 127 = end
+        JNC     CD_NO_WRAP1         ; No overflow, HL is valid end
+        LXI     H,0FFFFH            ; Cap at FFFF
+CD_NO_WRAP1:
         XCHG                        ; DE = end
         LHLD    LAST_DUMP_ADDR      ; HL = start
         JMP     CD_DUMP_RANGE
@@ -455,6 +458,9 @@ CD_ONE_ARG:
         PUSH    H                   ; Save start again
         LXI     D,007FH
         DAD     D                   ; HL = start + 127 = end
+        JNC     CD_NO_WRAP2         ; No overflow
+        LXI     H,0FFFFH            ; Cap at FFFF
+CD_NO_WRAP2:
         XCHG                        ; DE = end
         POP     H                   ; HL = start
         JMP     CD_DUMP_RANGE
@@ -519,10 +525,19 @@ CD_PRINT_CHAR:
         
         CALL    PRINT_CRLF
         
-        ; Check if done (HL > end address)
+        ; Check if done (HL > end address OR wrapped)
         POP     D                   ; DE = end address
         PUSH    D                   ; Keep it on stack
         
+        ; Detect wrap-around: if H is 00 and D is FF, we wrapped past FFFF
+        MOV     A,H
+        ORA     A
+        JNZ     CD_NO_WRAP3         ; H != 0, no wrap
+        MOV     A,D
+        CPI     0F0H                ; Were we dumping high memory?
+        JNC     CD_DONE             ; Yes and H=0, we wrapped, done
+        
+CD_NO_WRAP3:
         ; Compare HL to DE: if HL > DE, we're done
         MOV     A,D
         CMP     H
