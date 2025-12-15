@@ -1,3 +1,4 @@
+```markdown
 # Intel 8080 Emulator
 
 A cycle-counted Intel 8080 emulator with monitor ROM, written in Rust.
@@ -7,15 +8,22 @@ A cycle-counted Intel 8080 emulator with monitor ROM, written in Rust.
 - ✅ CPU core (all 256 opcodes)
 - ✅ Flag handling (S, Z, AC, P, C)
 - ✅ I/O device framework
-- ✅ 180 unit tests passing
-- ✅ Monitor ROM (core commands)
+- ✅ 181 unit tests passing
+- ✅ Monitor ROM (v0.2)
+  - C (compare memory)
   - D (dump memory)
   - E (examine/modify)
+  - F (fill memory)
   - G (go/execute)
+  - H (hex math)
+  - I (input from port)
+  - M (move memory)
+  - O (output to port)
   - ? (help)
-- 🔲 Additional monitor commands
+- 🔲 Additional monitor commands (S, R)
 - 🔲 Disk support
 - 🔲 Timer/interrupts
+- 🔲 Internet services
 
 ## Building
 
@@ -32,7 +40,7 @@ cargo run
 
 Starts the monitor ROM. You'll see:
 ```
-8080 Monitor v0.1
+8080 Monitor v0.2
 Ready.
 > 
 ```
@@ -84,3 +92,4 @@ examples/
 > "A fool admires complexity, genius admires simplicity."
 
 Keep it simple.
+```

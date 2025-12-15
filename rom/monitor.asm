@@ -102,16 +102,22 @@ NOT_LOWER:
         INX     H                   ; Point past command char
         
         ; Command dispatch
+        CPI     'C'
+        JZ      CMD_COMPARE
         CPI     'D'
         JZ      CMD_DUMP
         CPI     'E'
         JZ      CMD_EXAMINE
+        CPI     'F'
+        JZ      CMD_FILL
         CPI     'G'
         JZ      CMD_GO
         CPI     'H'
         JZ      CMD_HEX_MATH
         CPI     'I'
         JZ      CMD_INPUT
+        CPI     'M'
+        JZ      CMD_MOVE
         CPI     'O'
         JZ      CMD_OUTPUT
         CPI     '?'
@@ -412,6 +418,103 @@ THD_FAIL:
 ; COMMANDS
 ; ============================================
 
+; CMD_COMPARE - Compare memory regions
+; Syntax: C start end dest
+; Compares [start,end] with [dest, dest+(end-start)]
+; Shows differences as: addr1:val1 addr2:val2
+CMD_COMPARE:
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD
+        JC      CC_ERROR
+        PUSH    D                   ; Stack: start
+        
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD
+        JC      CC_POP1_ERROR
+        PUSH    D                   ; Stack: end, start
+        
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD
+        JC      CC_POP2_ERROR
+        ; DE = dest, stack: end, start
+        
+        ; Now all args parsed. Compute count and set up registers.
+        POP     B                   ; BC = end
+        POP     H                   ; HL = start
+        PUSH    D                   ; Save dest
+        
+        ; count = end - start + 1 = BC - HL + 1
+        MOV     A,C
+        SUB     L
+        MOV     E,A
+        MOV     A,B
+        SBB     H
+        MOV     D,A
+        INX     D                   ; DE = count
+        
+        MOV     B,D
+        MOV     C,E                 ; BC = count
+        POP     D                   ; DE = dest
+        
+        ; Now: HL = start, DE = dest, BC = count
+        
+CC_LOOP:
+        MOV     A,M                 ; A = first byte
+        PUSH    H                   ; Save first pointer
+        PUSH    B                   ; Save count
+        XCHG                        ; HL = dest
+        CMP     M                   ; Compare with second byte
+        XCHG                        ; HL = first, DE = dest
+        JZ      CC_NEXT
+        
+        ; Mismatch
+        ; HL=first ptr, DE=second ptr, stack: count, first ptr
+        PUSH    D                   ; Save second
+        MOV     B,M                 ; B = first byte (re-read)
+        CALL    PRINT_HEX_WORD      ; Print first addr
+        MVI     A,':'
+        CALL    CONOUT
+        MOV     A,B
+        CALL    PRINT_HEX_BYTE
+        CALL    PRINT_SPACE
+        
+        POP     H                   ; HL = second pointer
+        MOV     B,M                 ; B = second byte
+        PUSH    H                   ; Save second again
+        CALL    PRINT_HEX_WORD
+        MVI     A,':'
+        CALL    CONOUT
+        MOV     A,B
+        CALL    PRINT_HEX_BYTE
+        CALL    PRINT_CRLF
+        
+        POP     D                   ; DE = second ptr
+        POP     B                   ; BC = count
+        POP     H                   ; HL = first ptr
+        JMP     CC_ADVANCE
+        
+CC_NEXT:
+        POP     B                   ; BC = count
+        POP     H                   ; HL = first ptr
+        
+CC_ADVANCE:
+        INX     H                   ; first++
+        INX     D                   ; second++
+        DCX     B                   ; count--
+        MOV     A,B
+        ORA     C
+        JNZ     CC_LOOP
+        JMP     MAIN_LOOP
+
+CC_POP2_ERROR:
+        POP     D
+CC_POP1_ERROR:
+        POP     D
+CC_ERROR:
+        LXI     H,MSG_BAD_HEX
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+
 ; CMD_DUMP - Dump memory
 ; Syntax: D [start] [end]
 ; If no args, continues from last address
@@ -605,6 +708,53 @@ CE_ERROR:
         CALL    PRINT_STRING
         JMP     MAIN_LOOP
 
+; CMD_FILL - Fill memory with value
+; Syntax: F start end value
+CMD_FILL:
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD
+        JC      CF_ERROR
+        PUSH    D                   ; Save start
+        
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD
+        JC      CF_POP1_ERROR
+        PUSH    D                   ; Save end
+        
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD
+        JC      CF_POP2_ERROR
+        
+        ; E = value, stack: end, start
+        POP     B                   ; BC = end
+        POP     H                   ; HL = start
+        
+CF_LOOP:
+        MOV     M,E
+        MOV     A,H
+        CMP     B
+        JNZ     CF_NEXT
+        MOV     A,L
+        CMP     C
+        JZ      CF_DONE
+CF_NEXT:
+        INX     H
+        MOV     A,H
+        ORA     L                   ; Wrapped to 0000?
+        JNZ     CF_LOOP
+        ; Wrapped - done
+CF_DONE:
+        JMP     MAIN_LOOP
+
+CF_POP2_ERROR:
+        POP     D
+CF_POP1_ERROR:
+        POP     D
+CF_ERROR:
+        LXI     H,MSG_BAD_HEX
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+
 ; CMD_GO - Execute at address
 ; Syntax: G [addr]
 ; If no address, defaults to 0100H (TPA)
@@ -680,6 +830,61 @@ CMD_INPUT:
 
 CI_ERROR:
         LXI     H,MSG_BAD_PORT
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+
+; CMD_MOVE - Move memory block (forward copy)
+; Syntax: M source dest count
+; Note: Overlapping regions where dest > source produce undefined results
+CMD_MOVE:
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD
+        JC      CM_ERROR
+        PUSH    D                   ; Save source
+        
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD
+        JC      CM_POP1_ERROR
+        PUSH    D                   ; Save dest
+        
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD
+        JC      CM_POP2_ERROR
+        
+        ; DE = count, stack: dest, source
+        MOV     A,D
+        ORA     E
+        JZ      CM_DONE_QUICK       ; Zero count
+        
+        MOV     B,D
+        MOV     C,E                 ; BC = count
+        POP     D                   ; DE = dest
+        POP     H                   ; HL = source
+        
+CM_LOOP:
+        MOV     A,M                 ; Get source byte
+        XCHG
+        MOV     M,A                 ; Store to dest
+        XCHG
+        INX     H
+        INX     D
+        DCX     B
+        MOV     A,B
+        ORA     C
+        JNZ     CM_LOOP
+        JMP     MAIN_LOOP
+
+CM_DONE_QUICK:
+        POP     D
+        POP     D
+        JMP     MAIN_LOOP
+
+CM_POP2_ERROR:
+        POP     D
+CM_POP1_ERROR:
+        POP     D
+CM_ERROR:
+        LXI     H,MSG_BAD_HEX
         CALL    PRINT_STRING
         JMP     MAIN_LOOP
 
@@ -798,18 +1003,21 @@ REB_BS:
 
 MSG_BANNER:
         DB      CR,LF
-        DB      "8080 Monitor v0.1",CR,LF
+        DB      "8080 Monitor v0.2",CR,LF
         DB      'Built: ', DATE, ' ', TIME, CR, LF
         DB      "Ready.",CR,LF
         DB      0
 
 MSG_HELP:
         DB      "Commands:",CR,LF
+        DB      "  C start end dest - Compare memory",CR,LF
         DB      "  D [start] [end]  - Dump memory",CR,LF
         DB      "  E [addr]         - Examine/modify",CR,LF
+        DB      "  F start end val  - Fill memory",CR,LF
         DB      "  G [addr]         - Go (execute)",CR,LF
         DB      "  H num1 num2      - Hex math (+/-)",CR,LF
         DB      "  I port           - Input from port",CR,LF
+        DB      "  M src dst cnt    - Move memory",CR,LF
         DB      "  O port value     - Output to port",CR,LF
         DB      "  ?                - Help",CR,LF
         DB      0
