@@ -22,14 +22,19 @@ fn main() {
 
     let mut cpu = Intel8080::new();
         
-    // Set up console device on ports 0x00-0x01
+    // Set up console device on ports 0x00-0x02
     let console = Rc::new(RefCell::new(Console::new()));
     cpu.io_bus_mut().map_port(0x00, console.clone());
     cpu.io_bus_mut().map_port(0x01, console.clone());
     cpu.io_bus_mut().map_port(0x02, console);
     
-    //cpu.load_program(&program, 0x0000);
-    cpu.load_program_from_file(std::path::Path::new("/Users/mike/intel8080_emu/rom/monitor.bin"), 0xF000).expect("Failed to load program");
+    // Load ROM (mapped at 0xF000, visible at 0x0000 via overlay)
+    cpu.load_rom_from_file(std::path::Path::new("rom/monitor.bin"))
+        .expect("Failed to load ROM");
+    
+    // Reset enables overlay and sets PC=0x0000
+    // ROM code will disable overlay after jumping to 0xF000+ address space
+    cpu.reset();
     cpu.run();
     
     println!("\r\nProgram finished!\r");

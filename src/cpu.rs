@@ -25,6 +25,8 @@ pub struct Intel8080 {
     
     // Memory and state
     memory: Box<dyn Memory>,
+    rom: Vec<u8>,                       // 4KB ROM at 0xF000
+    pub rom_overlay_enabled: bool,      // When true, ROM visible at 0x0000 too
     io_bus: IoBus, 
     pub timer: Timer,
 
@@ -39,8 +41,10 @@ impl Intel8080 {
             a: 0, b: 0, c: 0, d: 0, e: 0, h: 0, l: 0,
             flags: FLAG_BIT_1,
             sp: 0xF000,
-            pc: 0,
+            pc: 0x0000,             // 8080 starts at 0x0000 on reset
             memory: Box::new(FlatMemory::new()),
+            rom: Vec::new(),
+            rom_overlay_enabled: false, // OFF by default, reset() enables it
             io_bus: IoBus::new(),
             timer: Timer::new(),
             halted: false,
@@ -179,11 +183,37 @@ impl Intel8080 {
     
     #[inline]
     pub fn read_byte(&mut self, addr: u16) -> u8 {
+        // Only apply ROM logic if ROM is loaded
+        if !self.rom.is_empty() {
+            if addr >= 0xF000 {
+                let rom_offset = (addr - 0xF000) as usize;
+                if rom_offset < self.rom.len() {
+                    return self.rom[rom_offset];
+                }
+                return 0xFF;
+            }
+            if addr < 0x1000 && self.rom_overlay_enabled {
+                let rom_offset = addr as usize;
+                if rom_offset < self.rom.len() {
+                    return self.rom[rom_offset];
+                }
+                return 0xFF;
+            }
+        }
         self.memory.read(addr)
     }
     
     #[inline]
     pub fn write_byte(&mut self, addr: u16, value: u8) {
+        // Only apply ROM protection if ROM is loaded
+        if !self.rom.is_empty() {
+            if addr >= 0xF000 {
+                return;  // ROM - ignore writes
+            }
+            if addr < 0x1000 && self.rom_overlay_enabled {
+                return;  // Overlay active - ignore writes
+            }
+        }
         self.memory.write(addr, value)
     }
     #[inline]
@@ -728,6 +758,13 @@ impl Intel8080 {
         let port = self.fetch_byte();
         if port >= 0x30 && port <= 0x32 {
             self.timer.write(port, self.a);
+        } else if port == 0xFE {
+            // System control port
+            match self.a {
+                0x00 => self.rom_overlay_enabled = false,  // Disable overlay
+                0xFF => self.reset(),                       // Cold reset
+                _ => {}  // Other values ignored for now
+            }
         } else {
             self.io_bus.write(port, self.a);
         }
@@ -738,6 +775,9 @@ impl Intel8080 {
         let port = self.fetch_byte();
         self.a = if port >= 0x30 && port <= 0x32 {
             self.timer.read(port)
+        } else if port == 0xFF {
+            // System status port - bit 0 = overlay state
+            if self.rom_overlay_enabled { 0x01 } else { 0x00 }
         } else {
             self.io_bus.read(port)
         };
@@ -1045,25 +1085,40 @@ impl Intel8080 {
     // ============================================
     
 pub fn load_program(&mut self, program: &[u8], start_address: u16) {
-    //println!("Loading {} bytes at 0x{:04X}: {:02X?}", 
-    //         program.len(), start_address, program);
     for (i, &byte) in program.iter().enumerate() {
-        self.write_byte(start_address +i as u16, byte);   
-        //self.memory[start_address as usize + i] = byte;
+        // Write directly to memory, bypassing ROM protection
+        self.memory.write(start_address.wrapping_add(i as u16), byte);
     }
     self.pc = start_address;
-    
-    // Verify what actually got loaded
-    //print!("Verify: ");
-    //for i in 0..program.len() {
-        //print!("{:02X} ",self.read_byte(start_address + i as u16) );
-        //print!("{:02X} ", self.memory[start_address as usize + i]);
-    //}
-    //println!();
 }
+
 pub fn load_program_from_file(&mut self, path: &Path, start_address: u16) -> io::Result<usize> {
     let program = std::fs::read(path)?;
     self.load_program(&program, start_address);
     Ok(program.len())
+}
+
+/// Reset CPU to power-on state
+pub fn reset(&mut self) {
+    self.a = 0; self.b = 0; self.c = 0; self.d = 0;
+    self.e = 0; self.h = 0; self.l = 0;
+    self.flags = FLAG_BIT_1;
+    self.sp = 0xF000;
+    self.pc = 0x0000;  // 8080 starts at 0x0000
+    self.halted = false;
+    self.interrupts_enabled = false;
+    self.rom_overlay_enabled = true;  // ROM visible at 0x0000 on reset
+    // Note: ROM data and memory contents preserved across reset
+}
+
+/// Load ROM data (will be mapped at 0xF000, and 0x0000 when overlay enabled)
+pub fn load_rom(&mut self, rom_data: &[u8]) {
+    self.rom = rom_data.to_vec();
+}
+
+/// Load ROM from file
+pub fn load_rom_from_file(&mut self, path: &Path) -> io::Result<usize> {
+    self.rom = std::fs::read(path)?;
+    Ok(self.rom.len())
 }
 }

@@ -22,6 +22,8 @@ CONSOLE_DATA_OUT    EQU     00H
 CONSOLE_DATA_IN     EQU     01H
 CONSOLE_STATUS      EQU     02H
 
+SYSTEM_CONTROL      EQU     0FEH        ; ROM overlay control
+
 STACK_TOP       EQU     0F000H      ; Stack grows down from ROM
 
 CR              EQU     0DH
@@ -53,9 +55,17 @@ SEARCH_END      EQU     00E5H       ; 2 bytes for end address
 ; ============================================
 
 COLD_START:
+        ; Running from overlay - PC near 0x0000, reading ROM at 0xF000
         LXI     SP,STACK_TOP        ; Initialize stack pointer
+        DI                          ; Disable interrupts
+        JMP     BOOT_CONTINUE       ; Jump to F000+ address space
+
+; Now executing from 0xF000+ range - safe to disable overlay
+BOOT_CONTINUE:
+        XRA     A                   ; A = 0x00
+        OUT     SYSTEM_CONTROL      ; Disable overlay, expose RAM at 0x0000
         
-        ; Initialize workspace
+        ; Initialize workspace (now writing to actual RAM)
         LXI     H,0000H
         SHLD    LAST_DUMP_ADDR      ; Default dump address = 0
         SHLD    LAST_EXAM_ADDR      ; Default exam address = 0
@@ -1060,6 +1070,8 @@ REB_LOOP:
         JZ      REB_EXIT
         CPI     CR                  ; Enter?
         JZ      REB_DONE
+        CPI     LF                  ; Also LF
+        JZ      REB_DONE
         CPI     BS                  ; Backspace?
         JZ      REB_BS
         
@@ -1085,7 +1097,7 @@ REB_LOOP:
         MOV     A,B
         CPI     2                   ; Two digits entered?
         JC      REB_LOOP            ; No, keep reading
-        ; Fall through with 2 digits
+        ; 2 digits entered - just return, let CR/LF be next empty input
         
 REB_DONE:
         ; Carry clear, B = digit count, C = value

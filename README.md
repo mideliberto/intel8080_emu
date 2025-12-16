@@ -7,8 +7,9 @@ A cycle-counted Intel 8080 emulator with monitor ROM, written in Rust.
 - ✅ CPU core (all 256 opcodes)
 - ✅ Flag handling (S, Z, AC, P, C)
 - ✅ I/O device framework
-- ✅ 181 unit tests passing
-- ✅ Monitor ROM (v0.2)
+- ✅ ROM overlay boot mechanism (hardware-compatible)
+- ✅ 191 tests passing (181 CPU + 10 monitor integration)
+- ✅ Monitor ROM (v0.2) - 11 commands
   - C (compare memory)
   - D (dump memory)
   - E (examine/modify)
@@ -45,6 +46,17 @@ Ready.
 > 
 ```
 
+## ROM Overlay Boot
+
+The emulator implements authentic S-100 style boot behavior:
+
+1. CPU starts at PC=0x0000 on reset
+2. ROM overlay makes 0x0000 mirror ROM at 0xF000
+3. ROM disables overlay via OUT to port 0xFE
+4. Low memory becomes RAM, vectors can be installed
+
+This matches how real Altair/IMSAI systems booted - one ROM, hardware bank switching.
+
 ## ROM Development
 
 The monitor ROM is in `rom/` using the AS macro assembler.
@@ -68,7 +80,8 @@ src/
     ├── bus.rs      # I/O port mapping
     ├── device.rs   # IoDevice trait
     └── devices/
-        ├── console.rs
+        ├── console.rs       # Interactive console
+        ├── test_console.rs  # Scripted console for testing
         ├── disk.rs
         ├── timer.rs
         └── null.rs
@@ -79,9 +92,10 @@ rom/
 └── monitor.bin     # Compiled ROM
 
 tests/
-├── cpu_tests.rs    # CPU instruction tests
+├── cpu_tests.rs      # CPU instruction tests (181)
+├── monitor_tests.rs  # Monitor integration tests (10)
 └── common/
-    └── mod.rs      # Test utilities
+    └── mod.rs        # Test utilities
 
 examples/
 └── hello.asm       # Example program
