@@ -1,4 +1,3 @@
-```markdown
 # Intel 8080 Emulator
 
 A cycle-counted Intel 8080 emulator with monitor ROM, written in Rust.
@@ -19,8 +18,9 @@ A cycle-counted Intel 8080 emulator with monitor ROM, written in Rust.
   - I (input from port)
   - M (move memory)
   - O (output to port)
+  - S (search memory)
   - ? (help)
-- 🔲 Additional monitor commands (S, R)
+- 🔲 Additional monitor commands (R)
 - 🔲 Disk support
 - 🔲 Timer/interrupts
 - 🔲 Internet services
@@ -92,4 +92,3 @@ examples/
 > "A fool admires complexity, genius admires simplicity."
 
 Keep it simple.
-```

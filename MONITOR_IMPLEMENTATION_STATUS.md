@@ -17,6 +17,7 @@
 | I port | Input from I/O port | ✅ Done |
 | M src dst cnt | Move memory (forward copy) | ✅ Done |
 | O port value | Output to I/O port | ✅ Done |
+| S start end pat | Search memory for pattern | ✅ Done |
 | ? | Help | ✅ Done |
 
 ### Completed Infrastructure
@@ -31,6 +32,13 @@
 
 ### Recent Changes
 
+**December 2025 - Added S (Search) command:**
+- Searches memory for byte patterns (1-8 bytes)
+- Syntax: `S start end b1 [b2 ... b8]`
+- Reuses wrap detection logic from D command
+- Pattern stored in workspace at SEARCH_PATTERN (8 bytes)
+- Design decision: 8-byte max pattern covers any instruction sequence or distinctive string fragment. DDT didn't have a search command, so this is an enhancement.
+
 **December 2025 - Added F, M, C commands:**
 - F (Fill): Fills memory range with byte value, handles FFFF wrap-around
 - M (Move): Forward-only block copy. Overlapping regions where dest > source produce undefined results (documented limitation, matches DDT behavior)
@@ -41,24 +49,13 @@
 - Fixed one-arg overflow: `D FF80` now caps end at FFFF instead of wrapping to 00FF
 - Fixed no-arg continuation overflow after dumping high memory
 
-Root cause: 16-bit address arithmetic wraps at FFFF→0000, and INX doesn't set flags. Solution: detect wrap-around (H=00 when D>=F0) and use DAD carry flag to cap computed end addresses.
+Root cause: 16-bit address arithmetic wraps at FFFFâ†’0000, and INX doesn't set flags. Solution: detect wrap-around (H=00 when D>=F0) and use DAD carry flag to cap computed end addresses.
 
 ---
 
 ## Remaining Monitor Commands
 
-### Recommended Implementation Order
-
-#### 1. S (Search)
-**Complexity:** Moderate  
-**Syntax:** `S start end byte [byte...]`  
-**Description:** Search memory for byte pattern.
-
-```
-> S 0 FFFF C3 00 F0   ; Find all JMP F000 instructions
-```
-
-#### 2. R (Registers) - ARCHITECTURAL DECISION REQUIRED
+### R (Registers) - ARCHITECTURAL DECISION REQUIRED
 **Complexity:** Requires design thought  
 **Syntax:** `R`  
 **Description:** Display CPU registers.
@@ -103,7 +100,10 @@ Initialized during COLD_START, patched at runtime by I/O commands.
 00D4-00D5: LAST_EXAM_ADDR
 00D6-00D8: IO_IN_STUB
 00D9-00DB: IO_OUT_STUB
-00DC-00FF: Available for future use
+00DC-00E3: SEARCH_PATTERN (8 bytes)
+00E4:      SEARCH_LENGTH (1 byte)
+00E5-00E6: SEARCH_END (2 bytes)
+00E7-00FF: Available for future use (25 bytes)
 ```
 
 ### 16-bit Address Boundary Handling

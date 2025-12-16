@@ -43,6 +43,11 @@ LAST_EXAM_ADDR  EQU     00D4H       ; Last examine address (2 bytes)
 IO_IN_STUB      EQU     00D6H       ; 3 bytes: IN xx / RET
 IO_OUT_STUB     EQU     00D9H       ; 3 bytes: OUT xx / RET
 
+; Search command workspace
+SEARCH_PATTERN  EQU     00DCH       ; 8 bytes for pattern
+SEARCH_LENGTH   EQU     00E4H       ; 1 byte for pattern length
+SEARCH_END      EQU     00E5H       ; 2 bytes for end address
+
 ; ============================================
 ; COLD START
 ; ============================================
@@ -120,6 +125,8 @@ NOT_LOWER:
         JZ      CMD_MOVE
         CPI     'O'
         JZ      CMD_OUTPUT
+        CPI     'S'
+        JZ      CMD_SEARCH
         CPI     '?'
         JZ      CMD_HELP
         
@@ -910,6 +917,120 @@ CO_ERROR:
         CALL    PRINT_STRING
         JMP     MAIN_LOOP
 
+; CMD_SEARCH - Search memory for byte pattern
+; Syntax: S start end b1 [b2 ... b8]
+CMD_SEARCH:
+        ; Parse start address
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD
+        JC      CS_ERROR
+        PUSH    D                   ; Save start on stack
+        
+        ; Parse end address
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD
+        JC      CS_POP1_ERROR
+        XCHG
+        SHLD    SEARCH_END          ; Store end address
+        XCHG
+        
+        ; Parse pattern bytes (1-8)
+        LXI     D,SEARCH_PATTERN    ; DE = pattern buffer
+        LXI     B,0                 ; B = byte count
+        
+CS_PARSE_LOOP:
+        CALL    SKIP_SPACES
+        MOV     A,M
+        ORA     A                   ; End of line?
+        JZ      CS_PARSE_DONE
+        
+        PUSH    B                   ; Save count
+        PUSH    D                   ; Save pattern pointer
+        CALL    READ_HEX_WORD       ; Value in DE (use E only)
+        MOV     A,E                 ; Get the byte
+        POP     D                   ; Restore pattern pointer
+        POP     B                   ; Restore count
+        JC      CS_PARSE_DONE       ; No more valid hex
+        
+        STAX    D                   ; Store byte in pattern
+        INX     D
+        INR     B
+        
+        MOV     A,B
+        CPI     8                   ; Max 8 bytes
+        JC      CS_PARSE_LOOP
+        
+CS_PARSE_DONE:
+        MOV     A,B
+        ORA     A                   ; Zero bytes?
+        JZ      CS_POP1_ERROR       ; Error - need at least 1
+        
+        STA     SEARCH_LENGTH       ; Save pattern length
+        POP     H                   ; HL = start address
+        
+        ; Search loop
+        ; Register usage: HL = current search address
+CS_SEARCH_LOOP:
+        ; Compare pattern at current address
+        PUSH    H                   ; Save current address
+        LXI     D,SEARCH_PATTERN    ; DE = pattern
+        LDA     SEARCH_LENGTH
+        MOV     B,A                 ; B = length counter
+        
+CS_COMPARE:
+        LDAX    D                   ; A = pattern byte
+        CMP     M                   ; Compare with memory
+        JNZ     CS_NO_MATCH
+        INX     H
+        INX     D
+        DCR     B
+        JNZ     CS_COMPARE
+        
+        ; Match found - print address
+        POP     H                   ; Restore search address
+        PUSH    H                   ; Keep it on stack for advance
+        CALL    PRINT_HEX_WORD
+        CALL    PRINT_CRLF
+        
+CS_NO_MATCH:
+        POP     H                   ; HL = current search position
+        
+        ; Put current in DE, end in HL for comparison
+        XCHG                        ; DE = current
+        LHLD    SEARCH_END          ; HL = end
+        
+        ; Check: current > end?
+        MOV     A,H
+        CMP     D
+        JC      CS_DONE             ; end.H < current.H, done
+        JNZ     CS_ADVANCE          ; end.H > current.H, continue
+        MOV     A,L
+        CMP     E
+        JC      CS_DONE             ; end.L < current.L, done
+        
+CS_ADVANCE:
+        XCHG                        ; HL = current, DE = end (D = end.H)
+        INX     H                   ; Next address
+        
+        ; Wrap check: H==0 and end.H >= F0 means we wrapped past FFFF
+        MOV     A,H
+        ORA     A
+        JNZ     CS_SEARCH_LOOP      ; H != 0, no wrap
+        MOV     A,D                 ; D still has end.H from XCHG
+        CPI     0F0H
+        JC      CS_SEARCH_LOOP      ; end < F000, no wrap concern
+        ; Fell through = wrapped past FFFF
+        
+CS_DONE:
+        JMP     MAIN_LOOP
+
+CS_POP1_ERROR:
+        POP     D
+CS_ERROR:
+        LXI     H,MSG_BAD_HEX
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+
 ; CMD_HELP - Show help
 ; Syntax: ?
 CMD_HELP:
@@ -1019,6 +1140,7 @@ MSG_HELP:
         DB      "  I port           - Input from port",CR,LF
         DB      "  M src dst cnt    - Move memory",CR,LF
         DB      "  O port value     - Output to port",CR,LF
+        DB      "  S start end pat  - Search memory",CR,LF
         DB      "  ?                - Help",CR,LF
         DB      0
 
