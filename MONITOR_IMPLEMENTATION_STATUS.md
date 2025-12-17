@@ -4,22 +4,24 @@
 
 ## Current Status
 
-### Completed Commands (11 of 12)
+### Commands (11 Complete)
 
 | Command | Description | Status |
 |---------|-------------|--------|
-| C start end dest | Compare memory regions | ✅ Done |
-| D [start] [end] | Dump memory | ✅ Done |
-| E [addr] | Examine/modify memory | ✅ Done |
-| F start end val | Fill memory with value | ✅ Done |
-| G [addr] | Go (execute at address) | ✅ Done |
-| H num1 num2 | Hex math (add/subtract) | ✅ Done |
-| I port | Input from I/O port | ✅ Done |
-| M src dst cnt | Move memory (forward copy) | ✅ Done |
-| O port value | Output to I/O port | ✅ Done |
-| S start end pat | Search memory for pattern | ✅ Done |
-| ? | Help | ✅ Done |
-| R | Display/modify registers | 🔲 Pending |
+| C start end dest | Compare memory regions | DONE |
+| D [start] [end] | Dump memory | DONE |
+| E [addr] | Examine/modify memory | DONE |
+| F start end val | Fill memory with value | DONE |
+| G [addr] | Go (execute at address) | DONE |
+| H num1 num2 | Hex math (add/subtract) | DONE |
+| I port | Input from I/O port | DONE |
+| M src dst cnt | Move memory (forward copy) | DONE |
+| O port value | Output to I/O port | DONE |
+| S start end pat | Search memory for pattern | DONE |
+| ? | Help | DONE |
+| R | Display/modify registers | DEFERRED |
+
+**Note:** 11 commands exceeds DDT's original 10-command set. Monitor is feature-complete for basic use.
 
 ### Completed Infrastructure
 
@@ -43,6 +45,12 @@
 
 ## Recent Changes
 
+**December 16, 2025 - R Command Deferred:**
+- Decision: No current use case for register display
+- Monitor already exceeds DDT feature parity (11 vs 10 commands)
+- Will implement when actual debugging need arises
+- See "Deferred: R Command" section for implementation notes
+
 **December 16, 2025 - ROM Overlay Boot Mechanism:**
 - Implemented authentic S-100 style boot sequence
 - ROM appears at both 0x0000 and 0xF000 on reset
@@ -57,13 +65,13 @@
 
 **December 2025 - Added S (Search) command:**
 - Searches memory for byte patterns (1-8 bytes)
-- Syntax: `S start end b1 [b2 ... b8]`
+- Syntax: S start end b1 [b2 ... b8]
 - Pattern stored in workspace at SEARCH_PATTERN (8 bytes)
 
 **December 2025 - Added F, M, C commands:**
 - F (Fill): Fills memory range with byte value
 - M (Move): Forward-only block copy
-- C (Compare): Shows differences as `addr1:val1 addr2:val2`
+- C (Compare): Shows differences as addr1:val1 addr2:val2
 
 **December 2025 - DUMP command edge cases:**
 - Fixed infinite loop when dumping to FFFF
@@ -71,20 +79,34 @@
 
 ---
 
-## Remaining Work
+## Deferred: R Command (Registers)
 
-### R (Registers) - ARCHITECTURAL DECISION REQUIRED
+**Status:** Deferred - no current use case
 
-**Problem:** Current G command does `PCHL` and never returns. For R to be meaningful:
+**Rationale:** The R command requires a return mechanism from user programs. Currently G does PCHL and never returns. Implementing R properly requires architectural changes that aren't needed yet.
 
-1. How do user programs return to monitor?
-   - RST instruction?
-   - CALL to fixed address?
-   - Breakpoint mechanism?
+**When to implement:** When actively debugging a program and wishing you could see registers.
 
-2. Where is register state saved?
+**Implementation requirements (for future reference):**
 
-**Recommendation:** Design proper breakpoint/return mechanism that supports both R and future debugger features.
+1. **Register save area** (12 bytes in workspace):
+   - A, F, BC, DE, HL, SP, PC
+   - Location: 00E7-00F2 (available workspace)
+
+2. **Return mechanism** - one of:
+   - RST 7 handler saves registers and returns to monitor
+   - CALL to fixed address (e.g., 0x0038)
+   - Breakpoint via RST with saved PC
+
+3. **G command changes:**
+   - Restore registers from save area before PCHL
+   - Or: save current SP, set user SP, transfer control
+
+4. **R command itself:**
+   - Display: A=xx F=xx BC=xxxx DE=xxxx HL=xxxx SP=xxxx PC=xxxx
+   - Optional: modify registers interactively
+
+**Estimated effort:** 4 components, ~100-150 lines of assembly
 
 ---
 
@@ -94,10 +116,10 @@
 
 ```
 1. Reset: PC=0x0000, overlay enabled
-2. CPU reads from 0x0000 → gets ROM (mirrored from 0xF000)
+2. CPU reads from 0x0000 -> gets ROM (mirrored from 0xF000)
 3. ROM executes: LXI SP / DI / JMP BOOT_CONTINUE
 4. PC now at 0xF00B (in ROM address space)
-5. OUT 0xFE, 0x00 → overlay disabled
+5. OUT 0xFE, 0x00 -> overlay disabled
 6. 0x0000-0x0FFF now RAM
 7. Normal initialization continues
 ```
@@ -123,7 +145,7 @@ IO_OUT_STUB  EQU 00D9H   ; 3 bytes: OUT xx / RET
 00DC-00E3: SEARCH_PATTERN (8 bytes)
 00E4:      SEARCH_LENGTH (1 byte)
 00E5-00E6: SEARCH_END (2 bytes)
-00E7-00FF: Available (25 bytes)
+00E7-00FF: Available (25 bytes) - reserved for future register save area
 ```
 
 ### Port Assignments
@@ -145,4 +167,4 @@ FF: System status
 - **Timing:** Timer device, T command
 - **Development Tools:** Assembler/disassembler devices
 - **Internet Services:** HTTP, time sync
-- **Debugger:** Breakpoints, single-step, trace
+- **Debugger:** Breakpoints, single-step, trace (includes R command)
