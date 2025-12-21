@@ -13,7 +13,7 @@ The 8080 doesn't know what's behind the ports. It doesn't care.
 
 ## Console (Ports 0x00-0x02)
 
-**Status:** ✅ Implemented
+**Status:** âœ… Implemented
 
 ### Registers
 
@@ -57,7 +57,7 @@ CONIN:
 
 ## System Control (Ports 0xFE-0xFF)
 
-**Status:** ✅ Implemented
+**Status:** âœ… Implemented
 
 ### Registers
 
@@ -85,7 +85,7 @@ CONIN:
 
 ## Storage Device (Ports 0x08-0x0C)
 
-**Status:** 🔲 Phase 4
+**Status:** ✅ Implemented
 
 Linear-addressed storage with 24-bit addressing. 16MB address space. No sectors, no tracks, no banks. Just bytes.
 
@@ -159,7 +159,7 @@ WRITE_LOOP:
 
 ## Storage Mount Service (Ports 0x0D-0x0F)
 
-**Status:** 🔲 Phase 4
+**Status:** ✅ Implemented
 
 ### Registers
 
@@ -224,7 +224,7 @@ FILENAME: DB 'CLAUDE.BIN',0
 
 ## Disassembler (Ports 0x20-0x27)
 
-**Status:** 🔲 Future
+**Status:** ðŸ”² Future
 
 ### Registers
 
@@ -253,7 +253,7 @@ FILENAME: DB 'CLAUDE.BIN',0
 
 ## Assembler (Ports 0x28-0x2F)
 
-**Status:** 🔲 Future
+**Status:** ðŸ”² Future
 
 ### Registers
 
@@ -283,7 +283,7 @@ FILENAME: DB 'CLAUDE.BIN',0
 
 ## Timer 8253 (Ports 0x70-0x73)
 
-**Status:** 🔲 Future
+**Status:** ðŸ”² Future
 
 ### Registers
 
@@ -321,7 +321,7 @@ Bit 0:    BCD (0=binary - only mode supported)
 
 ## Claude API (Ports 0x38-0x3F)
 
-**Status:** 🔲 Phase 9
+**Status:** ðŸ”² Phase 9
 
 The 8080 talks to Claude. It sends bytes, gets bytes back. Doesn't know it's talking to an AI.
 
@@ -392,7 +392,7 @@ PROMPT: DB 'What is the 8080?',0
 
 ## HTTP Client (Ports 0x40-0x47)
 
-**Status:** 🔲 Future
+**Status:** ðŸ”² Future
 
 ### Registers
 
@@ -416,7 +416,7 @@ PROMPT: DB 'What is the 8080?',0
 
 ## System Time (Ports 0x60-0x6F)
 
-**Status:** 🔲 Future
+**Status:** ðŸ”² Future
 
 Read-only time registers.
 

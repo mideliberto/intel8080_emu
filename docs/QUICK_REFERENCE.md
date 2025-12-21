@@ -11,18 +11,18 @@
 | G | G [addr] | Go (execute), default 0100 |
 | H | H num1 num2 | Hex math: sum, difference |
 | I | I port | Input from port |
+| L | L stor mem [cnt] | Load from storage (24-bit addr) |
 | M | M src dst cnt | Move memory (forward copy) |
 | O | O port val | Output to port |
 | S | S start end b1... | Search for bytes (1-8) |
+| W | W mem stor [cnt] | Write to storage (24-bit addr) |
+| X | X [file \| -] | Mount/unmount storage |
 | ? | ? | Help |
 
 ### Future Commands
 
 | Cmd | Syntax | Description |
 |-----|--------|-------------|
-| X | X [file] | Mount storage file |
-| L | L stor mem [len] | Load from storage |
-| W | W mem stor [len] | Write to storage |
 | A | A prompt | Ask Claude |
 | N G | N G url | HTTP GET |
 | N T | N T | Get network time |
@@ -41,11 +41,11 @@
 | Range | Device | Status |
 |-------|--------|--------|
 | 00-02 | Console | ✅ |
-| 08-0C | Storage | Phase 4 |
-| 0D-0F | Mount | Phase 4 |
+| 08-0C | Storage | ✅ |
+| 0D-0F | Mount | ✅ |
 | 20-27 | Disasm | Future |
 | 28-2F | Asm | Future |
-| 38-3F | Claude API | Phase 9 |
+| 38-3F | Claude API | Future |
 | 40-5F | Internet | Future |
 | 60-6F | Time | Future |
 | 70-73 | Timer | Future |
@@ -79,6 +79,7 @@
 | 00DC-00E3 | 8 | SEARCH_PATTERN |
 | 00E4 | 1 | SEARCH_LENGTH |
 | 00E5-00E6 | 2 | SEARCH_END |
+| 00E7-00E9 | 3 | STOR_ADDR (24-bit) |
 
 ---
 
@@ -146,7 +147,7 @@ Bit 0: C (Carry)
 
 **Commands:** 01=mount, 02=unmount, 03=query
 
-**Status:** 00=OK, 01=not found, 02=invalid, FF=busy
+**Status:** 00=OK, 01=not found, 02=invalid
 
 ---
 

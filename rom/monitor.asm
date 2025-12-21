@@ -24,6 +24,18 @@ CONSOLE_STATUS      EQU     02H
 
 SYSTEM_CONTROL      EQU     0FEH        ; ROM overlay control
 
+; Storage Device Ports (0x08-0x0C)
+STORAGE_ADDR_LO     EQU     08H
+STORAGE_ADDR_MID    EQU     09H
+STORAGE_ADDR_HI     EQU     0AH
+STORAGE_DATA        EQU     0BH
+STORAGE_CTRL        EQU     0CH         ; Write: control, Read: status
+
+; Storage Mount Ports (0x0D-0x0F)
+MOUNT_FILENAME      EQU     0DH
+MOUNT_CTRL          EQU     0EH
+MOUNT_STATUS        EQU     0FH
+
 STACK_TOP       EQU     0F000H      ; Stack grows down from ROM
 
 CR              EQU     0DH
@@ -49,6 +61,9 @@ IO_OUT_STUB     EQU     00D9H       ; 3 bytes: OUT xx / RET
 SEARCH_PATTERN  EQU     00DCH       ; 8 bytes for pattern
 SEARCH_LENGTH   EQU     00E4H       ; 1 byte for pattern length
 SEARCH_END      EQU     00E5H       ; 2 bytes for end address
+
+; Storage command workspace
+STOR_ADDR       EQU     00E7H       ; 3 bytes: storage address (lo, mid, hi)
 
 ; ============================================
 ; COLD START
@@ -137,6 +152,12 @@ NOT_LOWER:
         JZ      CMD_OUTPUT
         CPI     'S'
         JZ      CMD_SEARCH
+        CPI     'L'
+        JZ      CMD_LOAD
+        CPI     'W'
+        JZ      CMD_WRITE
+        CPI     'X'
+        JZ      CMD_MOUNT
         CPI     '?'
         JZ      CMD_HELP
         
@@ -429,6 +450,83 @@ THD_DIGIT:
         
 THD_FAIL:
         STC                         ; Set carry = not hex
+        RET
+
+; READ_HEX_ADDR24 - Parse 24-bit hex number from buffer
+; Input: HL = pointer into buffer
+; Output: STOR_ADDR filled (3 bytes: lo, mid, hi), HL advanced
+;         Carry set if no valid hex digits found
+; Trashes: A, BC, flags
+READ_HEX_ADDR24:
+        CALL    SKIP_SPACES
+        ; Clear storage address
+        XRA     A
+        STA     STOR_ADDR
+        STA     STOR_ADDR+1
+        STA     STOR_ADDR+2
+        MVI     B,0                 ; Digit count
+        
+RHA_LOOP:
+        MOV     A,M
+        CALL    TO_HEX_DIGIT
+        JC      RHA_DONE
+        
+        ; Shift 24-bit value left 4, add new digit
+        PUSH    PSW                 ; Save new digit
+        
+        ; Shift high byte left 4, get high nibble from mid
+        LDA     STOR_ADDR+2
+        ADD     A
+        ADD     A
+        ADD     A
+        ADD     A
+        MOV     C,A                 ; C = high << 4
+        LDA     STOR_ADDR+1
+        ANI     0F0H
+        RRC
+        RRC
+        RRC
+        RRC
+        ORA     C
+        STA     STOR_ADDR+2
+        
+        ; Shift mid byte left 4, get high nibble from low
+        LDA     STOR_ADDR+1
+        ADD     A
+        ADD     A
+        ADD     A
+        ADD     A
+        MOV     C,A
+        LDA     STOR_ADDR
+        ANI     0F0H
+        RRC
+        RRC
+        RRC
+        RRC
+        ORA     C
+        STA     STOR_ADDR+1
+        
+        ; Shift low byte left 4, add new digit
+        LDA     STOR_ADDR
+        ADD     A
+        ADD     A
+        ADD     A
+        ADD     A
+        MOV     C,A
+        POP     PSW                 ; Get new digit
+        ORA     C
+        STA     STOR_ADDR
+        
+        INX     H
+        INR     B
+        JMP     RHA_LOOP
+        
+RHA_DONE:
+        MOV     A,B
+        ORA     A
+        STC
+        RZ                          ; Return with carry if no digits
+        ORA     A                   ; Clear carry
         RET
 
 ; ============================================
@@ -1131,12 +1229,230 @@ REB_BS:
         JMP     REB_LOOP
 
 ; ============================================
+; STORAGE COMMANDS
+; ============================================
+
+; CMD_MOUNT - Mount storage file
+; Syntax: X [filename]
+;   X TEST.BIN  - Mount file
+;   X -         - Unmount
+;   X           - Show mount status
+CMD_MOUNT:
+        CALL    SKIP_SPACES
+        MOV     A,M
+        ORA     A
+        JZ      CM_QUERY            ; No filename - query status
+        CPI     '-'
+        JZ      CM_UNMOUNT
+        
+        ; Send filename characters to mount service
+CM_SEND:
+        MOV     A,M
+        ORA     A                   ; End of string?
+        JZ      CM_DO_MOUNT
+        CPI     ' '                 ; Space ends filename
+        JZ      CM_DO_MOUNT
+        OUT     MOUNT_FILENAME
+        INX     H
+        JMP     CM_SEND
+        
+CM_DO_MOUNT:
+        MVI     A,01H               ; Mount command
+        OUT     MOUNT_CTRL
+        
+        ; Check result
+        IN      MOUNT_STATUS
+        ORA     A
+        JZ      CM_OK
+        CPI     01H
+        JZ      CM_NOT_FOUND
+        ; else invalid
+        LXI     H,MSG_INVALID_FILE
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+        
+CM_NOT_FOUND:
+        LXI     H,MSG_NOT_FOUND
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+        
+CM_OK:
+        LXI     H,MSG_MOUNTED
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+
+CM_UNMOUNT:
+        MVI     A,02H               ; Unmount command
+        OUT     MOUNT_CTRL
+        LXI     H,MSG_UNMOUNTED
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+        
+CM_QUERY:
+        MVI     A,03H               ; Query command
+        OUT     MOUNT_CTRL
+        IN      MOUNT_STATUS
+        ORA     A
+        JNZ     CM_NO_MOUNT
+        LXI     H,MSG_MOUNTED
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+CM_NO_MOUNT:
+        LXI     H,MSG_NO_STORAGE
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+
+
+; CMD_LOAD - Load from storage to memory
+; Syntax: L storage_addr mem_addr [count]
+; Storage addr is 24-bit (up to 6 hex digits), count defaults to 256
+CMD_LOAD:
+        ; Check mounted
+        IN      STORAGE_CTRL
+        ANI     01H
+        JZ      CL_NOT_MOUNTED
+        
+        ; Parse 24-bit storage address
+        CALL    READ_HEX_ADDR24
+        JC      CL_ERROR
+        
+        ; Set storage address from STOR_ADDR
+        LDA     STOR_ADDR
+        OUT     STORAGE_ADDR_LO
+        LDA     STOR_ADDR+1
+        OUT     STORAGE_ADDR_MID
+        LDA     STOR_ADDR+2
+        OUT     STORAGE_ADDR_HI
+        
+        ; Parse memory address
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD
+        JC      CL_ERROR
+        PUSH    D                   ; Save mem addr
+        
+        ; Parse count (optional, default 256)
+        CALL    SKIP_SPACES
+        MOV     A,M
+        ORA     A
+        JZ      CL_DEFAULT_COUNT
+        CALL    READ_HEX_WORD
+        JC      CL_DEFAULT_COUNT
+        MOV     B,D                 ; BC = count
+        MOV     C,E
+        JMP     CL_DO_LOAD
+        
+CL_DEFAULT_COUNT:
+        LXI     B,0100H             ; 256 bytes
+        
+CL_DO_LOAD:
+        POP     D                   ; DE = mem addr
+        
+        ; Copy loop: storage -> memory
+CL_LOOP:
+        IN      STORAGE_DATA        ; Read + auto-increment
+        STAX    D                   ; Store to memory
+        INX     D
+        DCX     B
+        MOV     A,B
+        ORA     C
+        JNZ     CL_LOOP
+        
+        LXI     H,MSG_LOADED
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+        
+CL_NOT_MOUNTED:
+        LXI     H,MSG_NO_STORAGE
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+        
+CL_ERROR:
+        LXI     H,MSG_BAD_HEX
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+
+
+; CMD_WRITE - Write memory to storage
+; Syntax: W mem_addr storage_addr [count]
+; Storage addr is 24-bit (up to 6 hex digits), count defaults to 256
+CMD_WRITE:
+        ; Check mounted
+        IN      STORAGE_CTRL
+        ANI     01H
+        JZ      CW_NOT_MOUNTED
+        
+        ; Parse memory address (source)
+        CALL    SKIP_SPACES
+        CALL    READ_HEX_WORD
+        JC      CW_ERROR
+        PUSH    D                   ; Save mem addr
+        
+        ; Parse 24-bit storage address (dest)
+        CALL    READ_HEX_ADDR24
+        JC      CW_ERROR_POP
+        
+        ; Set storage address from STOR_ADDR
+        LDA     STOR_ADDR
+        OUT     STORAGE_ADDR_LO
+        LDA     STOR_ADDR+1
+        OUT     STORAGE_ADDR_MID
+        LDA     STOR_ADDR+2
+        OUT     STORAGE_ADDR_HI
+        
+        ; Parse count (optional, default 256)
+        CALL    SKIP_SPACES
+        MOV     A,M
+        ORA     A
+        JZ      CW_DEFAULT_COUNT
+        CALL    READ_HEX_WORD
+        JC      CW_DEFAULT_COUNT
+        MOV     B,D
+        MOV     C,E
+        JMP     CW_DO_WRITE
+        
+CW_DEFAULT_COUNT:
+        LXI     B,0100H
+        
+CW_DO_WRITE:
+        POP     H                   ; HL = mem addr (source)
+        
+        ; Copy loop: memory -> storage
+CW_LOOP:
+        MOV     A,M                 ; Read from memory
+        OUT     STORAGE_DATA        ; Write + auto-increment
+        INX     H
+        DCX     B
+        MOV     A,B
+        ORA     C
+        JNZ     CW_LOOP
+        
+        ; Flush
+        MVI     A,02H
+        OUT     STORAGE_CTRL
+        
+        LXI     H,MSG_WRITTEN
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+        
+CW_NOT_MOUNTED:
+        LXI     H,MSG_NO_STORAGE
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+        
+CW_ERROR_POP:
+        POP     D
+CW_ERROR:
+        LXI     H,MSG_BAD_HEX
+        CALL    PRINT_STRING
+        JMP     MAIN_LOOP
+
+; ============================================
 ; STRINGS
 ; ============================================
 
 MSG_BANNER:
         DB      CR,LF
-        DB      "8080 Monitor v0.2",CR,LF
+        DB      "8080 Monitor v0.3",CR,LF
         DB      'Built: ', DATE, ' ', TIME, CR, LF
         DB      "Ready.",CR,LF
         DB      0
@@ -1150,9 +1466,12 @@ MSG_HELP:
         DB      "  G [addr]         - Go (execute)",CR,LF
         DB      "  H num1 num2      - Hex math (+/-)",CR,LF
         DB      "  I port           - Input from port",CR,LF
+        DB      "  L stor mem [cnt] - Load from storage",CR,LF
         DB      "  M src dst cnt    - Move memory",CR,LF
         DB      "  O port value     - Output to port",CR,LF
         DB      "  S start end pat  - Search memory",CR,LF
+        DB      "  W mem stor [cnt] - Write to storage",CR,LF
+        DB      "  X [file | -]     - Mount/unmount storage",CR,LF
         DB      "  ?                - Help",CR,LF
         DB      0
 
@@ -1167,6 +1486,27 @@ MSG_BAD_HEX:
 
 MSG_BAD_PORT:
         DB      "Invalid port/value",CR,LF,0
+
+MSG_MOUNTED:
+        DB      "Mounted",CR,LF,0
+
+MSG_UNMOUNTED:
+        DB      "Unmounted",CR,LF,0
+
+MSG_NOT_FOUND:
+        DB      "File not found",CR,LF,0
+
+MSG_INVALID_FILE:
+        DB      "Invalid filename",CR,LF,0
+
+MSG_NO_STORAGE:
+        DB      "No storage mounted",CR,LF,0
+
+MSG_LOADED:
+        DB      "Loaded",CR,LF,0
+
+MSG_WRITTEN:
+        DB      "Written",CR,LF,0
 
 ; ============================================
 ; PADDING

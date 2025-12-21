@@ -1,8 +1,11 @@
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::path::PathBuf;
 
 use intel8080_emu::Intel8080;
 use intel8080_emu::io::devices::console::Console;
+use intel8080_emu::io::devices::storage::Storage;
+use intel8080_emu::io::devices::storage_mount::StorageMount;
 
 use crossterm::terminal::{enable_raw_mode, disable_raw_mode};
 
@@ -27,6 +30,26 @@ fn main() {
     cpu.io_bus_mut().map_port(0x00, console.clone());
     cpu.io_bus_mut().map_port(0x01, console.clone());
     cpu.io_bus_mut().map_port(0x02, console);
+    
+    // Create storage directory
+    std::fs::create_dir_all("./storage/").ok();
+    
+    // Set up storage device on ports 0x08-0x0C
+    let storage = Rc::new(RefCell::new(Storage::new()));
+    cpu.io_bus_mut().map_port(0x08, storage.clone());
+    cpu.io_bus_mut().map_port(0x09, storage.clone());
+    cpu.io_bus_mut().map_port(0x0A, storage.clone());
+    cpu.io_bus_mut().map_port(0x0B, storage.clone());
+    cpu.io_bus_mut().map_port(0x0C, storage.clone());
+    
+    // Set up mount service on ports 0x0D-0x0F
+    let mount = Rc::new(RefCell::new(StorageMount::new(
+        Rc::clone(&storage),
+        PathBuf::from("./storage/")
+    )));
+    cpu.io_bus_mut().map_port(0x0D, mount.clone());
+    cpu.io_bus_mut().map_port(0x0E, mount.clone());
+    cpu.io_bus_mut().map_port(0x0F, mount);
     
     // Load ROM (mapped at 0xF000, visible at 0x0000 via overlay)
     cpu.load_rom_from_file(std::path::Path::new("rom/monitor.bin"))

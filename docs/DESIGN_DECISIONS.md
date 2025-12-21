@@ -95,9 +95,9 @@ Protocol: OUT addr_lo, OUT addr_hi, IN/OUT data
 
 **Decision:** Classic command set, familiar syntax
 
-**Implemented:** D, E, F, M, S, C, H, G, I, O, ?
+**Implemented:** D, E, F, M, S, C, H, G, I, O, L, W, X, ?
 
-**Future:** X, L, W (storage), N (network), A (ask Claude)
+**Future:** N (network), A (ask Claude)
 
 **Deferred:** R (registers) - needs return mechanism
 

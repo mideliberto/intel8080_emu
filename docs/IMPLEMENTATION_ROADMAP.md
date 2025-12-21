@@ -7,8 +7,8 @@
 | 1 | Core Monitor | ✅ Complete |
 | 2 | Memory Operations | ✅ Complete |
 | 3 | Execution & I/O | ✅ Complete |
-| **4** | **Storage System** | **🔲 Current** |
-| 5 | Program Loading | 🔲 Future |
+| 4 | Storage System | ✅ Complete |
+| **5** | **Program Loading** | **🔲 Next** |
 | 6 | Timing System | 🔲 Future |
 | 7 | Development Tools | 🔲 Future |
 | 8 | Internet Services | 🔲 Future |
@@ -58,40 +58,33 @@
 
 ---
 
-## Phase 4: Storage System 🔲 CURRENT
+## Phase 4: Storage System ✅
 
-**Goal:** Linear-addressed storage operations
+**Goal:** 24-bit linear-addressed storage with file mounting
 
-**Tasks:**
+**Delivered:**
 
 Rust:
-- [ ] Storage device (ports 0x08-0x0B)
-- [ ] StorageMount device (ports 0x0C-0x0F)
-- [ ] Unit tests
+- Storage device (ports 0x08-0x0C) with 24-bit addressing
+- StorageMount service (ports 0x0D-0x0F)
+- Unit tests with tempfile
 
 ROM:
-- [ ] X command (mount file)
-- [ ] L command (load from storage to memory)
-- [ ] W command (write memory to storage)
+- X command (mount/unmount/query)
+- L command (load from storage to memory)
+- W command (write memory to storage)
+- READ_HEX_ADDR24 helper for 6-digit hex parsing
+- STOR_ADDR workspace (3 bytes at 0x00E7)
 
-**Success Criteria:**
-```
-> X TEST.BIN
-Mounted: 04 pages
-> L 0 1000
-Loaded
-> D 1000
-1000: 00 01 02 03...
-> E 1000 FF
-> W 1000 0
-Written
-```
-
-**Details:** See PHASE4_STORAGE_PLAN.md
+**Features:**
+- 16MB address space (24-bit)
+- Auto-increment on read/write
+- High byte acts as bank/page selector
+- Filename validation (8.3, safe chars only)
 
 ---
 
-## Phase 5: Program Loading
+## Phase 5: Program Loading 🔲 NEXT
 
 **Goal:** Load programs into memory
 

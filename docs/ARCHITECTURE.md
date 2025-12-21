@@ -50,7 +50,8 @@
 | 0x00DC-0x00E3  | SEARCH_PATTERN (8 bytes)                     |
 | 0x00E4         | SEARCH_LENGTH (1 byte)                       |
 | 0x00E5-0x00E6  | SEARCH_END (2 bytes)                         |
-| 0x00E7-0x00FF  | Available (25 bytes)                         |
+| 0x00E7-0x00E9  | STOR_ADDR (3 bytes, 24-bit)                  |
+| 0x00EA-0x00FF  | Available (22 bytes)                         |
 +----------------+----------------------------------------------+
 | 0x0100-0xEFFF  | USER PROGRAM AREA                            |
 +----------------+----------------------------------------------+
@@ -111,20 +112,20 @@ This is how real S-100 systems solved the boot problem. We're using a proven pat
 
 ```
 1. RESET
-   └─> Overlay enabled, PC = 0x0000
+   â””â”€> Overlay enabled, PC = 0x0000
 
 2. CPU executes from 0x0000 (reads ROM via overlay)
-   └─> LXI SP, F000h
-   └─> DI
-   └─> JMP BOOT_CONTINUE  ; Jump to F000+ address space
+   â””â”€> LXI SP, F000h
+   â””â”€> DI
+   â””â”€> JMP BOOT_CONTINUE  ; Jump to F000+ address space
 
 3. Now executing from 0xF000+ range
-   └─> OUT 0FEh, 00h      ; Disable overlay
-   └─> 0x0000-0x0FFF is now RAM
+   â””â”€> OUT 0FEh, 00h      ; Disable overlay
+   â””â”€> 0x0000-0x0FFF is now RAM
 
 4. Copy vectors from ROM to RAM
-   └─> RST vectors at 0x0000-0x003F
-   └─> API table at 0x0040-0x007F
+   â””â”€> RST vectors at 0x0000-0x003F
+   â””â”€> API table at 0x0040-0x007F
 
 5. Initialize workspace, I/O stubs, devices
 
@@ -161,11 +162,11 @@ BOOT_CONTINUE:
 
 | Range | Device | Status |
 |-------|--------|--------|
-| 0x00-0x02 | Console | ✅ Implemented |
+| 0x00-0x02 | Console | âœ… Implemented |
 | 0x03 | Console Control | Reserved |
 | 0x04-0x07 | (Parallel I/O) | Reserved |
-| 0x08-0x0C | Storage Device (24-bit) | Phase 4 |
-| 0x0D-0x0F | Storage Mount | Phase 4 |
+| 0x08-0x0C | Storage Device (24-bit) | ✅ Done |
+| 0x0D-0x0F | Storage Mount | ✅ Done |
 | 0x10-0x1F | Network | Future |
 | 0x20-0x27 | Disassembler | Future |
 | 0x28-0x2F | Assembler | Future |
@@ -176,8 +177,8 @@ BOOT_CONTINUE:
 | 0x70-0x73 | Timer (8253) | Future |
 | 0x74-0xEF | (Expansion) | Available |
 | 0xF0-0xFD | (Reserved) | - |
-| 0xFE | System Control | ✅ Implemented |
-| 0xFF | System Status | ✅ Implemented |
+| 0xFE | System Control | âœ… Implemented |
+| 0xFF | System Status | âœ… Implemented |
 
 ---
 

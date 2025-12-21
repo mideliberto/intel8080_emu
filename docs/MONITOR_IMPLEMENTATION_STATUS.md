@@ -1,10 +1,10 @@
 # Monitor ROM Implementation Status
 
-**Last Updated:** December 16, 2025
+**Last Updated:** December 20, 2025
 
 ## Current Status
 
-### Commands (11 Complete)
+### Commands (14 Complete)
 
 | Command | Description | Status |
 |---------|-------------|--------|
@@ -15,13 +15,16 @@
 | G [addr] | Go (execute at address) | DONE |
 | H num1 num2 | Hex math (add/subtract) | DONE |
 | I port | Input from I/O port | DONE |
+| L stor mem [cnt] | Load from storage to memory | DONE |
 | M src dst cnt | Move memory (forward copy) | DONE |
 | O port value | Output to I/O port | DONE |
 | S start end pat | Search memory for pattern | DONE |
+| W mem stor [cnt] | Write memory to storage | DONE |
+| X [file \| -] | Mount/unmount storage | DONE |
 | ? | Help | DONE |
 | R | Display/modify registers | DEFERRED |
 
-**Note:** 11 commands exceeds DDT's original 10-command set. Monitor is feature-complete for basic use.
+**Note:** 14 commands now. Storage system complete.
 
 ### Completed Infrastructure
 
@@ -30,10 +33,12 @@
 - [x] Command parser and dispatch
 - [x] Console I/O (CONIN, CONOUT, CONST)
 - [x] Print routines (string, hex byte, hex word, CRLF)
-- [x] Input routines (READ_LINE, READ_HEX_WORD)
+- [x] Input routines (READ_LINE, READ_HEX_WORD, READ_HEX_ADDR24)
 - [x] Self-modifying I/O stubs for I/O commands
-- [x] Workspace layout (LINE_BUFFER, LAST_DUMP_ADDR, etc.)
+- [x] Workspace layout (LINE_BUFFER, LAST_DUMP_ADDR, STOR_ADDR, etc.)
 - [x] Automated test infrastructure (TestConsole device)
+- [x] 24-bit storage device (16MB linear addressing)
+- [x] File mount/unmount service
 
 ### Test Coverage
 
@@ -45,9 +50,16 @@
 
 ## Recent Changes
 
+**December 20, 2025 - Phase 4 Storage System Complete:**
+- Added Storage device (ports 0x08-0x0C) with 24-bit addressing
+- Added StorageMount service (ports 0x0D-0x0F) for file mounting
+- Added READ_HEX_ADDR24 helper for parsing 6-digit hex addresses
+- New commands: L (load), W (write), X (mount/unmount)
+- Storage addresses support full 24-bit range (16MB per file)
+- Monitor version bumped to v0.3
+
 **December 16, 2025 - R Command Deferred:**
 - Decision: No current use case for register display
-- Monitor already exceeds DDT feature parity (11 vs 10 commands)
 - Will implement when actual debugging need arises
 - See "Deferred: R Command" section for implementation notes
 
@@ -57,25 +69,6 @@
 - OUT to port 0xFE disables overlay, exposing RAM at 0x0000
 - Matches real Altair/IMSAI hardware behavior
 - Single ROM file, pure address decoding (no dual binaries)
-
-**December 16, 2025 - Automated Testing:**
-- Created TestConsole device for scripted monitor testing
-- 10 integration tests covering all commands
-- Tests verify boot, commands, and overlay behavior
-
-**December 2025 - Added S (Search) command:**
-- Searches memory for byte patterns (1-8 bytes)
-- Syntax: S start end b1 [b2 ... b8]
-- Pattern stored in workspace at SEARCH_PATTERN (8 bytes)
-
-**December 2025 - Added F, M, C commands:**
-- F (Fill): Fills memory range with byte value
-- M (Move): Forward-only block copy
-- C (Compare): Shows differences as addr1:val1 addr2:val2
-
-**December 2025 - DUMP command edge cases:**
-- Fixed infinite loop when dumping to FFFF
-- Fixed overflow handling for high memory addresses
 
 ---
 
@@ -87,50 +80,46 @@
 
 **When to implement:** When actively debugging a program and wishing you could see registers.
 
-**Implementation requirements (for future reference):**
-
-1. **Register save area** (12 bytes in workspace):
-   - A, F, BC, DE, HL, SP, PC
-   - Location: 00E7-00F2 (available workspace)
-
-2. **Return mechanism** - one of:
-   - RST 7 handler saves registers and returns to monitor
-   - CALL to fixed address (e.g., 0x0038)
-   - Breakpoint via RST with saved PC
-
-3. **G command changes:**
-   - Restore registers from save area before PCHL
-   - Or: save current SP, set user SP, transfer control
-
-4. **R command itself:**
-   - Display: A=xx F=xx BC=xxxx DE=xxxx HL=xxxx SP=xxxx PC=xxxx
-   - Optional: modify registers interactively
-
-**Estimated effort:** 4 components, ~100-150 lines of assembly
-
 ---
 
 ## Architecture Notes
 
-### ROM Overlay Boot Sequence
+### Storage Device Protocol
 
 ```
-1. Reset: PC=0x0000, overlay enabled
-2. CPU reads from 0x0000 -> gets ROM (mirrored from 0xF000)
-3. ROM executes: LXI SP / DI / JMP BOOT_CONTINUE
-4. PC now at 0xF00B (in ROM address space)
-5. OUT 0xFE, 0x00 -> overlay disabled
-6. 0x0000-0x0FFF now RAM
-7. Normal initialization continues
+Port 0x08: Address low byte (R/W)
+Port 0x09: Address mid byte (R/W)
+Port 0x0A: Address high byte (R/W)
+Port 0x0B: Data with auto-increment (R/W)
+Port 0x0C: Status (R) / Control (W)
+
+Status bits:
+  Bit 0: Mounted
+  Bit 1: Ready (always 1)
+  Bit 7: EOF
+
+Control commands:
+  0x00: Reset address to 0
+  0x01: Decrement address
+  0x02: Flush write buffer
 ```
 
-### I/O Stub Mechanism
-
-I and O commands use self-modifying code because 8080's IN/OUT require literal port numbers.
+### Storage Mount Protocol
 
 ```
-IO_IN_STUB   EQU 00D6H   ; 3 bytes: IN xx / RET
-IO_OUT_STUB  EQU 00D9H   ; 3 bytes: OUT xx / RET
+Port 0x0D: Filename character (W)
+Port 0x0E: Control command (W)
+Port 0x0F: Status (R)
+
+Control commands:
+  0x01: Mount file
+  0x02: Unmount
+  0x03: Query status
+
+Status codes:
+  0x00: OK / Mounted
+  0x01: Not found
+  0x02: Invalid filename
 ```
 
 ### Workspace Memory Map
@@ -145,26 +134,27 @@ IO_OUT_STUB  EQU 00D9H   ; 3 bytes: OUT xx / RET
 00DC-00E3: SEARCH_PATTERN (8 bytes)
 00E4:      SEARCH_LENGTH (1 byte)
 00E5-00E6: SEARCH_END (2 bytes)
-00E7-00FF: Available (25 bytes) - reserved for future register save area
+00E7-00E9: STOR_ADDR (3 bytes - 24-bit storage address)
+00EA-00FF: Available (22 bytes)
 ```
 
 ### Port Assignments
 
 ```
-00: Console data out
-01: Console data in
-02: Console status
-FE: System control (ROM overlay)
-FF: System status
+00-02: Console (data out, data in, status)
+08-0C: Storage device (24-bit address, data, control)
+0D-0F: Storage mount service
+FE:    System control (ROM overlay)
+FF:    System status
 ```
 
 ---
 
 ## Future Phases
 
-- **Disk System:** X (mount), L (list), B (boot)
-- **Program Loading:** Intel HEX loader
-- **Timing:** Timer device, T command
-- **Development Tools:** Assembler/disassembler devices
-- **Internet Services:** HTTP, time sync
-- **Debugger:** Breakpoints, single-step, trace (includes R command)
+- **Phase 5:** Intel HEX loader (H command)
+- **Phase 6:** Timer device, interrupts
+- **Phase 7:** Assembler/disassembler devices
+- **Phase 8:** HTTP client, network time
+- **Phase 9:** Claude API integration
+- **Phase 10:** Debugger (breakpoints, single-step, R command)

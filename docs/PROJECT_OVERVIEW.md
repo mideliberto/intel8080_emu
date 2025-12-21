@@ -14,7 +14,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 - Full 8080 CPU emulation (all 256 opcodes, cycle-accurate)
 - 4KB Monitor ROM with classic command set
 - ROM overlay boot mechanism (hardware-compatible)
-- Linear-addressed storage (maps to real SD/EEPROM)
+- 24-bit linear-addressed storage (16MB, maps to real SD/EEPROM)
 - Extensible I/O device architecture
 - Future: HTTP client, Claude API integration, real-time data feeds
 
@@ -30,9 +30,9 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Memory subsystem | ✅ Done |
 | Console device | ✅ Done |
 | Rust project structure | ✅ Done |
-| Monitor ROM (11 commands) | ✅ Done |
+| Monitor ROM (14 commands) | ✅ Done |
 | ROM overlay mechanism | ✅ Done |
-| **Storage device** | 🔲 Phase 4 - Current |
+| Storage device (24-bit, 16MB) | ✅ Done |
 | Network / HTTP | 🔲 Future |
 | Claude API integration | 🔲 Future |
 | Debugger | 🔲 Future |
@@ -52,9 +52,12 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | G | G [addr] | Go (execute) |
 | H | H num1 num2 | Hex math (+/-) |
 | I | I port | Input from port |
+| L | L stor mem [cnt] | Load from storage |
 | M | M src dst cnt | Move memory |
 | O | O port value | Output to port |
 | S | S start end pat | Search memory |
+| W | W mem stor [cnt] | Write to storage |
+| X | X [file \| -] | Mount/unmount storage |
 | ? | ? | Help |
 
 **Deferred:** R (registers) - needs return mechanism, implement when debugging requires it.
@@ -72,7 +75,6 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | QUICK_REFERENCE.md | Cheat sheet tables | Keep open while coding |
 | CODE_TEMPLATES.md | Rust structure, Cargo.toml | Reference for project setup |
 | MONITOR_IMPLEMENTATION_STATUS.md | Living status of ROM work | ROM development |
-| PHASE4_STORAGE_PLAN.md | Storage implementation details | Phase 4 work |
 
 ---
 
