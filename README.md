@@ -13,27 +13,47 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | CPU core (all 256 opcodes, flags, stack, I/O) | ✅ |
 | Memory subsystem with ROM overlay | ✅ |
 | Console device | ✅ |
-| Monitor ROM v0.2 (11 commands) | ✅ |
+| Storage device (24-bit, 16MB) | ✅ |
+| Monitor ROM v0.3 (14 commands) | ✅ |
 | 191 tests (181 CPU + 10 integration) | ✅ |
-| Storage device | 🔲 Phase 4 |
 | HTTP / Network | 🔲 Future |
 | Claude API integration | 🔲 Future |
 
 ## Monitor Commands
 
 ```
-C start end dest   - Compare memory regions
-D [start] [end]    - Dump memory
-E [addr]           - Examine/modify memory
-F start end val    - Fill memory
-G [addr]           - Go (execute at address)
-H num1 num2        - Hex math (sum, difference)
-I port             - Input from I/O port
-M src dst cnt      - Move memory block
-O port val         - Output to I/O port
-S start end bytes  - Search for pattern
-?                  - Help
+C start end dest      - Compare memory regions
+D [start] [end]       - Dump memory
+E [addr]              - Examine/modify memory
+F start end val       - Fill memory
+G [addr]              - Go (execute at address)
+H num1 num2           - Hex math (sum, difference)
+I port                - Input from I/O port
+L stor mem [cnt]      - Load from storage to memory
+M src dst cnt         - Move memory block
+O port val            - Output to I/O port
+S start end bytes     - Search for pattern
+W mem stor [cnt]      - Write memory to storage
+X [file | -]          - Mount/unmount storage
+?                     - Help
 ```
+
+## Storage System
+
+24-bit linear-addressed storage with 16MB address space. No sectors, no tracks—just bytes.
+
+```
+> X DATA.BIN
+Mounted
+> L 0 1000 100           ; Load 256 bytes from storage:0x000000 to mem:0x1000
+Loaded
+> W 2000 10000 80        ; Write 128 bytes from mem:0x2000 to storage:0x010000
+Written
+> X -
+Unmounted
+```
+
+Storage addresses support up to 6 hex digits (24-bit). The high byte acts as a bank/page selector for organizing data within a single large file.
 
 ## Building
 
@@ -50,8 +70,8 @@ cargo run
 
 You'll see:
 ```
-8080 Monitor v0.2
-Built: 2025-12-19 14:32:07
+8080 Monitor v0.3
+Built: 2025-12-20 ...
 Ready.
 > 
 ```
@@ -91,6 +111,8 @@ src/
     ├── device.rs        # IoDevice trait
     └── devices/
         ├── console.rs       # Terminal I/O
+        ├── storage.rs       # 24-bit linear storage
+        ├── storage_mount.rs # File mounting service
         ├── test_console.rs  # Scripted testing
         ├── timer.rs
         └── null.rs
@@ -100,12 +122,23 @@ rom/
 ├── monitor.asm          # Monitor ROM source
 └── monitor.bin          # Compiled ROM (4KB)
 
+storage/                 # Mounted storage files
+
 tests/
 ├── cpu_tests.rs         # 181 CPU instruction tests
 ├── monitor_tests.rs     # 10 integration tests
 └── common/
     └── mod.rs           # Test utilities
 ```
+
+## I/O Port Map
+
+| Ports | Device |
+|-------|--------|
+| 0x00-0x02 | Console |
+| 0x08-0x0C | Storage (24-bit address, data, status) |
+| 0x0D-0x0F | Storage mount service |
+| 0xFE-0xFF | System control |
 
 ## The End Goal
 
