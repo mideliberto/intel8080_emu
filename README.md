@@ -1,30 +1,39 @@
 # Intel 8080 Emulator
 
-A cycle-counted Intel 8080 emulator with monitor ROM, written in Rust.
+An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architecture (1975 vintage) connected to modern infrastructure.
 
-## Project Status
+**The Vision:** An 8080 that talks to Claude over the API. Internet-connected vintage computing. Not a museum piece—a living system.
 
-- ✅ CPU core (all 256 opcodes)
-- ✅ Flag handling (S, Z, AC, P, C)
-- ✅ I/O device framework
-- ✅ ROM overlay boot mechanism (hardware-compatible)
-- ✅ 191 tests passing (181 CPU + 10 monitor integration)
-- ✅ Monitor ROM (v0.2) - 11 commands
-  - C (compare memory)
-  - D (dump memory)
-  - E (examine/modify)
-  - F (fill memory)
-  - G (go/execute)
-  - H (hex math)
-  - I (input from port)
-  - M (move memory)
-  - O (output to port)
-  - S (search memory)
-  - ? (help)
-- 🔲 Additional monitor commands (R)
-- 🔲 Disk support
-- 🔲 Timer/interrupts
-- 🔲 Internet services
+**The Mantra:** *"A fool admires complexity, genius admires simplicity."*
+
+## Current Status
+
+| Component | Status |
+|-----------|--------|
+| CPU core (all 256 opcodes, flags, stack, I/O) | ✅ |
+| Memory subsystem with ROM overlay | ✅ |
+| Console device | ✅ |
+| Monitor ROM v0.2 (11 commands) | ✅ |
+| 191 tests (181 CPU + 10 integration) | ✅ |
+| Storage device | 🔲 Phase 4 |
+| HTTP / Network | 🔲 Future |
+| Claude API integration | 🔲 Future |
+
+## Monitor Commands
+
+```
+C start end dest   - Compare memory regions
+D [start] [end]    - Dump memory
+E [addr]           - Examine/modify memory
+F start end val    - Fill memory
+G [addr]           - Go (execute at address)
+H num1 num2        - Hex math (sum, difference)
+I port             - Input from I/O port
+M src dst cnt      - Move memory block
+O port val         - Output to I/O port
+S start end bytes  - Search for pattern
+?                  - Help
+```
 
 ## Building
 
@@ -39,11 +48,21 @@ cargo test
 cargo run
 ```
 
-Starts the monitor ROM. You'll see:
+You'll see:
 ```
 8080 Monitor v0.2
+Built: 2025-12-19 14:32:07
 Ready.
 > 
+```
+
+## ROM Development
+
+The monitor ROM uses the AS macro assembler (Alfred Arnold).
+
+```bash
+cd rom
+make
 ```
 
 ## ROM Overlay Boot
@@ -52,57 +71,67 @@ The emulator implements authentic S-100 style boot behavior:
 
 1. CPU starts at PC=0x0000 on reset
 2. ROM overlay makes 0x0000 mirror ROM at 0xF000
-3. ROM disables overlay via OUT to port 0xFE
-4. Low memory becomes RAM, vectors can be installed
+3. ROM disables overlay via `OUT 0xFE, 0x00`
+4. Low memory becomes RAM
 
-This matches how real Altair/IMSAI systems booted - one ROM, hardware bank switching.
-
-## ROM Development
-
-The monitor ROM is in `rom/` using the AS macro assembler.
-
-```bash
-cd rom
-make
-```
+This is how real Altair/IMSAI systems booted. One ROM, hardware bank switching. The same mechanism will work on real hardware with a 74LS74 flip-flop.
 
 ## Project Structure
 
 ```
 src/
-├── lib.rs          # Library exports
-├── main.rs         # Entry point
-├── cpu.rs          # 8080 CPU emulation
-├── registers.rs    # Register enums
-├── memory.rs       # Memory trait
+├── main.rs              # Entry point
+├── lib.rs               # Library exports
+├── cpu.rs               # 8080 CPU emulation
+├── memory.rs            # Memory trait
+├── registers.rs         # Register enums, flags
 └── io/
     ├── mod.rs
-    ├── bus.rs      # I/O port mapping
-    ├── device.rs   # IoDevice trait
+    ├── bus.rs           # I/O port mapping
+    ├── device.rs        # IoDevice trait
     └── devices/
-        ├── console.rs       # Interactive console
-        ├── test_console.rs  # Scripted console for testing
-        ├── disk.rs
+        ├── console.rs       # Terminal I/O
+        ├── test_console.rs  # Scripted testing
         ├── timer.rs
         └── null.rs
 
 rom/
 ├── Makefile
-├── monitor.asm     # Monitor ROM source
-└── monitor.bin     # Compiled ROM
+├── monitor.asm          # Monitor ROM source
+└── monitor.bin          # Compiled ROM (4KB)
 
 tests/
-├── cpu_tests.rs      # CPU instruction tests (181)
-├── monitor_tests.rs  # Monitor integration tests (10)
+├── cpu_tests.rs         # 181 CPU instruction tests
+├── monitor_tests.rs     # 10 integration tests
 └── common/
-    └── mod.rs        # Test utilities
-
-examples/
-└── hello.asm       # Example program
+    └── mod.rs           # Test utilities
 ```
 
-## The Mantra
+## The End Goal
 
-> "A fool admires complexity, genius admires simplicity."
+The same ROM runs on:
+- **Rust emulator** (now) — for development
+- **Real 8080 + Pi coprocessor** (future) — for hardware
 
-Keep it simple.
+The 8080 doesn't know the difference. It sends bytes to ports, gets bytes back. Behind those ports: file storage, HTTP, Claude API. The coprocessor handles the complexity.
+
+```
+> A What instructions does the 8080 have?
+The 8080 has 256 opcodes covering data transfer, arithmetic,
+logic, branching, stack operations, and I/O...
+```
+
+That's the vision. An 8080 that can ask questions.
+
+## Documentation
+
+Detailed docs live in the project knowledge files:
+- `PROJECT_OVERVIEW.md` — Quick orientation
+- `ARCHITECTURE.md` — Memory map, boot sequence
+- `DEVICE_SPECS.md` — I/O device protocols
+- `QUICK_REFERENCE.md` — Cheat sheets
+- `IMPLEMENTATION_ROADMAP.md` — Phases and plans
+
+## License
+
+MIT
