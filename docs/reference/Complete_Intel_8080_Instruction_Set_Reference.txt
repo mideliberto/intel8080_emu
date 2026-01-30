@@ -1,0 +1,438 @@
+# Intel 8080 Instruction Set - Complete Opcode Table
+
+## Instruction Format Key
+- **Binary Pattern**: Shows the bit encoding (DDD = dest register, SSS = source register, RP = register pair)
+- **Bytes**: Instruction size in bytes
+- **Cycles**: Clock cycles (may vary for conditional branches)
+- **Flags**: Which flags are affected (S=Sign, Z=Zero, A=Aux Carry, P=Parity, C=Carry)
+
+## Register Encoding
+| Code | Register | Code | Register Pair |
+|------|----------|------|---------------|
+| 000  | B        | 00   | BC           |
+| 001  | C        | 01   | DE           |
+| 010  | D        | 10   | HL           |
+| 011  | E        | 11   | SP (or PSW)  |
+| 100  | H        |      |              |
+| 101  | L        |      |              |
+| 110  | M (memory at HL) |  |          |
+| 111  | A        |      |              |
+
+## Data Transfer Group
+
+### MOV - Move Register to Register
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles |
+|------|-----------|----------|-------------|-------|--------|
+| 0x40 | 01000000  | MOV B,B  | Move B to B | 1 | 5 |
+| 0x41 | 01000001  | MOV B,C  | Move C to B | 1 | 5 |
+| 0x42 | 01000010  | MOV B,D  | Move D to B | 1 | 5 |
+| 0x43 | 01000011  | MOV B,E  | Move E to B | 1 | 5 |
+| 0x44 | 01000100  | MOV B,H  | Move H to B | 1 | 5 |
+| 0x45 | 01000101  | MOV B,L  | Move L to B | 1 | 5 |
+| 0x46 | 01000110  | MOV B,M  | Move memory to B | 1 | 7 |
+| 0x47 | 01000111  | MOV B,A  | Move A to B | 1 | 5 |
+| 0x48 | 01001000  | MOV C,B  | Move B to C | 1 | 5 |
+| 0x49 | 01001001  | MOV C,C  | Move C to C | 1 | 5 |
+| 0x4A | 01001010  | MOV C,D  | Move D to C | 1 | 5 |
+| 0x4B | 01001011  | MOV C,E  | Move E to C | 1 | 5 |
+| 0x4C | 01001100  | MOV C,H  | Move H to C | 1 | 5 |
+| 0x4D | 01001101  | MOV C,L  | Move L to C | 1 | 5 |
+| 0x4E | 01001110  | MOV C,M  | Move memory to C | 1 | 7 |
+| 0x4F | 01001111  | MOV C,A  | Move A to C | 1 | 5 |
+| 0x50 | 01010000  | MOV D,B  | Move B to D | 1 | 5 |
+| 0x51 | 01010001  | MOV D,C  | Move C to D | 1 | 5 |
+| 0x52 | 01010010  | MOV D,D  | Move D to D | 1 | 5 |
+| 0x53 | 01010011  | MOV D,E  | Move E to D | 1 | 5 |
+| 0x54 | 01010100  | MOV D,H  | Move H to D | 1 | 5 |
+| 0x55 | 01010101  | MOV D,L  | Move L to D | 1 | 5 |
+| 0x56 | 01010110  | MOV D,M  | Move memory to D | 1 | 7 |
+| 0x57 | 01010111  | MOV D,A  | Move A to D | 1 | 5 |
+| 0x58 | 01011000  | MOV E,B  | Move B to E | 1 | 5 |
+| 0x59 | 01011001  | MOV E,C  | Move C to E | 1 | 5 |
+| 0x5A | 01011010  | MOV E,D  | Move D to E | 1 | 5 |
+| 0x5B | 01011011  | MOV E,E  | Move E to E | 1 | 5 |
+| 0x5C | 01011100  | MOV E,H  | Move H to E | 1 | 5 |
+| 0x5D | 01011101  | MOV E,L  | Move L to E | 1 | 5 |
+| 0x5E | 01011110  | MOV E,M  | Move memory to E | 1 | 7 |
+| 0x5F | 01011111  | MOV E,A  | Move A to E | 1 | 5 |
+| 0x60 | 01100000  | MOV H,B  | Move B to H | 1 | 5 |
+| 0x61 | 01100001  | MOV H,C  | Move C to H | 1 | 5 |
+| 0x62 | 01100010  | MOV H,D  | Move D to H | 1 | 5 |
+| 0x63 | 01100011  | MOV H,E  | Move E to H | 1 | 5 |
+| 0x64 | 01100100  | MOV H,H  | Move H to H | 1 | 5 |
+| 0x65 | 01100101  | MOV H,L  | Move L to H | 1 | 5 |
+| 0x66 | 01100110  | MOV H,M  | Move memory to H | 1 | 7 |
+| 0x67 | 01100111  | MOV H,A  | Move A to H | 1 | 5 |
+| 0x68 | 01101000  | MOV L,B  | Move B to L | 1 | 5 |
+| 0x69 | 01101001  | MOV L,C  | Move C to L | 1 | 5 |
+| 0x6A | 01101010  | MOV L,D  | Move D to L | 1 | 5 |
+| 0x6B | 01101011  | MOV L,E  | Move E to L | 1 | 5 |
+| 0x6C | 01101100  | MOV L,H  | Move H to L | 1 | 5 |
+| 0x6D | 01101101  | MOV L,L  | Move L to L | 1 | 5 |
+| 0x6E | 01101110  | MOV L,M  | Move memory to L | 1 | 7 |
+| 0x6F | 01101111  | MOV L,A  | Move A to L | 1 | 5 |
+| 0x70 | 01110000  | MOV M,B  | Move B to memory | 1 | 7 |
+| 0x71 | 01110001  | MOV M,C  | Move C to memory | 1 | 7 |
+| 0x72 | 01110010  | MOV M,D  | Move D to memory | 1 | 7 |
+| 0x73 | 01110011  | MOV M,E  | Move E to memory | 1 | 7 |
+| 0x74 | 01110100  | MOV M,H  | Move H to memory | 1 | 7 |
+| 0x75 | 01110101  | MOV M,L  | Move L to memory | 1 | 7 |
+| 0x76 | 01110110  | HLT      | Halt | 1 | 7 |
+| 0x77 | 01110111  | MOV M,A  | Move A to memory | 1 | 7 |
+| 0x78 | 01111000  | MOV A,B  | Move B to A | 1 | 5 |
+| 0x79 | 01111001  | MOV A,C  | Move C to A | 1 | 5 |
+| 0x7A | 01111010  | MOV A,D  | Move D to A | 1 | 5 |
+| 0x7B | 01111011  | MOV A,E  | Move E to A | 1 | 5 |
+| 0x7C | 01111100  | MOV A,H  | Move H to A | 1 | 5 |
+| 0x7D | 01111101  | MOV A,L  | Move L to A | 1 | 5 |
+| 0x7E | 01111110  | MOV A,M  | Move memory to A | 1 | 7 |
+| 0x7F | 01111111  | MOV A,A  | Move A to A | 1 | 5 |
+
+### MVI - Move Immediate to Register
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles |
+|------|-----------|----------|-------------|-------|--------|
+| 0x06 | 00000110  | MVI B,d8 | Move immediate to B | 2 | 7 |
+| 0x0E | 00001110  | MVI C,d8 | Move immediate to C | 2 | 7 |
+| 0x16 | 00010110  | MVI D,d8 | Move immediate to D | 2 | 7 |
+| 0x1E | 00011110  | MVI E,d8 | Move immediate to E | 2 | 7 |
+| 0x26 | 00100110  | MVI H,d8 | Move immediate to H | 2 | 7 |
+| 0x2E | 00101110  | MVI L,d8 | Move immediate to L | 2 | 7 |
+| 0x36 | 00110110  | MVI M,d8 | Move immediate to memory | 2 | 10 |
+| 0x3E | 00111110  | MVI A,d8 | Move immediate to A | 2 | 7 |
+
+### LXI - Load Register Pair Immediate
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles |
+|------|-----------|----------|-------------|-------|--------|
+| 0x01 | 00000001  | LXI B,d16 | Load BC immediate | 3 | 10 |
+| 0x11 | 00010001  | LXI D,d16 | Load DE immediate | 3 | 10 |
+| 0x21 | 00100001  | LXI H,d16 | Load HL immediate | 3 | 10 |
+| 0x31 | 00110001  | LXI SP,d16 | Load SP immediate | 3 | 10 |
+
+### LDA/STA - Load/Store Accumulator Direct
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles |
+|------|-----------|----------|-------------|-------|--------|
+| 0x3A | 00111010  | LDA a16  | Load A from memory | 3 | 13 |
+| 0x32 | 00110010  | STA a16  | Store A to memory | 3 | 13 |
+
+### LHLD/SHLD - Load/Store HL Direct
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles |
+|------|-----------|----------|-------------|-------|--------|
+| 0x2A | 00101010  | LHLD a16 | Load HL from memory | 3 | 16 |
+| 0x22 | 00100010  | SHLD a16 | Store HL to memory | 3 | 16 |
+
+### LDAX/STAX - Load/Store Accumulator Indirect
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles |
+|------|-----------|----------|-------------|-------|--------|
+| 0x0A | 00001010  | LDAX B   | Load A from (BC) | 1 | 7 |
+| 0x1A | 00011010  | LDAX D   | Load A from (DE) | 1 | 7 |
+| 0x02 | 00000010  | STAX B   | Store A to (BC) | 1 | 7 |
+| 0x12 | 00010010  | STAX D   | Store A to (DE) | 1 | 7 |
+
+### XCHG - Exchange Registers
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles |
+|------|-----------|----------|-------------|-------|--------|
+| 0xEB | 11101011  | XCHG     | Exchange DE and HL | 1 | 4 |
+
+## Arithmetic Group
+
+### ADD - Add Register/Memory to Accumulator
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0x80 | 10000000  | ADD B    | Add B to A | 1 | 4 | All |
+| 0x81 | 10000001  | ADD C    | Add C to A | 1 | 4 | All |
+| 0x82 | 10000010  | ADD D    | Add D to A | 1 | 4 | All |
+| 0x83 | 10000011  | ADD E    | Add E to A | 1 | 4 | All |
+| 0x84 | 10000100  | ADD H    | Add H to A | 1 | 4 | All |
+| 0x85 | 10000101  | ADD L    | Add L to A | 1 | 4 | All |
+| 0x86 | 10000110  | ADD M    | Add memory to A | 1 | 7 | All |
+| 0x87 | 10000111  | ADD A    | Add A to A | 1 | 4 | All |
+| 0xC6 | 11000110  | ADI d8   | Add immediate to A | 2 | 7 | All |
+
+### ADC - Add Register/Memory to Accumulator with Carry
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0x88 | 10001000  | ADC B    | Add B to A with carry | 1 | 4 | All |
+| 0x89 | 10001001  | ADC C    | Add C to A with carry | 1 | 4 | All |
+| 0x8A | 10001010  | ADC D    | Add D to A with carry | 1 | 4 | All |
+| 0x8B | 10001011  | ADC E    | Add E to A with carry | 1 | 4 | All |
+| 0x8C | 10001100  | ADC H    | Add H to A with carry | 1 | 4 | All |
+| 0x8D | 10001101  | ADC L    | Add L to A with carry | 1 | 4 | All |
+| 0x8E | 10001110  | ADC M    | Add memory to A with carry | 1 | 7 | All |
+| 0x8F | 10001111  | ADC A    | Add A to A with carry | 1 | 4 | All |
+| 0xCE | 11001110  | ACI d8   | Add immediate with carry | 2 | 7 | All |
+
+### SUB - Subtract Register/Memory from Accumulator
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0x90 | 10010000  | SUB B    | Subtract B from A | 1 | 4 | All |
+| 0x91 | 10010001  | SUB C    | Subtract C from A | 1 | 4 | All |
+| 0x92 | 10010010  | SUB D    | Subtract D from A | 1 | 4 | All |
+| 0x93 | 10010011  | SUB E    | Subtract E from A | 1 | 4 | All |
+| 0x94 | 10010100  | SUB H    | Subtract H from A | 1 | 4 | All |
+| 0x95 | 10010101  | SUB L    | Subtract L from A | 1 | 4 | All |
+| 0x96 | 10010110  | SUB M    | Subtract memory from A | 1 | 7 | All |
+| 0x97 | 10010111  | SUB A    | Subtract A from A | 1 | 4 | All |
+| 0xD6 | 11010110  | SUI d8   | Subtract immediate | 2 | 7 | All |
+
+### SBB - Subtract Register/Memory from Accumulator with Borrow
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0x98 | 10011000  | SBB B    | Subtract B with borrow | 1 | 4 | All |
+| 0x99 | 10011001  | SBB C    | Subtract C with borrow | 1 | 4 | All |
+| 0x9A | 10011010  | SBB D    | Subtract D with borrow | 1 | 4 | All |
+| 0x9B | 10011011  | SBB E    | Subtract E with borrow | 1 | 4 | All |
+| 0x9C | 10011100  | SBB H    | Subtract H with borrow | 1 | 4 | All |
+| 0x9D | 10011101  | SBB L    | Subtract L with borrow | 1 | 4 | All |
+| 0x9E | 10011110  | SBB M    | Subtract memory with borrow | 1 | 7 | All |
+| 0x9F | 10011111  | SBB A    | Subtract A with borrow | 1 | 4 | All |
+| 0xDE | 11011110  | SBI d8   | Subtract immediate with borrow | 2 | 7 | All |
+
+### INR - Increment Register/Memory
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0x04 | 00000100  | INR B    | Increment B | 1 | 5 | Z,S,P,A |
+| 0x0C | 00001100  | INR C    | Increment C | 1 | 5 | Z,S,P,A |
+| 0x14 | 00010100  | INR D    | Increment D | 1 | 5 | Z,S,P,A |
+| 0x1C | 00011100  | INR E    | Increment E | 1 | 5 | Z,S,P,A |
+| 0x24 | 00100100  | INR H    | Increment H | 1 | 5 | Z,S,P,A |
+| 0x2C | 00101100  | INR L    | Increment L | 1 | 5 | Z,S,P,A |
+| 0x34 | 00110100  | INR M    | Increment memory | 1 | 10 | Z,S,P,A |
+| 0x3C | 00111100  | INR A    | Increment A | 1 | 5 | Z,S,P,A |
+
+### DCR - Decrement Register/Memory
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0x05 | 00000101  | DCR B    | Decrement B | 1 | 5 | Z,S,P,A |
+| 0x0D | 00001101  | DCR C    | Decrement C | 1 | 5 | Z,S,P,A |
+| 0x15 | 00010101  | DCR D    | Decrement D | 1 | 5 | Z,S,P,A |
+| 0x1D | 00011101  | DCR E    | Decrement E | 1 | 5 | Z,S,P,A |
+| 0x25 | 00100101  | DCR H    | Decrement H | 1 | 5 | Z,S,P,A |
+| 0x2D | 00101101  | DCR L    | Decrement L | 1 | 5 | Z,S,P,A |
+| 0x35 | 00110101  | DCR M    | Decrement memory | 1 | 10 | Z,S,P,A |
+| 0x3D | 00111101  | DCR A    | Decrement A | 1 | 5 | Z,S,P,A |
+
+### INX - Increment Register Pair
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0x03 | 00000011  | INX B    | Increment BC | 1 | 5 | None |
+| 0x13 | 00010011  | INX D    | Increment DE | 1 | 5 | None |
+| 0x23 | 00100011  | INX H    | Increment HL | 1 | 5 | None |
+| 0x33 | 00110011  | INX SP   | Increment SP | 1 | 5 | None |
+
+### DCX - Decrement Register Pair
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0x0B | 00001011  | DCX B    | Decrement BC | 1 | 5 | None |
+| 0x1B | 00011011  | DCX D    | Decrement DE | 1 | 5 | None |
+| 0x2B | 00101011  | DCX H    | Decrement HL | 1 | 5 | None |
+| 0x3B | 00111011  | DCX SP   | Decrement SP | 1 | 5 | None |
+
+### DAD - Double Add (16-bit add to HL)
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0x09 | 00001001  | DAD B    | Add BC to HL | 1 | 10 | C |
+| 0x19 | 00011001  | DAD D    | Add DE to HL | 1 | 10 | C |
+| 0x29 | 00101001  | DAD H    | Add HL to HL | 1 | 10 | C |
+| 0x39 | 00111001  | DAD SP   | Add SP to HL | 1 | 10 | C |
+
+### DAA - Decimal Adjust Accumulator
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0x27 | 00100111  | DAA      | Decimal adjust A | 1 | 4 | All |
+
+## Logical Group
+
+### ANA - AND Register/Memory with Accumulator
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0xA0 | 10100000  | ANA B    | AND B with A | 1 | 4 | All |
+| 0xA1 | 10100001  | ANA C    | AND C with A | 1 | 4 | All |
+| 0xA2 | 10100010  | ANA D    | AND D with A | 1 | 4 | All |
+| 0xA3 | 10100011  | ANA E    | AND E with A | 1 | 4 | All |
+| 0xA4 | 10100100  | ANA H    | AND H with A | 1 | 4 | All |
+| 0xA5 | 10100101  | ANA L    | AND L with A | 1 | 4 | All |
+| 0xA6 | 10100110  | ANA M    | AND memory with A | 1 | 7 | All |
+| 0xA7 | 10100111  | ANA A    | AND A with A | 1 | 4 | All |
+| 0xE6 | 11100110  | ANI d8   | AND immediate with A | 2 | 7 | All |
+
+### XRA - XOR Register/Memory with Accumulator
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0xA8 | 10101000  | XRA B    | XOR B with A | 1 | 4 | All |
+| 0xA9 | 10101001  | XRA C    | XOR C with A | 1 | 4 | All |
+| 0xAA | 10101010  | XRA D    | XOR D with A | 1 | 4 | All |
+| 0xAB | 10101011  | XRA E    | XOR E with A | 1 | 4 | All |
+| 0xAC | 10101100  | XRA H    | XOR H with A | 1 | 4 | All |
+| 0xAD | 10101101  | XRA L    | XOR L with A | 1 | 4 | All |
+| 0xAE | 10101110  | XRA M    | XOR memory with A | 1 | 7 | All |
+| 0xAF | 10101111  | XRA A    | XOR A with A | 1 | 4 | All |
+| 0xEE | 11101110  | XRI d8   | XOR immediate with A | 2 | 7 | All |
+
+### ORA - OR Register/Memory with Accumulator
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0xB0 | 10110000  | ORA B    | OR B with A | 1 | 4 | All |
+| 0xB1 | 10110001  | ORA C    | OR C with A | 1 | 4 | All |
+| 0xB2 | 10110010  | ORA D    | OR D with A | 1 | 4 | All |
+| 0xB3 | 10110011  | ORA E    | OR E with A | 1 | 4 | All |
+| 0xB4 | 10110100  | ORA H    | OR H with A | 1 | 4 | All |
+| 0xB5 | 10110101  | ORA L    | OR L with A | 1 | 4 | All |
+| 0xB6 | 10110110  | ORA M    | OR memory with A | 1 | 7 | All |
+| 0xB7 | 10110111  | ORA A    | OR A with A | 1 | 4 | All |
+| 0xF6 | 11110110  | ORI d8   | OR immediate with A | 2 | 7 | All |
+
+### CMP - Compare Register/Memory with Accumulator
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0xB8 | 10111000  | CMP B    | Compare B with A | 1 | 4 | All |
+| 0xB9 | 10111001  | CMP C    | Compare C with A | 1 | 4 | All |
+| 0xBA | 10111010  | CMP D    | Compare D with A | 1 | 4 | All |
+| 0xBB | 10111011  | CMP E    | Compare E with A | 1 | 4 | All |
+| 0xBC | 10111100  | CMP H    | Compare H with A | 1 | 4 | All |
+| 0xBD | 10111101  | CMP L    | Compare L with A | 1 | 4 | All |
+| 0xBE | 10111110  | CMP M    | Compare memory with A | 1 | 7 | All |
+| 0xBF | 10111111  | CMP A    | Compare A with A | 1 | 4 | All |
+| 0xFE | 11111110  | CPI d8   | Compare immediate with A | 2 | 7 | All |
+
+### Rotate Instructions
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0x07 | 00000111  | RLC      | Rotate A left | 1 | 4 | C |
+| 0x0F | 00001111  | RRC      | Rotate A right | 1 | 4 | C |
+| 0x17 | 00010111  | RAL      | Rotate A left through carry | 1 | 4 | C |
+| 0x1F | 00011111  | RAR      | Rotate A right through carry | 1 | 4 | C |
+
+### Complement and Carry Instructions
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0x2F | 00101111  | CMA      | Complement A | 1 | 4 | None |
+| 0x37 | 00110111  | STC      | Set carry | 1 | 4 | C |
+| 0x3F | 00111111  | CMC      | Complement carry | 1 | 4 | C |
+
+## Branch Group
+
+### Jump Instructions
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0xC3 | 11000011  | JMP a16  | Jump unconditional | 3 | 10 | None |
+| 0xC2 | 11000010  | JNZ a16  | Jump if not zero | 3 | 10 | None |
+| 0xCA | 11001010  | JZ a16   | Jump if zero | 3 | 10 | None |
+| 0xD2 | 11010010  | JNC a16  | Jump if no carry | 3 | 10 | None |
+| 0xDA | 11011010  | JC a16   | Jump if carry | 3 | 10 | None |
+| 0xE2 | 11100010  | JPO a16  | Jump if parity odd | 3 | 10 | None |
+| 0xEA | 11101010  | JPE a16  | Jump if parity even | 3 | 10 | None |
+| 0xF2 | 11110010  | JP a16   | Jump if positive | 3 | 10 | None |
+| 0xFA | 11111010  | JM a16   | Jump if minus | 3 | 10 | None |
+
+### Call Instructions
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0xCD | 11001101  | CALL a16 | Call unconditional | 3 | 17 | None |
+| 0xC4 | 11000100  | CNZ a16  | Call if not zero | 3 | 11/17 | None |
+| 0xCC | 11001100  | CZ a16   | Call if zero | 3 | 11/17 | None |
+| 0xD4 | 11010100  | CNC a16  | Call if no carry | 3 | 11/17 | None |
+| 0xDC | 11011100  | CC a16   | Call if carry | 3 | 11/17 | None |
+| 0xE4 | 11100100  | CPO a16  | Call if parity odd | 3 | 11/17 | None |
+| 0xEC | 11101100  | CPE a16  | Call if parity even | 3 | 11/17 | None |
+| 0xF4 | 11110100  | CP a16   | Call if positive | 3 | 11/17 | None |
+| 0xFC | 11111100  | CM a16   | Call if minus | 3 | 11/17 | None |
+
+### Return Instructions
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0xC9 | 11001001  | RET      | Return unconditional | 1 | 10 | None |
+| 0xC0 | 11000000  | RNZ      | Return if not zero | 1 | 5/11 | None |
+| 0xC8 | 11001000  | RZ       | Return if zero | 1 | 5/11 | None |
+| 0xD0 | 11010000  | RNC      | Return if no carry | 1 | 5/11 | None |
+| 0xD8 | 11011000  | RC       | Return if carry | 1 | 5/11 | None |
+| 0xE0 | 11100000  | RPO      | Return if parity odd | 1 | 5/11 | None |
+| 0xE8 | 11101000  | RPE      | Return if parity even | 1 | 5/11 | None |
+| 0xF0 | 11110000  | RP       | Return if positive | 1 | 5/11 | None |
+| 0xF8 | 11111000  | RM       | Return if minus | 1 | 5/11 | None |
+
+### Restart Instructions (Software Interrupts)
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0xC7 | 11000111  | RST 0    | Call 0x0000 | 1 | 11 | None |
+| 0xCF | 11001111  | RST 1    | Call 0x0008 | 1 | 11 | None |
+| 0xD7 | 11010111  | RST 2    | Call 0x0010 | 1 | 11 | None |
+| 0xDF | 11011111  | RST 3    | Call 0x0018 | 1 | 11 | None |
+| 0xE7 | 11100111  | RST 4    | Call 0x0020 | 1 | 11 | None |
+| 0xEF | 11101111  | RST 5    | Call 0x0028 | 1 | 11 | None |
+| 0xF7 | 11110111  | RST 6    | Call 0x0030 | 1 | 11 | None |
+| 0xFF | 11111111  | RST 7    | Call 0x0038 | 1 | 11 | None |
+
+### PCHL - Jump to HL
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0xE9 | 11101001  | PCHL     | PC = HL | 1 | 5 | None |
+
+## Stack, I/O, and Machine Control Group
+
+### Push and Pop Instructions
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0xC5 | 11000101  | PUSH B   | Push BC | 1 | 11 | None |
+| 0xD5 | 11010101  | PUSH D   | Push DE | 1 | 11 | None |
+| 0xE5 | 11100101  | PUSH H   | Push HL | 1 | 11 | None |
+| 0xF5 | 11110101  | PUSH PSW | Push A and Flags | 1 | 11 | None |
+| 0xC1 | 11000001  | POP B    | Pop BC | 1 | 10 | None |
+| 0xD1 | 11010001  | POP D    | Pop DE | 1 | 10 | None |
+| 0xE1 | 11100001  | POP H    | Pop HL | 1 | 10 | None |
+| 0xF1 | 11110001  | POP PSW  | Pop A and Flags | 1 | 10 | All |
+
+### Exchange Stack Instructions
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0xE3 | 11100011  | XTHL     | Exchange HL with (SP) | 1 | 18 | None |
+| 0xF9 | 11111001  | SPHL     | SP = HL | 1 | 5 | None |
+
+### Input/Output Instructions
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0xDB | 11011011  | IN p8    | Input from port | 2 | 10 | None |
+| 0xD3 | 11010011  | OUT p8   | Output to port | 2 | 10 | None |
+
+### Interrupt Control
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0xFB | 11111011  | EI       | Enable interrupts | 1 | 4 | None |
+| 0xF3 | 11110011  | DI       | Disable interrupts | 1 | 4 | None |
+
+### No Operation and Halt
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles | Flags |
+|------|-----------|----------|-------------|-------|--------|-------|
+| 0x00 | 00000000  | NOP      | No operation | 1 | 4 | None |
+| 0x76 | 01110110  | HLT      | Halt processor | 1 | 7 | None |
+
+## Undocumented/Alternative NOPs
+These opcodes do nothing but are sometimes used:
+| Hex  | Binary    | Mnemonic | Description | Bytes | Cycles |
+|------|-----------|----------|-------------|-------|--------|
+| 0x08 | 00001000  | NOP*     | Undocumented | 1 | 4 |
+| 0x10 | 00010000  | NOP*     | Undocumented | 1 | 4 |
+| 0x18 | 00011000  | NOP*     | Undocumented | 1 | 4 |
+| 0x20 | 00100000  | NOP*     | Undocumented | 1 | 4 |
+| 0x28 | 00101000  | NOP*     | Undocumented | 1 | 4 |
+| 0x30 | 00110000  | NOP*     | Undocumented | 1 | 4 |
+| 0x38 | 00111000  | NOP*     | Undocumented | 1 | 4 |
+
+## Condition Code Summary
+| Code | Meaning | Flag Test |
+|------|---------|-----------|
+| NZ   | Not Zero | Z = 0 |
+| Z    | Zero | Z = 1 |
+| NC   | No Carry | C = 0 |
+| C    | Carry | C = 1 |
+| PO   | Parity Odd | P = 0 |
+| PE   | Parity Even | P = 1 |
+| P    | Plus (Positive) | S = 0 |
+| M    | Minus (Negative) | S = 1 |
+
+## Notes
+- Total valid opcodes: 244 out of 256 possible
+- 12 undefined opcodes that may act as NOPs or cause undefined behavior
+- Timing in cycles assumes no wait states
+- Conditional instructions show both taken/not taken cycle counts
+- All arithmetic/logical operations affect flags except as noted
+- "All" flags means: Sign, Zero, Parity, Auxiliary Carry, and Carry

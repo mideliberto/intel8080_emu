@@ -1,0 +1,595 @@
+// Building a complete 8080 system emulator with I/O
+
+// ============================================
+// THE 8080 I/O MODEL
+// ============================================
+
+/*
+The 8080 has two I/O instructions:
+- OUT port, A  : Send A register to port (0-255)
+- IN A, port   : Read port into A register
+
+This creates 256 possible I/O ports for peripherals.
+*/
+
+// ============================================
+// BASIC I/O TRAIT SYSTEM
+// ============================================
+
+/// Trait for any I/O device
+trait IoDevice {
+    /// Read a byte from the device
+    fn read(&mut self, port: u8) -> u8;
+    
+    /// Write a byte to the device
+    fn write(&mut self, port: u8, value: u8);
+    
+    /// Called every N CPU cycles for timing-dependent devices
+    fn tick(&mut self, cycles: u32) {}
+    
+    /// Reset the device
+    fn reset(&mut self) {}
+}
+
+/// The CPU with I/O support
+struct Intel8080 {
+    // CPU state
+    a: u8, b: u8, c: u8, d: u8, e: u8, h: u8, l: u8,
+    flags: u8, sp: u16, pc: u16,
+    memory: Box<[u8; 0x10000]>,
+    
+    // I/O bus - maps ports to devices
+    io_bus: IoBus,
+    
+    // Interrupt handling
+    interrupts_enabled: bool,
+    interrupt_pending: Option<u8>,
+    
+    // Timing
+    cycles: u64,
+}
+
+impl Intel8080 {
+    /// IN instruction - read from port
+    fn in_instruction(&mut self) -> Result<u8, String> {
+        let port = self.fetch_byte();
+        self.a = self.io_bus.read(port);
+        Ok(10)  // IN takes 10 cycles
+    }
+    
+    /// OUT instruction - write to port
+    fn out_instruction(&mut self) -> Result<u8, String> {
+        let port = self.fetch_byte();
+        self.io_bus.write(port, self.a);
+        Ok(10)  // OUT takes 10 cycles
+    }
+    
+    /// Execute one instruction and update timing
+    fn step(&mut self) -> Result<(), String> {
+        let cycles = self.execute_instruction()?;
+        self.cycles += cycles as u64;
+        
+        // Update timing-dependent devices
+        self.io_bus.tick(cycles as u32);
+        
+        // Check for interrupts
+        if self.interrupts_enabled {
+            if let Some(vector) = self.interrupt_pending.take() {
+                self.handle_interrupt(vector);
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn handle_interrupt(&mut self, vector: u8) {
+        // RST instruction behavior
+        self.interrupts_enabled = false;
+        self.push_word(self.pc);
+        self.pc = (vector * 8) as u16;  // RST vectors are at 0, 8, 16, etc.
+    }
+}
+
+// ============================================
+// I/O BUS IMPLEMENTATION
+// ============================================
+
+struct IoBus {
+    devices: Vec<Box<dyn IoDevice>>,
+    port_map: [Option<usize>; 256],  // Which device handles each port
+}
+
+impl IoBus {
+    fn new() -> Self {
+        IoBus {
+            devices: Vec::new(),
+            port_map: [None; 256],
+        }
+    }
+    
+    /// Connect a device to specific ports
+    fn connect(&mut self, device: Box<dyn IoDevice>, ports: &[u8]) {
+        let device_idx = self.devices.len();
+        self.devices.push(device);
+        
+        for &port in ports {
+            self.port_map[port as usize] = Some(device_idx);
+        }
+    }
+    
+    fn read(&mut self, port: u8) -> u8 {
+        if let Some(device_idx) = self.port_map[port as usize] {
+            self.devices[device_idx].read(port)
+        } else {
+            0xFF  // Unconnected ports typically return 0xFF
+        }
+    }
+    
+    fn write(&mut self, port: u8, value: u8) {
+        if let Some(device_idx) = self.port_map[port as usize] {
+            self.devices[device_idx].write(port, value);
+        }
+    }
+    
+    fn tick(&mut self, cycles: u32) {
+        for device in &mut self.devices {
+            device.tick(cycles);
+        }
+    }
+}
+
+// ============================================
+// EXAMPLE DEVICES
+// ============================================
+
+/// Simple terminal/console device
+struct Terminal {
+    input_buffer: Vec<u8>,
+    output_buffer: Vec<u8>,
+}
+
+impl Terminal {
+    fn new() -> Self {
+        Terminal {
+            input_buffer: Vec::new(),
+            output_buffer: Vec::new(),
+        }
+    }
+    
+    /// Add a character from the host keyboard
+    fn type_char(&mut self, ch: u8) {
+        self.input_buffer.push(ch);
+    }
+    
+    /// Get output for display
+    fn get_output(&mut self) -> String {
+        let s = String::from_utf8_lossy(&self.output_buffer).to_string();
+        self.output_buffer.clear();
+        s
+    }
+}
+
+impl IoDevice for Terminal {
+    fn read(&mut self, port: u8) -> u8 {
+        match port {
+            0x10 => {
+                // Status port - bit 0 = input ready, bit 1 = output ready
+                let input_ready = !self.input_buffer.is_empty();
+                (input_ready as u8) | 0x02  // Always ready for output
+            }
+            0x11 => {
+                // Data port - read character
+                self.input_buffer.pop().unwrap_or(0)
+            }
+            _ => 0xFF,
+        }
+    }
+    
+    fn write(&mut self, port: u8, value: u8) {
+        if port == 0x11 {
+            // Data port - write character
+            self.output_buffer.push(value);
+            
+            // Could also print immediately:
+            // print!("{}", value as char);
+            // std::io::stdout().flush().unwrap();
+        }
+    }
+}
+
+/// Simple programmable timer
+struct Timer8253 {
+    counters: [u16; 3],
+    reload_values: [u16; 3],
+    modes: [u8; 3],
+    cycles_per_tick: u32,
+    accumulated_cycles: u32,
+}
+
+impl IoDevice for Timer8253 {
+    fn read(&mut self, port: u8) -> u8 {
+        let channel = (port & 0x03) as usize;
+        if channel < 3 {
+            (self.counters[channel] & 0xFF) as u8  // Read low byte
+        } else {
+            0xFF
+        }
+    }
+    
+    fn write(&mut self, port: u8, value: u8) {
+        // Simplified - real 8253 is more complex
+        let channel = (port & 0x03) as usize;
+        if channel < 3 {
+            self.reload_values[channel] = value as u16;
+            self.counters[channel] = value as u16;
+        }
+    }
+    
+    fn tick(&mut self, cycles: u32) {
+        self.accumulated_cycles += cycles;
+        while self.accumulated_cycles >= self.cycles_per_tick {
+            self.accumulated_cycles -= self.cycles_per_tick;
+            
+            // Decrement counters
+            for i in 0..3 {
+                if self.counters[i] > 0 {
+                    self.counters[i] -= 1;
+                    if self.counters[i] == 0 {
+                        // Timer expired - could trigger interrupt
+                        self.counters[i] = self.reload_values[i];
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================
+// COMPLETE SYSTEM EXAMPLES
+// ============================================
+
+/// CP/M system configuration
+struct CpmSystem {
+    cpu: Intel8080,
+}
+
+impl CpmSystem {
+    fn new() -> Self {
+        let mut cpu = Intel8080::new();
+        
+        // Connect CP/M devices
+        let terminal = Box::new(Terminal::new());
+        cpu.io_bus.connect(terminal, &[0x10, 0x11]);  // Console
+        
+        // Load CP/M BIOS/BDOS
+        cpu.load_cpm_bios();
+        
+        CpmSystem { cpu }
+    }
+    
+    fn load_cpm_bios(&mut self) {
+        // CP/M BIOS calls at 0xF000
+        // Simplified - real BIOS is more complex
+        
+        // Console output routine at 0xF000
+        self.cpu.memory[0xF000] = 0xDB; // IN 10h (status)
+        self.cpu.memory[0xF001] = 0x10;
+        self.cpu.memory[0xF002] = 0xE6; // ANI 02h (check output ready)
+        self.cpu.memory[0xF003] = 0x02;
+        self.cpu.memory[0xF004] = 0xCA; // JZ F000h (wait if not ready)
+        self.cpu.memory[0xF005] = 0x00;
+        self.cpu.memory[0xF006] = 0xF0;
+        self.cpu.memory[0xF007] = 0xD3; // OUT 11h (send character)
+        self.cpu.memory[0xF008] = 0x11;
+        self.cpu.memory[0xF009] = 0xC9; // RET
+    }
+}
+
+/// Space Invaders arcade system
+struct SpaceInvadersSystem {
+    cpu: Intel8080,
+    video_ram: Box<[u8; 0x1C00]>,  // 224x256 pixels, 1bpp
+    shift_register: u16,
+    shift_offset: u8,
+}
+
+impl SpaceInvadersSystem {
+    fn new() -> Self {
+        let mut cpu = Intel8080::new();
+        
+        // Map video RAM at 0x2400-0x3FFF
+        // (Would need memory-mapped I/O support)
+        
+        // Connect I/O devices
+        let sound = Box::new(SpaceInvadersSound::new());
+        cpu.io_bus.connect(sound, &[0x03, 0x05]);
+        
+        SpaceInvadersSystem {
+            cpu,
+            video_ram: Box::new([0; 0x1C00]),
+            shift_register: 0,
+            shift_offset: 0,
+        }
+    }
+    
+    fn run_frame(&mut self) {
+        // Space Invaders runs at 2MHz, 60Hz refresh
+        let cycles_per_frame = 2_000_000 / 60;
+        let cycles_per_half = cycles_per_frame / 2;
+        
+        // First half of frame
+        for _ in 0..cycles_per_half {
+            self.cpu.step().unwrap();
+        }
+        
+        // Generate mid-frame interrupt (RST 1)
+        self.cpu.interrupt_pending = Some(1);
+        
+        // Second half of frame
+        for _ in 0..cycles_per_half {
+            self.cpu.step().unwrap();
+        }
+        
+        // Generate end-frame interrupt (RST 2)
+        self.cpu.interrupt_pending = Some(2);
+        
+        // Render the screen
+        self.render_frame();
+    }
+    
+    fn render_frame(&self) {
+        // Convert 1bpp video RAM to pixels
+        // Space Invaders screen is rotated 90 degrees CCW!
+    }
+}
+
+struct SpaceInvadersSound {
+    // Sound effects state
+}
+
+impl IoDevice for SpaceInvadersSound {
+    fn write(&mut self, port: u8, value: u8) {
+        match port {
+            0x03 => {
+                // Port 3: UFO sound, shot sound, etc.
+                if value & 0x01 != 0 { /* UFO sound */ }
+                if value & 0x02 != 0 { /* Shot sound */ }
+                if value & 0x04 != 0 { /* Flash */ }
+                if value & 0x08 != 0 { /* Invader die */ }
+            }
+            0x05 => {
+                // Port 5: Fleet sounds, UFO hit
+                if value & 0x01 != 0 { /* Fleet 1 */ }
+                if value & 0x02 != 0 { /* Fleet 2 */ }
+                if value & 0x04 != 0 { /* Fleet 3 */ }
+                if value & 0x08 != 0 { /* Fleet 4 */ }
+                if value & 0x10 != 0 { /* UFO hit */ }
+            }
+            _ => {}
+        }
+    }
+    
+    fn read(&mut self, _port: u8) -> u8 {
+        0xFF  // Sound ports are write-only
+    }
+}
+
+// ============================================
+// ALTAIR 8800 SYSTEM
+// ============================================
+
+struct Altair8800 {
+    cpu: Intel8080,
+    sense_switches: u8,
+    front_panel: FrontPanel,
+}
+
+struct FrontPanel {
+    address_lights: u16,
+    data_lights: u8,
+    status_lights: u8,
+}
+
+impl Altair8800 {
+    fn new() -> Self {
+        let mut cpu = Intel8080::new();
+        
+        // Altair I/O devices
+        let sio = Box::new(Serial8251::new());  // Serial port
+        cpu.io_bus.connect(sio, &[0x00, 0x01]);
+        
+        let disk = Box::new(Disk88::new());  // 88-DISK controller
+        cpu.io_bus.connect(disk, &[0x08, 0x09, 0x0A]);
+        
+        Altair8800 {
+            cpu,
+            sense_switches: 0,
+            front_panel: FrontPanel {
+                address_lights: 0,
+                data_lights: 0,
+                status_lights: 0,
+            },
+        }
+    }
+    
+    fn update_front_panel(&mut self) {
+        // Update lights based on CPU state
+        self.front_panel.address_lights = self.cpu.pc;
+        self.front_panel.data_lights = self.cpu.memory[self.cpu.pc as usize];
+        
+        // Status bits show CPU state
+        self.front_panel.status_lights = 0;
+        if self.cpu.interrupts_enabled {
+            self.front_panel.status_lights |= 0x01;  // INTE light
+        }
+        // ... more status lights
+    }
+}
+
+struct Serial8251 {
+    rx_buffer: Vec<u8>,
+    tx_buffer: Vec<u8>,
+    status: u8,
+}
+
+impl IoDevice for Serial8251 {
+    fn read(&mut self, port: u8) -> u8 {
+        match port {
+            0x00 => {
+                // Data register
+                self.rx_buffer.pop().unwrap_or(0)
+            }
+            0x01 => {
+                // Status register
+                let rx_ready = !self.rx_buffer.is_empty();
+                let tx_ready = true;  // Always ready to transmit
+                (rx_ready as u8) | ((tx_ready as u8) << 1)
+            }
+            _ => 0xFF,
+        }
+    }
+    
+    fn write(&mut self, port: u8, value: u8) {
+        if port == 0x00 {
+            // Send byte out serial port
+            self.tx_buffer.push(value);
+            // In real implementation, would send to host serial port
+        }
+    }
+}
+
+struct Disk88 {
+    drives: [Option<DiskImage>; 4],
+    selected_drive: u8,
+    track: u8,
+    sector: u8,
+    dma_address: u16,
+}
+
+struct DiskImage {
+    data: Vec<u8>,
+    tracks: u8,
+    sectors_per_track: u8,
+    bytes_per_sector: u16,
+}
+
+impl IoDevice for Disk88 {
+    fn write(&mut self, port: u8, value: u8) {
+        match port {
+            0x08 => {
+                // Control register
+                self.selected_drive = value & 0x03;
+                // More control bits...
+            }
+            0x09 => {
+                // Sector/track register
+                self.sector = value & 0x1F;
+                self.track = value >> 5;
+            }
+            0x0A => {
+                // Command register
+                match value {
+                    0x01 => self.read_sector(),
+                    0x02 => self.write_sector(),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    fn read(&mut self, port: u8) -> u8 {
+        if port == 0x08 {
+            // Status register
+            0x01  // Always ready
+        } else {
+            0xFF
+        }
+    }
+}
+
+impl Disk88 {
+    fn read_sector(&mut self) {
+        // Read sector from disk image to memory at DMA address
+        if let Some(disk) = &self.drives[self.selected_drive as usize] {
+            let offset = (self.track as usize * disk.sectors_per_track as usize + 
+                         self.sector as usize) * disk.bytes_per_sector as usize;
+            // Copy to CPU memory at DMA address...
+        }
+    }
+    
+    fn write_sector(&mut self) {
+        // Write sector from memory to disk image
+    }
+}
+
+// ============================================
+// USAGE EXAMPLE
+// ============================================
+
+fn main() {
+    // Example: Running CP/M
+    let mut system = CpmSystem::new();
+    
+    // Load a CP/M program
+    system.cpu.load_program(b"HELLO.COM", 0x0100);
+    
+    // Run the system
+    loop {
+        system.cpu.step().unwrap();
+        
+        // Check for host keyboard input
+        // if let Some(key) = get_keyboard_input() {
+        //     system.terminal.type_char(key);
+        // }
+        
+        // Display output
+        // let output = system.terminal.get_output();
+        // if !output.is_empty() {
+        //     print!("{}", output);
+        // }
+        
+        if system.cpu.halted {
+            break;
+        }
+    }
+}
+
+/*
+KEY CONCEPTS:
+
+1. PORT-MAPPED I/O:
+   - 8080 has dedicated IN/OUT instructions
+   - 256 possible ports (0-255)
+   - Each device responds to specific ports
+
+2. DEVICE ABSTRACTION:
+   - IoDevice trait for all peripherals
+   - IoBus manages port mapping
+   - Devices can be hot-swapped
+
+3. TIMING:
+   - Devices get tick() calls for time-based behavior
+   - Important for video refresh, timers, sound
+
+4. SYSTEM ARCHITECTURE:
+   - CPU is just one component
+   - Need appropriate devices for target system
+   - Each system (CP/M, Space Invaders, Altair) has different hardware
+
+5. MEMORY-MAPPED I/O:
+   - Some systems also map devices to memory addresses
+   - Video RAM often memory-mapped
+   - Requires modifying memory access methods
+
+6. INTERRUPTS:
+   - Devices can trigger CPU interrupts
+   - Essential for real-time response
+   - 8080 has RST 0-7 (8 interrupt vectors)
+
+This modular approach lets you:
+- Swap devices easily
+- Support multiple systems with one CPU
+- Debug I/O separately from CPU
+- Add new peripherals incrementally
+*/

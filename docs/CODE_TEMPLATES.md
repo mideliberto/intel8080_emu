@@ -158,9 +158,14 @@ pub const CONSOLE_DATA_IN: u8 = 0x01;
 pub const CONSOLE_STATUS: u8 = 0x02;
 
 pub const STORAGE_ADDR_LO: u8 = 0x08;
-pub const STORAGE_ADDR_HI: u8 = 0x09;
-pub const STORAGE_DATA: u8 = 0x0A;
-pub const STORAGE_STATUS: u8 = 0x0B;
+pub const STORAGE_ADDR_MID: u8 = 0x09;
+pub const STORAGE_ADDR_HI: u8 = 0x0A;
+pub const STORAGE_DATA: u8 = 0x0B;
+pub const STORAGE_STATUS: u8 = 0x0C;
+
+pub const MOUNT_FILENAME: u8 = 0x0D;
+pub const MOUNT_CONTROL: u8 = 0x0E;
+pub const MOUNT_STATUS: u8 = 0x0F;
 
 // ... etc
 ```

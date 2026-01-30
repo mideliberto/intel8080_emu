@@ -1,2 +1,6 @@
 /target
 /tmp
+/storage
+rom/*.lst
+rom/*.p
+.DS_Store

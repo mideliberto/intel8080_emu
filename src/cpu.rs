@@ -6,7 +6,6 @@ use crate::io::IoDevice;
 use std::io;
 use std::path::Path;
 
-
 use crate::registers::{Register, RegisterPair, PushPopPair, Condition};
 use crate::registers::{FLAG_CARRY, FLAG_BIT_1, FLAG_PARITY, FLAG_AUX_CARRY, FLAG_ZERO, FLAG_SIGN};
 
@@ -248,17 +247,17 @@ impl Intel8080 {
     // ============================================
     
         pub fn update_flags(&mut self, result: u8, carry: bool) {
-            println!("update_flags: result={}, carry={}", result, carry);
+
             self.flags = FLAG_BIT_1;
             
             if result == 0 { 
-                println!("  Setting FLAG_ZERO (0x{:02X})", FLAG_ZERO);
+                
                 self.flags |= FLAG_ZERO; 
             }
             if result & 0x80 != 0 { self.flags |= FLAG_SIGN; }
             if result.count_ones() % 2 == 0 { self.flags |= FLAG_PARITY; }
             if carry { self.flags |= FLAG_CARRY; }
-            println!("  Final flags: {:08b}", self.flags);
+            
         }
             fn update_flags_arithmetic(&mut self, result: u8, carry: bool, aux_carry: bool) {
             self.flags = FLAG_BIT_1;
@@ -1053,12 +1052,12 @@ impl Intel8080 {
             print!("  {:04X}: ", addr);
             for i in 0..8 {
                 print!("{:02X} ", self.read_byte(addr.wrapping_add(i)));
-                //print!("{:02X} ", self.memory[addr.wrapping_add(i) as usize]);
+
             }
             print!(" |");
             for i in 0..8 {
                 let byte = self.read_byte(addr.wrapping_add(i));
-                //let byte = self.memory[addr.wrapping_add(i) as usize];
+
                 let ch = if byte >= 0x20 && byte <= 0x7E { byte as char } else { '.' };
                 print!("{}", ch);
             }
