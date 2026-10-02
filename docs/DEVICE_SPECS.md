@@ -9,6 +9,8 @@ Same ports everywhere. 8080 code runs identically on:
 
 The 8080 doesn't know what's behind the ports. It doesn't care.
 
+**Timing contract (decided 2026-10-02):** every device answers within its IN/OUT cycle. On hardware, any access to a Pi port (0x08-0x6F) holds the 8080's READY line low until the Pi releases it, using one flip-flop and a GPIO line. Protocols don't need busy-polling for single-byte operations. Long operations (a mailbox request, for example) report progress through a status port.
+
 ---
 
 ## Console (Ports 0x00-0x02)
@@ -70,16 +72,16 @@ CONIN:
 
 | Value | Function |
 |-------|----------|
-| 0x00 | Disable ROM overlay (expose RAM at 0x0000) |
-| 0x01 | Halt CPU (**not implemented**; see TODO.md Open Decisions) |
-| 0xFF | Cold reset (re-enable overlay) |
+| any | Disable ROM overlay (expose RAM at 0x0000) |
+
+Decided 2026-10-02: any write disables the overlay. No halt command (the 8080 has `HLT`) and no software cold reset (use the reset line). The emulator still treats 0x00 as disable and 0xFF as cold reset; change pending in TODO.md. The ROM writes 0x00.
 
 ### Status Byte (Port 0xFF Read)
 
 | Bit | Meaning |
 |-----|---------|
 | 0 | ROM overlay state (1=enabled, 0=disabled) |
-| 1-7 | Reserved / sense switches |
+| 1-7 | Undefined (mask them; emulator returns 0) |
 
 ---
 
@@ -104,8 +106,8 @@ Linear-addressed storage with 24-bit addressing. 16MB address space. No sectors,
 | Bit | Meaning |
 |-----|---------|
 | 0 | Mounted (1=yes) |
-| 1 | Ready (always 1) |
-| 7 | EOF (address >= file size) |
+| 1 | Ready (always 1; hardware uses the READY wait-state) |
+| 7 | EOF (address >= file size; also 1 when nothing is mounted) |
 
 ### Control Commands (Port 0x0C Write)
 
@@ -114,6 +116,12 @@ Linear-addressed storage with 24-bit addressing. 16MB address space. No sectors,
 | 0x00 | Reset address to 0 |
 | 0x01 | Decrement address |
 | 0x02 | Flush write buffer |
+
+### Data Port Edge Cases
+
+- Read at or past EOF returns 0xFF. Decided 2026-10-02: the address still advances, like every other data access. The emulator currently does not advance on a past-EOF read; fix pending in TODO.md.
+- Write past EOF extends the file.
+- Read with nothing mounted returns 0xFF; write with nothing mounted is dropped.
 
 ### Read Sequence
 
@@ -182,9 +190,11 @@ WRITE_LOOP:
 | Value | Meaning |
 |-------|---------|
 | 0x00 | OK / Mounted |
-| 0x01 | File not found |
+| 0x01 | Mount: error opening file. Query: not mounted |
 | 0x02 | Invalid filename |
-| 0xFF | Busy |
+| 0xFF | Reserved (never returned; hardware uses READY) |
+
+Mount creates a missing file (empty) and returns 0x00. There is no "file not found"; decided 2026-10-02, so that `W` to a new file works.
 
 ### Mount Sequence
 
@@ -199,14 +209,9 @@ SEND_NAME:
         INX     H
         JMP     SEND_NAME
 DO_MOUNT:
-        XRA     A
-        OUT     0DH             ; Null terminator
         MVI     A,01H
-        OUT     0EH             ; Mount command
-WAIT_MOUNT:
+        OUT     0EH             ; Mount command (ends the name)
         IN      0FH
-        CPI     0FFH
-        JZ      WAIT_MOUNT      ; Poll until not busy
         ORA     A
         JNZ     MOUNT_ERROR     ; Non-zero = error
 
@@ -215,231 +220,77 @@ FILENAME: DB 'CLAUDE.BIN',0
 
 ### Filename Rules
 
-- Max 12 characters (8.3 format)
+- Max 12 characters. 8.3 is a convention, not enforced
 - Valid chars: a-z, A-Z, 0-9, ., -, _
-- Null-terminated
+- No terminator needed: Mount (0x01) ends the name and clears the buffer. 0x00 on port 0x0D is ignored
 - Relative to storage base path
+- Decided 2026-10-02:
+  - Names over 12 chars return 0x02. The emulator currently truncates to 12 and mounts that; fix pending.
+  - A failed mount unmounts the previous file. The emulator currently leaves it mounted; fix pending.
 
 ---
 
-## Disassembler (Ports 0x20-0x27)
+## Service Mailbox (Ports 0x10-0x13)
 
-**Status:** 🔲 Future
+**Status:** 🔲 Future (first use: Phase 6 `TIME`)
+
+Decided 2026-10-02. Every Pi-side service goes through this one device: time, HTTP, Claude, assembler, disassembler. The 8080 sends a text command and reads back a byte stream. The Pi does the hard parts: TLS, DNS, JSON, NTP, the API key. The ROM needs one send/poll/stream routine, which the `T`, `N`, `Q`, `A` and `U` commands share.
 
 ### Registers
 
 | Port | Read | Write |
 |------|------|-------|
-| 0x20 | - | Opcode byte |
-| 0x21 | - | Command |
-| 0x22 | Status | - |
-| 0x23 | Text char | - |
+| 0x10 | - | Command char |
+| 0x11 | - | Control |
+| 0x12 | Status | - |
+| 0x13 | Response byte | - |
 
-### Commands
+### Control (Port 0x11 Write)
 
 | Value | Function |
 |-------|----------|
-| 0x01 | Disassemble |
-| 0x02 | Reset |
+| 0x01 | Execute the command buffered via 0x10 |
+| 0x02 | Clear (discard command and response) |
 
-### Status Byte
-
-| Bits | Meaning |
-|------|---------|
-| 0-6 | Text length |
-| 7 | Error flag |
-
----
-
-## Assembler (Ports 0x28-0x2F)
-
-**Status:** 🔲 Future
-
-### Registers
-
-| Port | Read | Write |
-|------|------|-------|
-| 0x28 | - | Text char |
-| 0x29 | - | Command |
-| 0x2A | Status | - |
-| 0x2B | Opcode byte | - |
-| 0x2C | Error position | - |
-
-### Commands
-
-| Value | Function |
-|-------|----------|
-| 0x01 | Assemble |
-| 0x02 | Reset |
-
-### Status Byte
-
-| Bits | Meaning |
-|------|---------|
-| 0-3 | Bytes assembled |
-| 4-7 | Error code (0=success) |
-
----
-
-## Timer 8253 (Ports 0x70-0x73)
-
-**Status:** 🔲 Future
-
-### Registers
-
-| Port | Read | Write |
-|------|------|-------|
-| 0x70 | Counter 0 | Counter 0 |
-| 0x71 | Counter 1 | Counter 1 |
-| 0x72 | Counter 2 | Counter 2 |
-| 0x73 | - | Control |
-
-### Control Register Format
-
-```
-Bits 7-6: Counter select (00=0, 01=1, 10=2, 11=read-back)
-Bits 5-4: R/W mode (00=latch, 01=LSB, 10=MSB, 11=LSB then MSB)
-Bits 3-1: Mode (010=rate generator - only mode implemented)
-Bit 0:    BCD (0=binary - only mode supported)
-```
-
-### Initialize 100Hz Timer (2MHz CPU)
-
-```asm
-; Count = 2,000,000 / 100 = 20,000 = 0x4E20
-        DI
-        MVI     A,00110100b     ; Counter 0, LSB/MSB, Mode 2
-        OUT     73H
-        MVI     A,20H           ; LSB
-        OUT     70H
-        MVI     A,4EH           ; MSB
-        OUT     70H
-        EI
-```
-
----
-
-## Claude API (Ports 0x38-0x3F)
-
-**Status:** 🔲 Phase 9
-
-The 8080 talks to Claude. It sends bytes, gets bytes back. Doesn't know it's talking to an AI.
-
-### Registers
-
-| Port | Read | Write |
-|------|------|-------|
-| 0x38 | - | Prompt char |
-| 0x39 | - | Command |
-| 0x3A | Status | - |
-| 0x3B | Response char | - |
-
-### Commands (Port 0x39 Write)
-
-| Value | Function |
-|-------|----------|
-| 0x01 | Send (submit prompt) |
-| 0x02 | Clear (reset buffers) |
-
-### Status Byte (Port 0x3A Read)
+### Status (Port 0x12 Read)
 
 | Value | Meaning |
 |-------|---------|
 | 0x00 | Idle |
-| 0x01 | Waiting (request in flight) |
-| 0x02 | Ready (response available) |
-| 0x03 | Done (no more response chars) |
+| 0x01 | Busy (request in flight) |
+| 0x02 | Response byte available |
+| 0x03 | Done (response exhausted) |
 | 0x80+ | Error |
-
-### Usage
-
-```asm
-; Ask Claude something
-        LXI     H,PROMPT
-SEND_PROMPT:
-        MOV     A,M
-        ORA     A
-        JZ      DO_SEND
-        OUT     38H             ; Prompt char
-        INX     H
-        JMP     SEND_PROMPT
-DO_SEND:
-        MVI     A,01H
-        OUT     39H             ; Send command
-WAIT_RESPONSE:
-        IN      3AH             ; Status
-        CPI     02H             ; Ready?
-        JNZ     WAIT_RESPONSE
-READ_RESPONSE:
-        IN      3AH
-        CPI     03H             ; Done?
-        JZ      FINISHED
-        IN      3BH             ; Response char
-        CALL    CONOUT
-        JMP     READ_RESPONSE
-        
-PROMPT: DB 'What is the 8080?',0
-```
-
-### Implementation Notes
-
-- API key stored in config file, not ROM
-- System prompt includes project context
-- Response streaming handles Claude's output
-- Coprocessor (Rust/Pi) handles TLS, JSON, etc.
-
----
-
-## HTTP Client (Ports 0x40-0x47)
-
-**Status:** 🔲 Future
-
-### Registers
-
-| Port | Read | Write |
-|------|------|-------|
-| 0x40 | - | URL char |
-| 0x41 | - | Command |
-| 0x42 | Status code | - |
-| 0x43 | Header char | - |
-| 0x44 | Body char | - |
-| 0x45 | - | POST body |
 
 ### Commands
 
-| Value | Function |
-|-------|----------|
-| 0x01 | GET |
-| 0x02 | POST |
+Text, defined by the phase that needs them. Planned:
+
+| Command | Phase | Response |
+|---------|-------|----------|
+| `TIME` | 6 | Current date/time as text (the Pi keeps time via NTP) |
+| `ASM <line>` | 7 | Opcode bytes |
+| `DIS <bytes>` | 7 | Disassembly text |
+| `GET <url> [> FILE]` | 8 | Body as text, or written to a storage file |
+| `ASK <prompt>` | 9 | Claude's reply as text |
+
+Large results (web pages, books) go into a storage file. The 8080 then reads them through the storage ports it already has.
+
+### Implementation
+
+The device logic lives in Rust behind the `IoDevice` trait. In the emulator the CPU bus calls it; on the Pi a GPIO front end calls the same code. It is written once.
 
 ---
 
-## System Time (Ports 0x60-0x6F)
+## Superseded Device Specs
 
-**Status:** 🔲 Future
+Replaced on 2026-10-02 by the Service Mailbox. The full text is in git history (commit 41f04ce and earlier).
 
-Read-only time registers.
-
-### Current Time (0x60-0x66)
-
-| Port | Value |
-|------|-------|
-| 0x60 | Second (0-59) |
-| 0x61 | Minute (0-59) |
-| 0x62 | Hour (0-23) |
-| 0x63 | Day (1-31) |
-| 0x64 | Month (1-12) |
-| 0x65 | Year (since 1900) |
-| 0x66 | Day of week (0=Sun) |
-
-### Uptime (0x68-0x6B)
-
-| Port | Value |
-|------|-------|
-| 0x68 | Seconds |
-| 0x69 | Minutes |
-| 0x6A | Hours |
-| 0x6B | Days |
+- Disassembler (0x20-0x27) and Assembler (0x28-0x2F): now `DIS` / `ASM`
+- Claude API (0x38-0x3F): now `ASK`
+- HTTP Client (0x40-0x47): now `GET`
+- System Time (0x60-0x6F): now `TIME`
+- Timer 8253 (0x70-0x73): deferred to Someday. Nothing needs a periodic interrupt yet. If one comes back, it is a local chip in 0x70+, not a Pi device.
 
 ---
 
@@ -451,5 +302,4 @@ For future physical build:
 |--------|------|-----|---------|
 | Console | crossterm | UART | Serial |
 | Storage | std::fs | SD card | SD.h |
-| Network | reqwest | requests | WiFi.h |
-| Timer | thread::sleep | hardware | Timer1 |
+| Service Mailbox | Rust device | same Rust code behind GPIO | - |

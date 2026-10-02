@@ -9,7 +9,7 @@
 | 3 | Execution & I/O | ✅ Complete |
 | 4 | Storage System | ✅ Complete |
 | **5** | **Program Loading** | **🔲 Next** |
-| 6 | Timing System | 🔲 Future |
+| 6 | Time | 🔲 Future |
 | 7 | Development Tools | 🔲 Future |
 | 8 | Internet Services | 🔲 Future |
 | 9 | Claude Integration | 🔲 Future |
@@ -86,49 +86,49 @@ ROM:
 
 ## Phase 5: Program Loading 🔲 NEXT
 
-**Goal:** Load programs into memory
+**Goal:** Load programs into memory by pasting Intel HEX at the prompt. The 8080 parses it in ROM.
 
-**Tasks:**
-- [ ] Intel HEX loader (command letter TBD; `H` is Hex Math, see TODO.md Open Decisions)
-- [ ] Checksum validation
-- [ ] Type 00 (data) and Type 01 (EOF) records
+**Decided 2026-10-02:**
+- A line starting with `:` at the prompt is a HEX record. There is no command letter and no loader mode; each line stands alone.
+- Records touching 0x0000-0x00FF or 0xEF00-0xFFFF are rejected.
+- Max 34 data bytes per record (the 80-char LINE_BUFFER). A longer line gets "Line too long".
+- Types 00 (data) and 01 (EOF) only; 02-05 are errors. Each record is validated in full (length + checksum) before any byte is written.
+- Paste speed: on hardware the sender paces lines (per-line delay). The console chip and flow control are hardware-build decisions.
+
+**Tasks:** see TODO.md Next (build order).
 
 **Success Criteria:**
 ```
-> H
-:10010000...
-:00000001FF
-Loaded 256 bytes at 0100
+> :10010000...
+> :00000001FF
 ```
+Each data record is accepted silently or reports an error. Bytes land in memory, verifiable with `D`.
 
 ---
 
-## Phase 6: Timing System
+## Phase 6: Time
 
-**Goal:** Real-time clock and interrupts
+**Goal:** The 8080 knows what time it is.
 
 **Tasks:**
-- [ ] TimeDevice (Rust) - ports 0x60-0x6F
-- [ ] Timer8253 (Rust) - ports 0x70-0x73
-- [ ] TIMER_ISR in ROM
+- [ ] Service Mailbox device (Rust) - ports 0x10-0x13 (DEVICE_SPECS.md)
+- [ ] ROM mailbox routine: send command, poll, stream response
+- [ ] `TIME` mailbox command
 - [ ] T command (show time)
-- [ ] TI command (init timer)
-- [ ] TS command (timer status)
 
 **Success Criteria:**
-- Interrupts fire at configured rate
-- Software clock updates
 - T command shows current time
+
+Decided 2026-10-02: the 8253, TIMER_ISR, TI/TS commands and the RST 7 vector move to Someday until something needs a periodic interrupt. The Pi keeps wall-clock time via NTP.
 
 ---
 
 ## Phase 7: Development Tools
 
-**Goal:** Assembly and disassembly via I/O devices
+**Goal:** Assembly and disassembly via the Service Mailbox
 
 **Tasks:**
-- [ ] DisassemblerDevice (Rust) - ports 0x20-0x27
-- [ ] AssemblerDevice (Rust) - ports 0x28-0x2F
+- [ ] `ASM` / `DIS` mailbox commands (Rust)
 - [ ] A command (assemble line)
 - [ ] U command (unassemble/disassemble)
 
@@ -149,17 +149,13 @@ Loaded 256 bytes at 0100
 **Goal:** HTTP connectivity from 8080
 
 **Tasks:**
-- [ ] HTTPDevice (Rust) - ports 0x40-0x4F
-- [ ] HTTP GET support
-- [ ] Response streaming (chunked for 8080's memory)
-- [ ] N G command (HTTP GET)
-- [ ] N T command (get network time)
+- [ ] `GET <url> [> FILE]` mailbox command
+- [ ] Response streaming; large bodies go to a storage file
+- [ ] N command (HTTP GET)
 
 **Success Criteria:**
 ```
-> N T
-2025-12-19 14:32:07
-> N G http://example.com/
+> N http://example.com/
 <!doctype html>...
 ```
 
@@ -170,23 +166,14 @@ Loaded 256 bytes at 0100
 **Goal:** The 8080 talks to Claude
 
 **Tasks:**
-- [ ] ClaudeDevice (Rust) - ports 0x38-0x3F
-- [ ] API key management (config file, not in ROM)
+- [ ] `ASK <prompt>` mailbox command
+- [ ] API key management (config file on the coprocessor, not in ROM)
 - [ ] System prompt with project context
-- [ ] Request/response buffering
-- [ ] A command (ask Claude)
-
-**Device Protocol:**
-```
-0x38: Prompt char (write)
-0x39: Command (write): 01=send, 02=clear
-0x3A: Status (read): 00=idle, 01=waiting, 02=ready, 80+=error
-0x3B: Response char (read)
-```
+- [ ] Q command (ask Claude). `A` stays assemble; decided 2026-10-02
 
 **Success Criteria:**
 ```
-> A What is 6502 vs 8080?
+> Q What is 6502 vs 8080?
 The 6502 and 8080 are both 8-bit processors from 1975...
 ```
 
@@ -202,17 +189,17 @@ The 6502 and 8080 are both 8-bit processors from 1975...
 - [ ] Breakpoint system (Rust side)
 - [ ] Single-step execution
 - [ ] Instruction trace
-- [ ] Emulator command parser (`:` prefix)
-- [ ] :bp, :step, :trace commands
-- [ ] R command (register display) - deferred from Phase 3
+- [ ] Emulator command parser (prefix TBD; `:` belongs to Intel HEX)
+- [ ] bp, step, trace commands
+- [ ] R command (register display) - deferred from Phase 3. G pushes a WARM return (decided 2026-10-02), but R still needs register capture
 
 **Success Criteria:**
 ```
-:bp 1000
+<prefix>bp 1000
 Breakpoint set at 1000
 > G 100
 Break at 1000
-:step
+<prefix>step
 1001: 3E 42    MVI  A,42H
 ```
 

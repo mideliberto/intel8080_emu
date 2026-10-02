@@ -119,7 +119,7 @@ Control commands:
 
 Status codes:
   0x00: OK / Mounted
-  0x01: Not found
+  0x01: Open error (mount; missing files are created) / Not mounted (query)
   0x02: Invalid filename
 ```
 
@@ -153,9 +153,9 @@ FF:    System status
 
 ## Future Phases
 
-- **Phase 5:** Intel HEX loader (command letter TBD; `H` is Hex Math, see TODO.md Open Decisions)
-- **Phase 6:** Timer device, interrupts
-- **Phase 7:** Assembler/disassembler devices
-- **Phase 8:** HTTP client, network time
-- **Phase 9:** Claude API integration
+- **Phase 5:** Intel HEX loader (lines starting with `:` auto-detected at the prompt)
+- **Phase 6:** Time (Service Mailbox `TIME`, T command)
+- **Phase 7:** Assembler/disassembler (mailbox `ASM`/`DIS`, A/U commands)
+- **Phase 8:** HTTP GET (mailbox `GET`, N command)
+- **Phase 9:** Claude integration (mailbox `ASK`, Q command)
 - **Phase 10:** Debugger (breakpoints, single-step, R command)

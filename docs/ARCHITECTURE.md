@@ -5,14 +5,16 @@
 ### Overview
 
 ```
-0x0000-0x003F   RST Vector Table (64 bytes, RAM after boot)
-0x0040-0x007F   Jump Table (64 bytes, RAM after boot)
+0x0000-0x007F   Page 0 low (128 bytes, RAM after boot, unused by monitor)
 0x0080-0x00FF   System Workspace (128 bytes, RAM)
-0x0100-0xEFFF   User Program Area (59,904 bytes)
+0x0100-0xEEFF   User Program Area (60,928 bytes)
+0xEF00-0xEFFF   Monitor Stack Page (stack grows down from 0xF000)
 0xF000-0xFFFF   Monitor ROM (4,096 bytes)
 ```
 
-**Rationale:** Clean separation. Vectors at bottom, ROM at top, everything else is playground. 0x0100 is a nice round start address for user code.
+**Rationale:** Clean separation. Workspace at the bottom, stack page and ROM at the top, everything else is playground. 0x0100 is a nice round start address for user code.
+
+**No vectors or API table in page 0.** Decided 2026-10-02: there is no public API jump table and no RST vector copy. RST 7 gets a single JMP when something needs interrupts (Someday). Programs exit back to the monitor with `RET` (see G in QUICK_REFERENCE), not `JMP 0000`.
 
 ### Detailed Memory Map
 
@@ -20,26 +22,7 @@
 +----------------+----------------------------------------------+
 | Address Range  | Description                                  |
 +----------------+----------------------------------------------+
-| 0x0000-0x0007  | RST 0 Vector - JMP COLD_START                |
-| 0x0008-0x000F  | RST 1 Vector - JMP CONOUT_IMPL               |
-| 0x0010-0x0017  | RST 2 Vector - JMP CONIN_IMPL                |
-| 0x0018-0x001F  | RST 3 Vector - JMP CONST_IMPL                |
-| 0x0020-0x0027  | RST 4 Vector (Reserved)                      |
-| 0x0028-0x002F  | RST 5 Vector (Reserved)                      |
-| 0x0030-0x0037  | RST 6 Vector (Reserved)                      |
-| 0x0038-0x003F  | RST 7 Vector - JMP TIMER_ISR                 |
-+----------------+----------------------------------------------+
-| 0x0040-0x0042  | API: CONOUT (JMP)                            |
-| 0x0043-0x0045  | API: CONIN (JMP)                             |
-| 0x0046-0x0048  | API: CONST (JMP)                             |
-| 0x0049-0x004B  | API: PRINT_STRING (JMP)                      |
-| 0x004C-0x004E  | API: PRINT_HEX_BYTE (JMP)                    |
-| 0x004F-0x0051  | API: PRINT_HEX_WORD (JMP)                    |
-| 0x0052-0x0054  | API: READ_HEX_WORD (JMP)                     |
-| 0x0055-0x0057  | API: SKIP_SPACES (JMP)                       |
-| 0x0058-0x005A  | API: STORAGE_READ (JMP)                      |
-| 0x005B-0x005D  | API: STORAGE_WRITE (JMP)                     |
-| 0x005E-0x007F  | API: Additional entries / padding            |
+| 0x0000-0x007F  | Unused (uninitialised RAM after boot)        |
 +----------------+----------------------------------------------+
 | 0x0080-0x00CF  | LINE_BUFFER (80 bytes)                       |
 | 0x00D0-0x00D1  | BUFFER_PTR (2 bytes)                         |
@@ -53,11 +36,15 @@
 | 0x00E7-0x00E9  | STOR_ADDR (3 bytes, 24-bit)                  |
 | 0x00EA-0x00FF  | Available (22 bytes)                         |
 +----------------+----------------------------------------------+
-| 0x0100-0xEFFF  | USER PROGRAM AREA                            |
+| 0x0100-0xEEFF  | USER PROGRAM AREA                            |
++----------------+----------------------------------------------+
+| 0xEF00-0xEFFF  | MONITOR STACK PAGE (SP starts at 0xF000)     |
 +----------------+----------------------------------------------+
 | 0xF000-0xFFFF  | MONITOR ROM                                  |
 +----------------+----------------------------------------------+
 ```
+
+The HEX loader (Phase 5) rejects records that touch page 0x00 or 0xEF00-0xFFFF. The other monitor commands (F, M, E, L) do not guard; writing there clobbers the workspace or the stack.
 
 ---
 
@@ -65,7 +52,7 @@
 
 ### The Problem
 
-The 8080 starts execution at 0x0000 on reset. Our ROM lives at 0xF000. We need vectors at low addresses for interrupts, but RAM is undefined at power-on.
+The 8080 starts execution at 0x0000 on reset. Our ROM lives at 0xF000, and RAM is undefined at power-on.
 
 ### The Solution
 
@@ -91,16 +78,20 @@ ROM overlay with hardware bank switching. On reset, ROM appears at *two* address
 | Trigger | Result |
 |---------|--------|
 | Hardware RESET | Overlay enabled, PC=0x0000 |
-| OUT 0xFE, 0x00 | Overlay disabled (RAM at 0x0000) |
-| OUT 0xFE, 0xFF | Cold reset (overlay re-enabled) |
+| OUT 0xFE (any value) | Overlay disabled (RAM at 0x0000) |
+
+Decided 2026-10-02: any write to 0xFE disables the overlay; there is no software cold reset (use the reset line). The emulator currently acts only on 0x00 (disable) and 0xFF (cold reset); change pending in TODO.md. The ROM writes 0x00, which works under both.
+
+**Writes during overlay:** decided 2026-10-02 to write through to the RAM underneath (ROM is decoded on MEMR only). The emulator currently drops them (`src/cpu.rs` `write_byte`); change pending. The ROM never writes low RAM before disabling the overlay, so behavior is identical either way.
 
 ### Hardware Implementation
 
 For future physical build:
 - 74LS74 flip-flop controls overlay state
 - Set on reset (overlay enabled)
-- Cleared by write to port 0xFE with value 0x00
-- Address decode logic checks flip-flop for 0x0000-0x0FFF access
+- Cleared by any write to port 0xFE (no data decode)
+- Address decode: when set, MEMR to 0x0000-0x0FFF selects ROM; MEMW always goes to RAM
+- IN 0xFF: bit 0 = overlay flip-flop; bits 1-7 undefined
 
 This is how real S-100 systems solved the boot problem. We're using a proven pattern.
 
@@ -123,13 +114,9 @@ This is how real S-100 systems solved the boot problem. We're using a proven pat
    └─> OUT 0FEh, 00h      ; Disable overlay
    └─> 0x0000-0x0FFF is now RAM
 
-4. Copy vectors from ROM to RAM (NOT IMPLEMENTED; see TODO.md Open Decisions)
-   └─> RST vectors at 0x0000-0x003F
-   └─> API table at 0x0040-0x007F
+4. Initialize workspace (LAST_DUMP_ADDR, LAST_EXAM_ADDR) and I/O stubs
 
-5. Initialize workspace, I/O stubs, devices
-
-6. Print banner, enter monitor loop
+5. Print banner, enter MAIN_LOOP (interrupts stay disabled)
 ```
 
 ### Cold Start Code
@@ -145,11 +132,11 @@ BOOT_CONTINUE:
         XRA     A                   ; A = 0x00
         OUT     SYSTEM_CONTROL      ; Disable overlay
 
-        ; Initialize workspace, copy vectors, etc.
+        ; Initialize workspace and I/O stubs
         ; ...
-        
-        EI
-        JMP     MONITOR_LOOP
+
+        CALL    PRINT_BANNER
+        ; falls through to MAIN_LOOP (interrupts stay disabled)
 ```
 
 **Critical:** The `JMP BOOT_CONTINUE` escapes the overlay region *before* disabling it. Without this, disabling overlay would cause PC to read garbage RAM.
@@ -167,46 +154,38 @@ BOOT_CONTINUE:
 | 0x04-0x07 | (Parallel I/O) | Reserved |
 | 0x08-0x0C | Storage Device (24-bit) | ✅ Done |
 | 0x0D-0x0F | Storage Mount | ✅ Done |
-| 0x10-0x1F | Network | Future |
-| 0x20-0x27 | Disassembler | Future |
-| 0x28-0x2F | Assembler | Future |
-| 0x30-0x37 | (Debugger) | Reserved |
-| 0x38-0x3F | Claude API | Future |
-| 0x40-0x5F | Internet (HTTP, DNS, Time) | Future |
-| 0x60-0x6F | System Time | Future |
-| 0x70-0x73 | Timer (8253) | Future |
-| 0x74-0xEF | (Expansion) | Available |
-| 0xF0-0xFD | (Reserved) | - |
+| 0x10-0x13 | Service Mailbox (Pi services: TIME, GET, ASK, ASM, DIS) | Future |
+| 0x14-0x6F | (Pi window, unassigned) | - |
+| 0x70-0xFD | (Expansion: local chips) | Available |
 | 0xFE | System Control | ✅ Implemented |
 | 0xFF | System Status | ✅ Implemented |
+
+Decided 2026-10-02:
+- **Pi window.** Ports 0x08-0x6F belong to the Pi coprocessor. 0x00-0x07 is the console chip, 0x70-0xFD local chips, 0xFE-0xFF glue logic.
+- **One mailbox for all Pi services.** HTTP, Claude, time, assembler and disassembler are text commands through one Service Mailbox (DEVICE_SPECS.md), not per-device register maps. Large results land in storage files.
+- **Pi ports use a READY wait-state.** Any I/O to a Pi port holds READY low until the Pi releases it, so protocols stay instant-response from the 8080's point of view.
+
+The emulator also intercepts ports 0x30-0x32 for an interim timer (`src/cpu.rs`). Decided 2026-10-02 to delete it; pending in TODO.md.
 
 ---
 
 ## RST Vectors
 
-| Vector | Address | Purpose |
-|--------|---------|---------|
-| RST 0 | 0x0000 | Cold start |
-| RST 1 | 0x0008 | CONOUT - Console output |
-| RST 2 | 0x0010 | CONIN - Console input |
-| RST 3 | 0x0018 | CONST - Console status |
-| RST 4 | 0x0020 | (Reserved) |
-| RST 5 | 0x0028 | (Reserved) |
-| RST 6 | 0x0030 | (Reserved) |
-| RST 7 | 0x0038 | Timer interrupt |
+None installed. Interrupts stay disabled. When something needs a periodic interrupt (Someday), the ROM writes a single `JMP` at 0x0038 for RST 7.
 
 ---
 
 ## ROM Organization
 
+Addresses from the current build (2511 of 4096 bytes used):
+
 ```
-F000: COLD_START, BOOT_CONTINUE
-F0XX: MONITOR_LOOP (prompt, read, parse, dispatch)
-F1XX: Command handlers (CMD_DUMP, CMD_EXAMINE, etc.)
-F4XX: API functions (CONOUT, CONIN, PRINT_*, etc.)
-F6XX: Storage functions (future)
-F7XX: Interrupt service routines
-F8XX: Helper functions, error handling
-FAXX: Vector table source (copied to RAM at boot)
-FCXX: String constants (banner, help, errors)
+F000: COLD_START, BOOT_CONTINUE (overlay off, workspace/stub init)
+F034: MAIN_LOOP (prompt, READ_LINE, CPI/JZ dispatch)
+F0A8: Console I/O (CONOUT, CONIN, CONST), print routines
+F10D: Input/parse (READ_LINE, SKIP_SPACES, READ_HEX_WORD, TO_HEX_DIGIT, READ_HEX_ADDR24)
+F217: Commands C D E F G H I M O S ?, READ_EXAM_BYTE
+F592: Storage commands X, L, W
+F6CB: Strings (banner, help, errors)
+F9CF-FFFF: Free (0xFF fill)
 ```

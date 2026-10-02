@@ -10,7 +10,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 
 | Component | Status |
 |-----------|--------|
-| CPU core (all 256 opcodes, flags, stack, I/O) | ✅ |
+| CPU core (documented opcodes + undocumented NOPs, flags, stack, I/O; known bugs in TODO.md Review findings) | ✅ |
 | Memory subsystem with ROM overlay | ✅ |
 | Console device | ✅ |
 | Storage device (24-bit, 16MB) | ✅ |
@@ -70,8 +70,11 @@ cargo run
 
 You'll see:
 ```
+8080 Emulator
+Built: 2026-10-02 19:20:00        <- emulator build time (build.rs)
+
 8080 Monitor v0.3
-Built: 2025-12-20 ...
+Built: 10/02/2026 19:13:00        <- ROM assembly time (asl DATE/TIME)
 Ready.
 > 
 ```

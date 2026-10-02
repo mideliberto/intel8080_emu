@@ -6,16 +6,17 @@ The 12 key architectural decisions for this project.
 
 ## 1. Memory Layout
 
-**Decision:** High ROM (0xF000-0xFFFF) with vectors at bottom
+**Decision:** High ROM (0xF000-0xFFFF), workspace at bottom
 
 ```
-0x0000-0x007F   Vectors + API table (RAM, copied from ROM)
+0x0000-0x007F   Unused (no vectors or API table; decided 2026-10-02)
 0x0080-0x00FF   System workspace
-0x0100-0xEFFF   User programs
+0x0100-0xEEFF   User programs
+0xEF00-0xEFFF   Monitor stack page
 0xF000-0xFFFF   Monitor ROM
 ```
 
-**Rationale:** Clean separation. ROM at top stays out of the way. Vectors at bottom where the 8080 expects them. 0x0100 is a nice round address to start user code. Simple.
+**Rationale:** Clean separation. ROM at top stays out of the way. 0x0100 is a nice round address to start user code. Simple.
 
 ---
 
@@ -33,7 +34,7 @@ The 12 key architectural decisions for this project.
 
 ## 3. CPU Speed
 
-**Decision:** Configurable, default 2.0 MHz
+**Decision:** Configurable, default 2.0 MHz (not implemented: the emulator runs unthrottled and nothing is configurable)
 
 **Rationale:** Authentic 8080 speed. Configurable for faster testing or slower debugging. When we hit real hardware, this becomes actual clock speed.
 
@@ -60,18 +61,9 @@ Protocol: OUT addr_lo, OUT addr_mid, OUT addr_hi, IN/OUT data
 
 ## 5. API Entry Points
 
-**Decision:** Hybrid RST + CALL approach
+**Decision (superseded 2026-10-02):** There are no RST vectors and no API table. Nothing calls into the ROM from outside yet, so a frozen ABI would be a promise with no customer. RST 7 gets a single JMP when something needs interrupts (Someday). See COLLABORATION_LOG Key Decisions.
 
-**RST Vectors (1-byte calls):**
-- RST 1: CONOUT
-- RST 2: CONIN
-- RST 3: CONST
-- RST 7: Timer interrupt
-
-**API Table (0x0040+):**
-- PRINT_STRING, PRINT_HEX_*, READ_HEX_*, etc.
-
-**Rationale:** RST is compact (1 byte) for hot-path calls. API table at fixed addresses for everything else. User code can call either.
+**Original plan (for history):** RST 1-3 for CONOUT/CONIN/CONST, RST 7 timer, and a JMP table at 0x0040 for the print and parse helpers.
 
 ---
 
@@ -79,13 +71,7 @@ Protocol: OUT addr_lo, OUT addr_mid, OUT addr_hi, IN/OUT data
 
 **Decision:** Hybrid - document what each function trashes
 
-**Rules:**
-- Flags: Always trashed
-- A: Preserved if input-only, trashed if return value
-- HL: Preserved unless it's a return value
-- BC, DE: Preserved unless documented
-
-**Every function documents its register usage.**
+**Rule:** No blanket guarantees. Each routine's header comment in `monitor.asm` says what it takes, returns and trashes, and that header is the contract. Flags are always trashed. Several routines trash their inputs: PRINT_HEX_BYTE trashes A, PRINT_STRING advances HL, READ_LINE trashes HL. (Decided 2026-10-02: with no public API, this is descriptive, not a promise.)
 
 **Rationale:** Flexible. Honest. No surprises. Better than pretending everything is preserved when it isn't.
 
@@ -97,7 +83,7 @@ Protocol: OUT addr_lo, OUT addr_mid, OUT addr_hi, IN/OUT data
 
 **Implemented:** D, E, F, M, S, C, H, G, I, O, L, W, X, ?
 
-**Future:** N (network), A (ask Claude)
+**Future:** `:` (Intel HEX record), T (time), A/U (assemble/unassemble), N (HTTP GET), Q (ask Claude). The Pi-backed ones go through the Service Mailbox.
 
 **Deferred:** R (registers) - needs return mechanism
 
@@ -107,7 +93,7 @@ Protocol: OUT addr_lo, OUT addr_mid, OUT addr_hi, IN/OUT data
 
 ## 8. Command Parser
 
-**Decision:** Jump table dispatch with shared parsing helpers
+**Decision:** CPI/JZ compare-chain dispatch with shared parsing helpers
 
 **Helpers:**
 - SKIP_SPACES
@@ -115,7 +101,7 @@ Protocol: OUT addr_lo, OUT addr_mid, OUT addr_hi, IN/OUT data
 - TO_HEX_DIGIT
 - PRINT_HEX_BYTE/WORD
 
-**Rationale:** Simple, extensible, minimal code duplication. Adding a command means adding one table entry and one handler.
+**Rationale:** Simple, extensible, minimal code duplication. Adding a command means adding a CPI/JZ pair, one handler, and a help line.
 
 ---
 
@@ -135,7 +121,7 @@ Protocol: OUT addr_lo, OUT addr_mid, OUT addr_hi, IN/OUT data
 ## 10. File Formats
 
 **Decision:**
-- Config: JSON (modern, readable)
+- Config: JSON (modern, readable). Planned, not implemented
 - Intel HEX: Standard format, validate checksums
 - Disassembly: Period-appropriate (uppercase, H suffix)
 
@@ -145,11 +131,11 @@ Protocol: OUT addr_lo, OUT addr_mid, OUT addr_hi, IN/OUT data
 
 ## 11. Emulator vs ROM Commands
 
-**Decision:** Clear separation with `:` prefix
+**Decision:** Clear separation with a prefix (planned, not implemented). The prefix is TBD: `:` now belongs to Intel HEX records (decided 2026-10-02).
 
 **ROM commands:** D, E, F, G, etc. (the 8080 sees these)
 
-**Emulator commands:** :bp, :step, :trace, :load, :save
+**Emulator commands:** bp, step, trace, load, save
 
 **Rationale:** No confusion about what's running on the 8080 vs the host. The 8080 code doesn't know the emulator exists.
 
@@ -166,6 +152,6 @@ All complex operations (HTTP, Claude API, file I/O) are exposed as I/O devices. 
 - Same ROM works on emulator or real hardware
 - Clean abstraction boundary
 - Testable in isolation
-- Future-proof: new capabilities = new port range
+- Future-proof: new capabilities = new mailbox command (one port block for all Pi services, decided 2026-10-02)
 
 **This is the key decision.** Everything modern happens behind the ports. The 8080 just moves bytes.

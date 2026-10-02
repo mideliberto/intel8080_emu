@@ -63,6 +63,76 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-02: One Service Mailbox for All Pi Services
+**Decision:** HTTP, Claude, time, assembler and disassembler are text commands (`GET`, `ASK`, `TIME`, `ASM`, `DIS`) through one device at ports 0x10-0x13 (command char, control, status, response byte). The per-device register specs are superseded. Large results land in storage files. The device code is Rust behind `IoDevice`, written once: the emulator bus calls it, and on the Pi a GPIO front end calls the same code. Ports 0x08-0x6F are the Pi window.
+**Mike's input:** "Do we need to do HTTP on the emulator itself? Why not do more of that on the Pi?"
+**Rationale:** Five register maps with the same shape (send chars, command, poll, read bytes) is one protocol written five times. One mailbox means one ROM routine, one decode and one spec.
+**Consequences:** Phase 6 shrinks to `TIME` + T. Phase 8 drops `N T` (the Pi has NTP). DNS needs no port.
+
+### 2026-10-02: Phase 6 Shrinks; 8253 and Interrupts to Someday
+**Decision:** Phase 6 = mailbox device + `TIME` + T command. The 8253, TIMER_ISR, TI/TS and the RST 7 vector wait until something needs a periodic interrupt.
+**Rationale:** Three clocks were planned (time device, 8253 software clock, network time). Only one had a use case.
+
+### 2026-10-02: Delete the Interim Timer
+**Decision:** Remove `src/io/devices/timer.rs` and its hardwired hooks in `cpu.rs` (ports 0x30-0x32).
+**Rationale:** No ROM user, no tests. It counts CPU cycles (a Pi can't), auto-acknowledges interrupts, drifts on every period, and shadows bus ports. Pending in TODO.md.
+
+### 2026-10-02: G Pushes a WARM Return
+**Decision:** G pushes a WARM entry (`LXI SP,STACK_TOP` then MAIN_LOOP) before `PCHL`. Programs exit with `RET`. No vector at 0000, so `JMP 0`/`RST 0` exits are not supported.
+**Problem:** A program ending in RET popped ROM bytes `31 00` and jumped to 0031.
+**Note:** Doesn't unblock R; that needs register capture (Phase 10). About 7 bytes. Pending in TODO.md.
+
+### 2026-10-02: Pi Ports Use a READY Wait-State
+**Decision:** Any I/O to a Pi port holds the 8080's READY low until the Pi releases it. Protocols stay instant-response; the ROM needs no busy-polling for byte transfers. Mount's 0xFF "busy" is reserved and never returned.
+**Rationale:** Every protocol and ROM loop assumed a device answers within one IN/OUT cycle. One flip-flop plus a GPIO line keeps them all valid with zero ROM change. The alternative, busy bits plus polling, costs bytes in every loop.
+
+### 2026-10-02: Claude Moves to Q; A Stays Assemble
+**Decision:** Phase 7 keeps A/U (assemble/unassemble, DDT convention). Phase 9's ask-Claude command is Q.
+**Follow-up:** The old future list had Q = Quit emulator. Logged as an Open Decision.
+
+### 2026-10-02: No RST Vectors, No API Table
+**Decision:** Drop the API jump table (0x0040-0x007F) and the RST 1-3 console vectors from the docs. RST 7 gets a single JMP when interrupts arrive. The register-preservation rules become descriptive: each routine's header is the contract.
+**Rationale:** A public ABI with no callers is a promise with no customer.
+
+### 2026-10-02: System Control Is a Bare Flip-Flop
+**Decision:** Any OUT 0xFE disables the overlay. No 0x01 halt (the 8080 has HLT) and no 0xFF software cold reset (use the reset line). Overlay writes go through to RAM (ROM decoded on MEMR only). IN 0xFF: only bit 0 is defined.
+**Rationale:** One 74LS74, no data comparator, no reset one-shot. Emulator change pending in TODO.md.
+
+### 2026-10-02: Storage Edge Semantics: Code Mostly Wins
+**Decision:**
+- Mount creates missing files; there is no "not found". This keeps `W` to a new file working.
+- Names over 12 chars return 0x02 instead of truncating.
+- A failed mount unmounts the previous file.
+- A past-EOF read returns 0xFF and still advances the address.
+- 8.3 is a convention, not enforced.
+
+**Rationale:** Each rule is simpler for a Pi to copy than the accident it replaces. Rust fixes pending in TODO.md.
+
+### 2026-10-02: Rebuild the Stale ROM Binary
+**Decision:** Rebuilt and committed `rom/monitor.bin`. The committed bin predated `X -` unmount, so all monitor tests had been running an old ROM.
+**Lesson:** Rebuilding bakes in DATE/TIME, so "rebuild and diff" can't detect drift. A behavioral test (`X -` prints Unmounted) is the guard; it's on TODO.
+
+### 2026-10-02: HEX Loader Paste Speed Is the Sender's Problem (for Now)
+**Decision:** Phase 5 assumes the terminal paces lines (per-line delay). The console chip and flow control (6850 + RTS/CTS vs a Pi FIFO console) are a hardware-build decision.
+**Problem:** About 7ms of ROM work per 16-byte record against 1ms per char at 9600 baud. A real UART overruns. The emulator's unbounded queue hides it.
+
+### 2026-10-02: HEX Record Limits
+**Decision:**
+- Max 34 data bytes per record (80-char LINE_BUFFER); a longer line gets "Line too long".
+- Types 00 and 01 only; 02-05 are errors.
+- Each record is fully validated (length + checksum) before any byte is written.
+
+**Rationale:** Standard tools emit 16 or 32 bytes per record. Smallest parser.
+
+### 2026-10-02: HEX Loader Write Guard; Stack Gets Its Own Page
+**Decision:** The loader rejects records touching 0x0000-0x00FF or 0xEF00-0xFFFF. User area is 0x0100-0xEEFF; 0xEF00-0xEFFF is the monitor stack page.
+**Problem:** A record aimed at 0x0080 overwrote LINE_BUFFER mid-parse and loaded garbage silently. The stack (SP=F000) lived inside the documented user area.
+**Note:** About 20 bytes. Other commands (F/M/E/L) still don't guard.
+
+### 2026-10-02: HEX Loader Auto-Detects ':'
+**Decision:** A line starting with `:` at the prompt is an Intel HEX record. There is no command letter and no loader mode; each line stands alone. `:` belongs to HEX; the Phase 10 emulator-command prefix is TBD.
+**Rationale:** About 5 bytes of dispatch, straight paste works, no mode to get stuck in. Resolves the `H` and `:` collisions.
+
 ### 2026-10-02: Claude Writes the Code; Hardware Is the End State
 **Decision:** Claude Code (including multi-agent ultracode runs) writes the Rust and ROM implementation. Mike owns architecture, decisions, and review. Supersedes the "Mike writes the code" rule from 2026-01-16.
 **Rationale:** The true goal is a physical 8080 machine. Hand-writing the emulator was the bottleneck; acceleration matters more than the Rust exercise.
@@ -305,7 +375,7 @@ Console I/O debugging session:
 **Monitor ROM v0.3:**
 - 14 commands: D, E, F, M, S, C, H, G, I, O, L, W, X, ?
 - ROM overlay boot mechanism
-- ~2.4KB of 4KB ROM used (~1.6KB headroom)
+- 2511 of 4096 bytes used (1585 free)
 
 **Devices:**
 - Console (0x00-0x02), Storage (0x08-0x0C, 24-bit / 16MB), Storage Mount (0x0D-0x0F), System Control (0xFE-0xFF)
@@ -315,17 +385,18 @@ Console I/O debugging session:
 
 ### In Progress
 
-- **Phase 5:** Intel HEX loader, parsed by the 8080 itself in ROM. Not started.
+- **Phase 5:** Intel HEX loader, parsed by the 8080 itself in ROM. All design decisions made 2026-10-02; build order in `TODO.md`. Not started.
+- **Review findings:** 2026-10-02 review found CPU flag bugs (AC on subtract, DCR, ANA, DAA; PSW bits; EI delay; HLT), ROM range and parse bugs, and vacuous tests. All are listed in `TODO.md` with repros. None are fixed yet.
 
 ### Open Decisions
 
-Live list with details in `TODO.md`. Blocking Phase 5: the `H` and `:` collisions. Also open: `A` collision (Phase 7 vs 9), existing timer at 0x30-0x32 vs planned 8253 at 0x70-0x73, port 0xFE halt (documented, not implemented), RST vector / API table copy (documented, not implemented).
+Live list in `TODO.md`. Nothing blocks Phase 5. Open: `Q` collision (ask Claude vs. quit emulator), mount filename buffer resync, filename case, Phase 10 prefix, console chip and flow control.
 
 ### Blocked/Deferred
 
 - **R command:** Needs return mechanism, deferred to Phase 10 (Debugger)
-- **Network device:** Ports 0x10-0x1F reserved, Phase 8
-- **Claude API integration:** Phase 9
+- **Pi services:** one Service Mailbox at 0x10-0x13. Phase 6 `TIME`, 7 `ASM`/`DIS`, 8 `GET`, 9 `ASK`
+- **8253 timer / interrupts:** Someday
 
 ### Future Vision (Documented, Not Started)
 
@@ -335,6 +406,13 @@ Live list with details in `TODO.md`. Blocking Phase 5: the `H` and `:` collision
 ---
 
 ## Recent Sessions
+
+### 2026-10-02: Pre-Phase 5 Review
+- Four parallel audits: docs vs. code, CPU core, devices and hardware buildability, ROM/tests/Phase 5. Every finding was reproduced in scratch tests or traced in the asm before being kept.
+- What bit us: the committed `monitor.bin` was stale (no `X -` unmount), and the tests couldn't notice because none map storage. Two monitor tests are vacuous: they match echoed input and the banner date. Rebuilt the bin.
+- CPU: AC is wrong on every subtract, DCR, ANA and DAA, and three tests assert the wrong values. The EI delay and HLT wake are missing, and the undocumented CALL/JMP/RET aliases panic.
+- Decided 14 items. The big ones: `:` auto-detect HEX loader with a page-0/stack-page guard, a READY wait-state for Pi ports, one Service Mailbox for all Pi services (Phase 6 shrinks to TIME + T), and deleting the interim timer.
+- Docs fixed to match code (ROM layout, boot steps, mount status codes, dispatch style, startup banner) and rewritten for the decisions. Code changes for the decisions are queued in TODO.md; no src/ or ROM source changed this session.
 
 ### 2026-10-02: Web/Claude Code Alignment
 - Audited PK vs GitHub HEAD: drift was mostly encoding damage plus stale counts
@@ -434,5 +512,5 @@ Live list with details in `TODO.md`. Blocking Phase 5: the `H` and `:` collision
 ## Review Metadata
 
 **Last Review:** 2026-10-02
-**Method:** Audit of GitHub HEAD (2026-01-30 commit) against Project Knowledge, plus chats after 2026-01-16. Full PK export diffed in Claude Code.
+**Method:** Pre-Phase 5 spec/code/plan review in Claude Code (parallel audit agents, findings reproduced before reporting). Before that: audit of GitHub HEAD against Project Knowledge.
 **Next Review:** Not needed while the session protocol holds. Claude Code appends a Recent Sessions entry at the end of every session.
