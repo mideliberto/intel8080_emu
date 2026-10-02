@@ -15,7 +15,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Console device | ✅ |
 | Storage device (24-bit, 16MB) | ✅ |
 | Monitor ROM v0.3 (14 commands) | ✅ |
-| 191 tests (181 CPU + 10 integration) | ✅ |
+| 204 tests (14 unit + 180 CPU + 10 integration) | ✅ |
 | HTTP / Network | 🔲 Future |
 | Claude API integration | 🔲 Future |
 
@@ -125,7 +125,7 @@ rom/
 storage/                 # Mounted storage files
 
 tests/
-├── cpu_tests.rs         # 181 CPU instruction tests
+├── cpu_tests.rs         # 180 CPU instruction tests
 ├── monitor_tests.rs     # 10 integration tests
 └── common/
     └── mod.rs           # Test utilities
@@ -158,12 +158,13 @@ That's the vision. An 8080 that can ask questions.
 
 ## Documentation
 
-Detailed docs live in the project knowledge files:
+Detailed docs live in `docs/`:
 - `PROJECT_OVERVIEW.md` — Quick orientation
 - `ARCHITECTURE.md` — Memory map, boot sequence
 - `DEVICE_SPECS.md` — I/O device protocols
 - `QUICK_REFERENCE.md` — Cheat sheets
 - `IMPLEMENTATION_ROADMAP.md` — Phases and plans
+- `COLLABORATION_LOG.md` — History, decisions, lessons
 
 ## License
 

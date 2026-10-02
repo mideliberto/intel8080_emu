@@ -134,14 +134,14 @@ The same ROM runs on the emulator today and real hardware tomorrow. The 8080 doe
 The vision extends to real silicon:
 
 ```
-â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”     Ports      â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
-â”‚  Real 8080  â”‚â—„â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–ºâ”‚  Pi Zero W      â”‚
-â”‚  (vintage   â”‚   directly or  â”‚                 â”‚
-â”‚   chip)     â”‚   via SPI/I2C  â”‚  - WiFi         â”‚
-â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                â”‚  - SD Card      â”‚
-                               â”‚  - TLS          â”‚
-                               â”‚  - Claude API   â”‚
-                               â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+┌─────────────┐     Ports      ┌─────────────────┐
+│  Real 8080  │◄──────────────►│  Pi Zero W      │
+│  (vintage   │   directly or  │                 │
+│   chip)     │   via SPI/I2C  │  - WiFi         │
+└─────────────┘                │  - SD Card      │
+                               │  - TLS          │
+                               │  - Claude API   │
+                               └─────────────────┘
 ```
 
 Same ports. Same ROM. Same code. Different substrate.

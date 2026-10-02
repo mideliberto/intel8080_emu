@@ -14,7 +14,7 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 **The Mantra:** "A fool admires complexity, genius admires simplicity."
 
-**The Vision:** An 8080 that talks to Claude over the API. Internet-connected vintage computing. Big data for an 8-bit processor. Not a museum pieceâ€”a living system. Same ROM runs on Rust emulator today and real 8080 hardware with Pi coprocessor tomorrow.
+**The Vision:** An 8080 that talks to Claude over the API. Internet-connected vintage computing. Big data for an 8-bit processor. Not a museum piece—a living system. Same ROM runs on Rust emulator today and real 8080 hardware with Pi coprocessor tomorrow.
 
 **End State Goal:** An 8080 that:
 1. Boots from ROM overlay (like real S-100 systems)
@@ -61,7 +61,31 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 ## Key Decisions
 
-Ordered newest to oldest. Never deleteâ€”only add.
+Ordered newest to oldest. Never delete—only add.
+
+### 2026-10-02: Claude Writes the Code; Hardware Is the End State
+**Decision:** Claude Code (including multi-agent ultracode runs) writes the Rust and ROM implementation. Mike owns architecture, decisions, and review. Supersedes the "Mike writes the code" rule from 2026-01-16.
+**Rationale:** The true goal is a physical 8080 machine. Hand-writing the emulator was the bottleneck; acceleration matters more than the Rust exercise.
+**Constraint added:** ROM code and device protocols must be buildable with real parts. Emulator-only conveniences stay on the Rust side.
+
+### 2026-10-02: Repo Is the Single Source of Truth
+**Decision:** The repo is the only source of truth for code AND docs. The Claude.ai Project is retired; all work moves to Claude Code.
+**Problem:** PK copies had drifted: stale status (191 tests, 11 vs 14 commands), mojibake from repeated copy/paste, PK-only files the repo never saw.
+**Rationale:** Two editable copies of the same doc is a distributed consensus problem. We are not solving Paxos for markdown.
+**Outcome:** Session protocol in CLAUDE.md. Claude Code appends session notes here. Full PK export diffed against the repo before retiring it: nothing PK-only was lost.
+
+### 2026-01-30: Dead Code Purge
+**Decision:** Delete `disk.rs` (legacy 16-bit storage, superseded by `storage.rs`), strip debug `println!` from `update_flags()`
+**Incident:** `null.rs` deleted by mistake instead of `disk.rs`; recreated.
+**Lesson reinforced:** `git commit -A` to stage deletions; `cargo test` before commit.
+**Outcome:** 204 tests passing (14 unit + 180 CPU + 10 monitor integration).
+
+### 2026-01-16: Split Workflow — Web for Strategy, Claude Code for Tactics
+**Decision:** Architecture and "should we even" debates happen in the Claude.ai Project. Implementation happens in Claude Code CLI. GitHub is the bridge.
+**Rationale:** Web UI compaction during long coding sessions; Claude Code has real filesystem and `cargo test` access.
+**Mike's input:** CLI over VS Code integration—deliberate friction keeps him writing the code himself.
+**Claude's input:** "CLI keeps Claude as a consultant you deliberately summon, not a copilot who's always reaching for the wheel."
+**Known risk:** Architectural decisions made in Claude Code without the mantra police present. Mitigation: design questions get logged as Open Decisions, not silently decided.
 
 ### 2025-12-20: Phase 4 Storage System Complete
 **Decision:** 24-bit linear-addressed storage (16MB per file) with file mounting
@@ -119,7 +143,7 @@ Ordered newest to oldest. Never deleteâ€”only add.
 
 ### 2025-12-09: Console Port Mapping Bug Fixed
 **Decision:** Map ALL THREE ports (0x00, 0x01, 0x02) not just two
-**Problem:** Monitor hung reading input statusâ€”port 0x02 wasn't mapped
+**Problem:** Monitor hung reading input status—port 0x02 wasn't mapped
 **The bug:**
 ```rust
 cpu.io_bus_mut().map_port(0x00, console.clone());
@@ -180,7 +204,7 @@ cpu.io_bus_mut().map_port(0x01, console);
 - src/disassemble.rs (orphan)
 - Layer 2.5 abstraction
 - Various test debris
-**Renamed:** intel8080cpu.rs â†’ cpu.rs
+**Renamed:** intel8080cpu.rs → cpu.rs
 **Added:** rom/Makefile, rom/monitor.asm, README.md
 **Outcome:** Clean baseline, 181 passing tests
 
@@ -199,7 +223,7 @@ Patterns that emerged from actual work.
 ### Over-Engineering Incidents
 
 **The Custom Assembler (Dec 2025):**
-Mike started writing a custom 8080 assembler from scratchâ€”683 lines before deletion. Claude redirected: "Are you building an assembler or an emulator?" The AS assembler works fine.
+Mike started writing a custom 8080 assembler from scratch—683 lines before deletion. Claude redirected: "Are you building an assembler or an emulator?" The AS assembler works fine.
 - **Saved:** Months of work
 - **Lesson:** Use proven tools for solved problems
 
@@ -264,67 +288,72 @@ D command infinite loop at FFFF, 16-bit address wraparound, high memory overflow
 
 **"Three Bugs, Three Fixes":**
 Console I/O debugging session:
-1. Double-echo â†’ raw mode
-2. Status port not working â†’ wrong port numbers in ROM
-3. Input still broken â†’ port 0x02 not mapped
+1. Double-echo → raw mode
+2. Status port not working → wrong port numbers in ROM
+3. Input still broken → port 0x02 not mapped
 
 ---
 
 ## Current State
 
-**Last Updated:** December 20, 2025
+**Last Updated:** October 2, 2026
 
 ### Completed
 
-**CPU Core:**
-- All 256 opcodes implemented
-- Full flag system (S, Z, P, AC, C)
-- Stack operations
-- I/O port system
-- Interrupt handling
-- 181 passing tests
+**CPU Core:** All 256 opcodes, full flag system (S, Z, P, AC, C), stack, I/O port system, interrupts
 
 **Monitor ROM v0.3:**
 - 14 commands: D, E, F, M, S, C, H, G, I, O, L, W, X, ?
 - ROM overlay boot mechanism
-- Workspace layout (LINE_BUFFER, LAST_DUMP_ADDR, STOR_ADDR, etc.)
-- Self-modifying I/O stubs
-- Console I/O (CONIN, CONOUT, CONST)
-- Print routines (string, hex byte, hex word, CRLF)
-- Input routines (READ_LINE, READ_HEX_WORD, READ_HEX_ADDR24)
+- ~2.4KB of 4KB ROM used (~1.6KB headroom)
 
 **Devices:**
-- Console (ports 0x00-0x02)
-- Storage (ports 0x08-0x0C) - 24-bit addressing, 16MB space
-- Storage Mount (ports 0x0D-0x0F)
-- System Control (ports 0xFE-0xFF)
+- Console (0x00-0x02), Storage (0x08-0x0C, 24-bit / 16MB), Storage Mount (0x0D-0x0F), System Control (0xFE-0xFF)
 
-**Testing:**
-- 181 CPU instruction tests
-- 10 monitor integration tests
-- All passing
+**Testing (verified 2026-10-02 against GitHub HEAD):**
+- 14 unit + 180 CPU + 10 monitor integration = 204, all passing
 
 ### In Progress
 
-- **Phase 5:** Intel HEX loader (next up)
+- **Phase 5:** Intel HEX loader, parsed by the 8080 itself in ROM. Not started.
+
+### Open Decisions
+
+Live list with details in `TODO.md`. Blocking Phase 5: the `H` and `:` collisions. Also open: `A` collision (Phase 7 vs 9), existing timer at 0x30-0x32 vs planned 8253 at 0x70-0x73, port 0xFE halt (documented, not implemented), RST vector / API table copy (documented, not implemented).
 
 ### Blocked/Deferred
 
-- **R command:** Needs return mechanism, deferred to Phase 9 (Debugger)
+- **R command:** Needs return mechanism, deferred to Phase 10 (Debugger)
 - **Network device:** Ports 0x10-0x1F reserved, Phase 8
 - **Claude API integration:** Phase 9
 
 ### Future Vision (Documented, Not Started)
 
-- HTTP client for web data
-- Claude API device for AI queries
-- System time device
-- Gutenberg e-reader concept
+- HTTP client, system time device, Gutenberg e-reader, Claude API device
 - Hardware prototype (Pi Zero + real 8080)
 
 ---
 
 ## Recent Sessions
+
+### 2026-10-02: Web/Claude Code Alignment
+- Audited PK vs GitHub HEAD: drift was mostly encoding damage plus stale counts
+- Diffed the full 21-file PK export against the repo: no PK-only content lost. Added `COLLABORATION_LOG_SPEC.md` and the ROM overlay session summary; dropped `COLLABORATION_LOG_UPDATE_PROMPT.md`
+- Repaired mojibake and stale counts across docs; untracked `monitor.lst`/`monitor.p`
+- Established repo-as-source-of-truth and session protocol (CLAUDE.md); web Project retired
+- Decided: Claude writes the code from here (ultracode), Mike decides and reviews; physical hardware is the end state
+- Found command collisions (`H`, `:`, `A`) and docs describing things the code doesn't do (0xFE halt, vector copy, timer ports). Logged as Open Decisions, not fixed
+
+### 2026-01-30: Code Review and Cleanup
+- Removed debug prints from `update_flags()`, deleted dead `disk.rs`
+- Accidentally deleted `null.rs`, recreated it
+- Set up `~/dev` as Obsidian vault, per-project CLAUDE.md, TODO.md
+
+### 2026-01-16: Workflow Split
+- Back after hiatus (new job)
+- Adopted web-for-strategy / Claude-Code-for-tactics split
+- Chose Claude Code CLI over VS Code integration
+- Confirmed Phase 5 HEX parsing happens in 8080 code, not a Rust device
 
 ### 2025-12-20: Phase 4 Complete
 - Storage device (24-bit, 16MB) fully implemented
@@ -374,51 +403,36 @@ Console I/O debugging session:
 
 **On complexity:**
 > "A fool admires complexity, genius admires simplicity."
-> â€” Project mantra, invoked frequently
+> — Project mantra, invoked frequently
 
 **On feature creep:**
 > "So you're implementing a feature because a document told you to, not because you need it. That's the software engineering equivalent of buying a boat because the marina had a brochure."
-> â€” Claude, on R command
+> — Claude, on R command
 
 **On over-engineering:**
 > "Yeah, well, that version of me was wrong. Or more likely, I didn't have the full context of your codebase and your tendency to over-engineer."
-> â€” Claude, admitting previous advice was wrong
+> — Claude, admitting previous advice was wrong
 
 **On disk architecture:**
 > "If you're building actual hardware and running your own code, the track/sector controller is just cosplay complexity."
-> â€” Claude, on IBM 3740 emulation
+> — Claude, on IBM 3740 emulation
 
 **On the custom assembler:**
 > "RIP custom assembler, you were beautiful but unnecessary."
-> â€” Mike, on deletion
+> — Mike, on deletion
 
 **On the vision:**
 > "I want it to talk to its co-creator."
-> â€” Mike, on Claude API integration
+> — Mike, on Claude API integration
 
 **On the blog title:**
 > "The 683-Line Assembler I Didn't Need"
-> â€” Blog post title that captures the project's philosophy
+> — Blog post title that captures the project's philosophy
 
 ---
 
 ## Review Metadata
 
-**Last Review:** 2025-12-21T04:30:00Z
-**Chats Reviewed:** 47+
-**Sources Searched:**
-- recent_chats with sort_order=desc (20 chats)
-- recent_chats with sort_order=asc (oldest chats)
-- conversation_search: "8080 emulator monitor ROM storage overlay"
-- conversation_search: "over-engineer complexity simplicity mantra"
-- conversation_search: "assembly rust phase command"
-- conversation_search: "storage phase 4 mount linear addressing"
-- conversation_search: "Claude API integration internet HTTP network vision"
-- conversation_search: "deferred skipped YAGNI R command registers"
-- conversation_search: "assembler custom ASL deleted removed 683 lines"
-- conversation_search: "console port status hung reading input port mapping"
-- conversation_search: "R command registers deferred DDT feature creep"
-- conversation_search: "disk architecture track sector linear storage IBM 3740"
-- conversation_search: "push_word helper Layer 2.5 abstraction over-engineer"
-
-**Next Review:** Use `after` parameter set to Last Review timestamp
+**Last Review:** 2026-10-02
+**Method:** Audit of GitHub HEAD (2026-01-30 commit) against Project Knowledge, plus chats after 2026-01-16. Full PK export diffed in Claude Code.
+**Next Review:** Not needed while the session protocol holds. Claude Code appends a Recent Sessions entry at the end of every session.

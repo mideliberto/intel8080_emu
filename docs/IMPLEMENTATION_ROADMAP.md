@@ -89,7 +89,7 @@ ROM:
 **Goal:** Load programs into memory
 
 **Tasks:**
-- [ ] Intel HEX loader (H command)
+- [ ] Intel HEX loader (command letter TBD; `H` is Hex Math, see TODO.md Open Decisions)
 - [ ] Checksum validation
 - [ ] Type 00 (data) and Type 01 (EOF) records
 

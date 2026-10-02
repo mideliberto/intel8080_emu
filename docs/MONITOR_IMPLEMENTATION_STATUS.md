@@ -42,7 +42,8 @@
 
 ### Test Coverage
 
-- 181 CPU instruction tests
+- 14 unit tests (devices)
+- 180 CPU instruction tests
 - 10 monitor integration tests
 - All tests passing
 
@@ -152,7 +153,7 @@ FF:    System status
 
 ## Future Phases
 
-- **Phase 5:** Intel HEX loader (H command)
+- **Phase 5:** Intel HEX loader (command letter TBD; `H` is Hex Math, see TODO.md Open Decisions)
 - **Phase 6:** Timer device, interrupts
 - **Phase 7:** Assembler/disassembler devices
 - **Phase 8:** HTTP client, network time

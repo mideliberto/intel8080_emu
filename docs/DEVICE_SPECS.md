@@ -13,7 +13,7 @@ The 8080 doesn't know what's behind the ports. It doesn't care.
 
 ## Console (Ports 0x00-0x02)
 
-**Status:** âœ… Implemented
+**Status:** ✅ Implemented
 
 ### Registers
 
@@ -57,7 +57,7 @@ CONIN:
 
 ## System Control (Ports 0xFE-0xFF)
 
-**Status:** âœ… Implemented
+**Status:** ✅ Implemented
 
 ### Registers
 
@@ -71,7 +71,7 @@ CONIN:
 | Value | Function |
 |-------|----------|
 | 0x00 | Disable ROM overlay (expose RAM at 0x0000) |
-| 0x01 | Halt CPU |
+| 0x01 | Halt CPU (**not implemented**; see TODO.md Open Decisions) |
 | 0xFF | Cold reset (re-enable overlay) |
 
 ### Status Byte (Port 0xFF Read)
@@ -224,7 +224,7 @@ FILENAME: DB 'CLAUDE.BIN',0
 
 ## Disassembler (Ports 0x20-0x27)
 
-**Status:** ðŸ”² Future
+**Status:** 🔲 Future
 
 ### Registers
 
@@ -253,7 +253,7 @@ FILENAME: DB 'CLAUDE.BIN',0
 
 ## Assembler (Ports 0x28-0x2F)
 
-**Status:** ðŸ”² Future
+**Status:** 🔲 Future
 
 ### Registers
 
@@ -283,7 +283,7 @@ FILENAME: DB 'CLAUDE.BIN',0
 
 ## Timer 8253 (Ports 0x70-0x73)
 
-**Status:** ðŸ”² Future
+**Status:** 🔲 Future
 
 ### Registers
 
@@ -321,7 +321,7 @@ Bit 0:    BCD (0=binary - only mode supported)
 
 ## Claude API (Ports 0x38-0x3F)
 
-**Status:** ðŸ”² Phase 9
+**Status:** 🔲 Phase 9
 
 The 8080 talks to Claude. It sends bytes, gets bytes back. Doesn't know it's talking to an AI.
 
@@ -392,7 +392,7 @@ PROMPT: DB 'What is the 8080?',0
 
 ## HTTP Client (Ports 0x40-0x47)
 
-**Status:** ðŸ”² Future
+**Status:** 🔲 Future
 
 ### Registers
 
@@ -416,7 +416,7 @@ PROMPT: DB 'What is the 8080?',0
 
 ## System Time (Ports 0x60-0x6F)
 
-**Status:** ðŸ”² Future
+**Status:** 🔲 Future
 
 Read-only time registers.
 

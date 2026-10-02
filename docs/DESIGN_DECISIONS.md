@@ -44,8 +44,8 @@ The 12 key architectural decisions for this project.
 **Decision:** Linear-addressed (not track/sector)
 
 ```
-Interface: 16-bit address, 8-bit data, auto-increment
-Protocol: OUT addr_lo, OUT addr_hi, IN/OUT data
+Interface: 24-bit address (16MB), 8-bit data, auto-increment
+Protocol: OUT addr_lo, OUT addr_mid, OUT addr_hi, IN/OUT data
 ```
 
 **Rationale:**

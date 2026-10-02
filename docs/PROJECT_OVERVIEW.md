@@ -37,7 +37,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Claude API integration | 🔲 Future |
 | Debugger | 🔲 Future |
 
-**Tests:** 191 passing (181 CPU + 10 monitor integration)
+**Tests:** 204 passing (14 unit + 180 CPU + 10 monitor integration)
 
 ---
 

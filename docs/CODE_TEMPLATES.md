@@ -23,8 +23,9 @@ intel8080_emu/
 │       └── devices/
 │           ├── console.rs
 │           ├── test_console.rs
+│           ├── storage.rs
+│           ├── storage_mount.rs
 │           ├── timer.rs
-│           ├── disk.rs
 │           └── null.rs
 ├── rom/
 │   ├── Makefile

@@ -112,20 +112,20 @@ This is how real S-100 systems solved the boot problem. We're using a proven pat
 
 ```
 1. RESET
-   â””â”€> Overlay enabled, PC = 0x0000
+   └─> Overlay enabled, PC = 0x0000
 
 2. CPU executes from 0x0000 (reads ROM via overlay)
-   â””â”€> LXI SP, F000h
-   â””â”€> DI
-   â””â”€> JMP BOOT_CONTINUE  ; Jump to F000+ address space
+   └─> LXI SP, F000h
+   └─> DI
+   └─> JMP BOOT_CONTINUE  ; Jump to F000+ address space
 
 3. Now executing from 0xF000+ range
-   â””â”€> OUT 0FEh, 00h      ; Disable overlay
-   â””â”€> 0x0000-0x0FFF is now RAM
+   └─> OUT 0FEh, 00h      ; Disable overlay
+   └─> 0x0000-0x0FFF is now RAM
 
-4. Copy vectors from ROM to RAM
-   â””â”€> RST vectors at 0x0000-0x003F
-   â””â”€> API table at 0x0040-0x007F
+4. Copy vectors from ROM to RAM (NOT IMPLEMENTED; see TODO.md Open Decisions)
+   └─> RST vectors at 0x0000-0x003F
+   └─> API table at 0x0040-0x007F
 
 5. Initialize workspace, I/O stubs, devices
 
@@ -162,7 +162,7 @@ BOOT_CONTINUE:
 
 | Range | Device | Status |
 |-------|--------|--------|
-| 0x00-0x02 | Console | âœ… Implemented |
+| 0x00-0x02 | Console | ✅ Implemented |
 | 0x03 | Console Control | Reserved |
 | 0x04-0x07 | (Parallel I/O) | Reserved |
 | 0x08-0x0C | Storage Device (24-bit) | ✅ Done |
@@ -177,8 +177,8 @@ BOOT_CONTINUE:
 | 0x70-0x73 | Timer (8253) | Future |
 | 0x74-0xEF | (Expansion) | Available |
 | 0xF0-0xFD | (Reserved) | - |
-| 0xFE | System Control | âœ… Implemented |
-| 0xFF | System Status | âœ… Implemented |
+| 0xFE | System Control | ✅ Implemented |
+| 0xFF | System Status | ✅ Implemented |
 
 ---
 

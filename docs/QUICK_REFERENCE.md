@@ -48,7 +48,8 @@
 | 38-3F | Claude API | Future |
 | 40-5F | Internet | Future |
 | 60-6F | Time | Future |
-| 70-73 | Timer | Future |
+| 30-32 | Timer (existing, undocumented) | Open decision |
+| 70-73 | Timer 8253 | Future |
 | FE | Sys Control | ✅ |
 | FF | Sys Status | ✅ |
 
@@ -103,7 +104,7 @@ Bit 0: C (Carry)
 | Value | Function |
 |-------|----------|
 | 00 | Disable overlay |
-| 01 | Halt CPU |
+| 01 | Halt CPU (not implemented) |
 | FF | Cold reset |
 
 ---
@@ -185,6 +186,6 @@ Bit 0: C (Carry)
 2. Execute ROM at 0000 (via overlay)
 3. JMP to F000+ range
 4. OUT FE,00 -> overlay off
-5. Copy vectors to RAM
+5. Copy vectors to RAM (not implemented)
 6. Normal operation
 ```
