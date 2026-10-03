@@ -6,7 +6,7 @@
 - [x] Debugger NAME+n only within one memory-map region (2026-10-03): accepted by Mike 2026-10-03 (ARCHITECTURE 7.4 Location).
 - [x] HEX guard wording: closed 2026-10-03, ARCHITECTURE 1 now says "would write into either range".
 - [x] HEX "nothing is written on any failure": closed 2026-10-03, MONITOR_SPEC 7.2 now says nothing outside the stack page (option B, matches the ROM).
-- [ ] HEX 7.1 vs READ_LINE control characters (2026-10-03, Phase 5): 7.1 says no other characters may appear inside the record, but READ_LINE drops control characters (Tab, Esc) and applies BS/DEL before the loader sees the line, so a record with an embedded Tab loads. 7.1 already says the grammar applies to the stored line; proposed: one sentence saying so for control characters. Wording only; Mike's call.
+- [x] HEX 7.1 vs READ_LINE control characters: closed 2026-10-03, documented, not rejected. MONITOR_SPEC 7.1 now says control characters never reach the stored line; `hex.txt` loads a record with an embedded Tab, Esc and NUL and one corrected with BS and DEL.
 - [x] HEX `Line too long` wording: closed 2026-10-03, renamed `Record too long` (ROM, MONITOR_SPEC 5/7, transcripts).
 
 ## Current

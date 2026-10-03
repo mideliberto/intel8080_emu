@@ -382,6 +382,7 @@ byte    = hexdigit hexdigit     ; exactly two, 0-9 A-F a-f
 - The grammar applies to the line as READ_LINE stored it, which is at most 79 characters (section 2):
   - A full 34-byte record is 1 + 2 × (34 + 5) = 79 characters. Leading spaces before `:` are allowed, but they count against the 79. With one leading space, a full-length record loses its last checksum digit and fails with `Bad record`.
   - Characters typed after a full 79-character line are discarded before the loader sees the line. A full-length record followed by trailing characters therefore loads.
+  - Control characters never reach the stored line: READ_LINE drops Tab, Esc and every other byte below 20h but CR, LF and BS, and applies BS and DEL (section 2). A record with an embedded Tab, or one corrected with BS, therefore loads.
 
 ### 7.2 Validation order
 

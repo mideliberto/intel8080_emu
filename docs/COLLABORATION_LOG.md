@@ -63,6 +63,9 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-03: HEX Records: Control Characters Documented, Not Rejected
+**Decision:** Mike closed the last Phase 5 wording question: a HEX record with an embedded Tab, Esc or other control character loads, because READ_LINE drops those bytes and applies BS/DEL before the loader sees the line, and the 7.1 grammar applies to the stored line. MONITOR_SPEC 7.1 now says so; the ROM is unchanged, and `hex.txt` proves it with a Tab/Esc/NUL record and a BS/DEL-corrected one.
+
 ### 2026-10-03: Phase 5 Wording Closed
 **Decision:**
 - MONITOR_SPEC 7.2: a failed record writes nothing outside the stack page. That's stricter than the workspace allowance, and the shipped ROM and tests already prove it.
@@ -488,7 +491,7 @@ Console I/O debugging session:
 
 ### Open Decisions
 
-Four open, all Phase 5 spec wording (`TODO.md`): the HEX guard wording in ARCHITECTURE 1 vs MONITOR_SPEC 7; what 7.2's "nothing is written on any failure" covers (workspace, stack page); 7.1 vs the control characters READ_LINE drops; `Line too long` on short lines. The 2026-10-03 set (idle CPU, piped EOF, debugger options, MONITOR_SPEC 4.4 rule 4 and 6.1 wording, shim exit vs WARM) closed 2026-10-03, and so did the two host-only follow-ups (idle wait only while the 8080 polls, the debugger's NAME+n region rule); see Key Decisions. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
+None open. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
 
 ### Blocked/Deferred
 

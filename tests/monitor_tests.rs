@@ -172,8 +172,8 @@ impl Mon {
                 let mut echo = typed.clone();
                 echo.extend_from_slice(b"\r\n");
                 steps.push((i + 1, [&typed[..], b"\r"].concat(), echo));
-            } else if line.starts_with("< ") {
-                steps.push((i + 1, unescape(&line[2..]), Vec::new()));
+            } else if let Some(typed) = line.strip_prefix("< ") {
+                steps.push((i + 1, unescape(typed), Vec::new()));
             } else {
                 let step = steps.last_mut().unwrap_or_else(|| panic!("{}:{}: output before input", path, i + 1));
                 step.2.extend(unescape(line));
@@ -371,7 +371,7 @@ fn hex_loader() {
 /// An Intel HEX type 00 record of `len` copies of `data` at `addr`, checksum correct.
 fn hex_data_record(len: u8, addr: u16, data: u8) -> String {
     let mut bytes = vec![len, (addr >> 8) as u8, addr as u8, 0x00];
-    bytes.extend(std::iter::repeat(data).take(len as usize));
+    bytes.extend(std::iter::repeat_n(data, len as usize));
     let sum = bytes.iter().fold(0u8, |s, b| s.wrapping_add(*b));
     bytes.push(sum.wrapping_neg());
     bytes.iter().fold(":".to_string(), |s, b| s + &format!("{:02X}", b))

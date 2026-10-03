@@ -332,3 +332,12 @@ Checksum error
 Loaded
 > D 0100 0100
 0100: 01 02 03 04 00 00 00 00  00 00 00 00 00 C0 FF EE  ................
+# Control characters inside a record (7.1): READ_LINE drops Tab, Esc and NUL and
+# applies BS and DEL before the loader sees the line, so these records load.
+> F 0100 010F 00
+< :0401\x09000011\x1B223344\x0051\r
+:040100001122334451
+< :04010400X\x0855667\x7F77883D\r
+:04010400X\x08 \x0855667\x08 \x0877883D
+> D 0100 0100
+0100: 11 22 33 44 55 66 77 88  00 00 00 00 00 00 00 00  ."3DUfw.........

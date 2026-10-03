@@ -152,7 +152,7 @@ fn console_is_8_bit_transparent() {
 #[test]
 fn console_output_discards_when_2_mib_are_undrained() {
     let mut r = rig();
-    assert!(OUTPUT_CAP >= 2 * 1024 * 1024);
+    const { assert!(OUTPUT_CAP >= 2 * 1024 * 1024) };
     for i in 0..OUTPUT_CAP + 5 {
         r.out(0x00, i as u8);
     }

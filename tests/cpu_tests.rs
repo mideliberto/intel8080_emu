@@ -746,11 +746,11 @@ fn test_ei_di() {
         0x76,
     ]);
     
-    assert_eq!(cpu.interrupts_enabled, false, "Starts disabled");
+    assert!(!cpu.interrupts_enabled, "Starts disabled");
     cpu.execute_one();
-    assert_eq!(cpu.interrupts_enabled, false, "DI disables");
+    assert!(!cpu.interrupts_enabled, "DI disables");
     cpu.execute_one();
-    assert_eq!(cpu.interrupts_enabled, true, "EI enables");
+    assert!(cpu.interrupts_enabled, "EI enables");
 }
 
 #[test]
