@@ -46,10 +46,10 @@ Bad record
 0200: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
 0210: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
 0220: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
-# 35 data bytes: Line too long (the line is also truncated at 79).
+# 35 data bytes: Record too long (LL above 22h; the line is also truncated at 79).
 < :23020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20212288\r
 :23020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F202122
-Line too long
+Record too long
 > D 0200 0221
 0200: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
 0210: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
@@ -159,9 +159,9 @@ Bad record
 Bad record
 # Step 2 before 3: LL too big wins over a short line.
 > :23
-Line too long
+Record too long
 > :FF0100
-Line too long
+Record too long
 # Step 3 before 4: a short line whose sum is wrong is a Bad record.
 > :0401000001
 Bad record
@@ -311,7 +311,7 @@ E
 \x3E\x20:10032000202122232425262728292A2B2C2D2E2F55\x20
 Bad record
 \x3E\x20:23020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F202122
-Line too long
+Record too long
 \x3E\x20:00000001FF
 Loaded
 \x3E\x20:10033000303132333435363738393A3B3C3D3E3F45

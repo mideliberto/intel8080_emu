@@ -561,7 +561,7 @@ fn hex_records_are_validated_before_any_write() {
         (":0401000001020304F1 ", "Bad record"),
         (":", "Bad record"),
         (&format!(" {}", full), "Bad record"),
-        (":23020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20212288", "Line too long"),
+        (":23020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20212288", "Record too long"),
         (":0000000000", ""),
         (":00000001FF", "Loaded"),
         (":0101000112EB", "Loaded"),

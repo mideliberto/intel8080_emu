@@ -63,6 +63,13 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-03: Phase 5 Wording Closed
+**Decision:**
+- MONITOR_SPEC 7.2: a failed record writes nothing outside the stack page. That's stricter than the workspace allowance, and the shipped ROM and tests already prove it.
+- ARCHITECTURE 1: the loader rejects any record that *would write into* 0000-00FF or EF00-FFFF. EOF and zero-length records are accepted at any address.
+- The message `Line too long` is renamed `Record too long`. It fires on LL above 22h, including short junk like `:23`, where "line" misled.
+**Still open:** a record with an embedded Tab loads, because READ_LINE drops control characters first (TODO).
+
 ### 2026-10-03: Idle Wait Only While the 8080 Polls the Console
 **Decision:** Mike closed the two host-only decisions left open by the 2026-10-03 implementation:
 - **Idle wait trigger:** a pump waits up to 1 ms for host input only when it brought nothing, the console input FIFO is empty, AND the 8080 read `IN 02` during the last pump interval. This narrows the 2026-10-03 "Host idle CPU" decision below, which fired for any compute-bound program. Host-only (ARCHITECTURE 7.2).
@@ -463,7 +470,7 @@ Console I/O debugging session:
 - 14 commands: D, E, F, M, S, C, H, G, I, O, L, W, X, ?, to MONITOR_SPEC sections 1-6, 8, 9, 11 (strict arguments, WARM, G return, memmove, Storage error, Mount failed)
 - Intel HEX loader (Phase 5, MONITOR_SPEC 7): a `:` line is one record, validated in full (pass 1: steps 1-4) before the type, the guard and the write (pass 2)
 - ROM overlay boot mechanism; CONOUT is OUT 00 / RET, so the first Pi access after reset is the banner's OUT 00
-- 2454 of 4096 bytes used (1642 free; `make size`)
+- 2456 of 4096 bytes used (1640 free; `make size`)
 
 **Debugger (host-side, ARCHITECTURE 7.4):** Ctrl-E / `--debug` / `--script`, break, step, registers, memory, disassembly with ROM symbols (`rom/monitor.sym`), watchpoints, I/O breaks, port trace, 256-step trace ring
 

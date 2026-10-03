@@ -1291,7 +1291,7 @@ MSG_LOADED:
 MSG_WRITTEN:
         DB      "Written",CR,LF,0
 MSG_TOO_LONG:
-        DB      "Line too long",CR,LF,0
+        DB      "Record too long",CR,LF,0
 MSG_BAD_RECORD:
         DB      "Bad record",CR,LF,0
 MSG_CHECKSUM:

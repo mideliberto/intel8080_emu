@@ -140,7 +140,7 @@ These are the exact strings. Each is printed with a trailing `<CR><LF>`.
 | `Mount failed` | X: any other nonzero mount status |
 | `Loaded` | L: transfer complete and still mounted. HEX: EOF record (type 01) accepted |
 | `Written` | W: transfer and flush complete and still mounted |
-| `Line too long` | HEX: LL above 22h (34) |
+| `Record too long` | HEX: LL above 22h (34). Checked before the line length, so it also fires on short junk such as `:23` |
 | `Bad record` | HEX: syntax error (non-hex character, short line, trailing characters) |
 | `Checksum error` | HEX: checksum mismatch |
 | `Bad record type` | HEX: type other than 00 or 01 |
@@ -385,12 +385,12 @@ byte    = hexdigit hexdigit     ; exactly two, 0-9 A-F a-f
 
 ### 7.2 Validation order
 
-The loader validates the whole record before it writes any byte. The first check that fails prints its message, and the record is discarded. Nothing is written on any failure.
+The loader validates the whole record before it writes any byte. The first check that fails prints its message, and the record is discarded. On any failure nothing outside the stack page (EF00-EFFF) is written, not even the workspace.
 
 | Step | Check | Failure message |
 |---|---|---|
 | 1 | LL is two hex digits | `Bad record` |
-| 2 | LL ≤ 22h (34) | `Line too long` |
+| 2 | LL ≤ 22h (34) | `Record too long` |
 | 3 | AAAA, TT, the LL data bytes and CC are each two hex digits, and the line ends right after CC | `Bad record` |
 | 4 | (LL + AAAA high + AAAA low + TT + all data bytes + CC) mod 100h = 00 | `Checksum error` |
 | 5 | TT = 00 or 01. Types 02-05 and every other type fail | `Bad record type` |
@@ -441,7 +441,7 @@ Phase 5 tests MUST cover every row.
 | `:22020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F2021AB` (34 bytes, 79 characters) | none | 0200-0221 = 00..21 |
 | Same as the previous row, plus a trailing `X` | none | as the previous row (the `X` is discarded by READ_LINE) |
 | Same as the 34-byte row, with one leading space | `Bad record` | none |
-| `:23020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20212288` (35 bytes) | `Line too long` | none |
+| `:23020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20212288` (35 bytes) | `Record too long` | none |
 | `:0100FF00AA56` | `Address out of range` | none |
 | `:01EF0000AA66` | `Address out of range` | none |
 | `:11EEF00055555555555555555555555555555555556C` (straddles EEFF/EF00) | `Address out of range` | none |

@@ -30,7 +30,7 @@ The rule behind every section: **the ROM sees only what real parts provide.** If
 | EF00-EFFF | Monitor stack. Cold boot and WARM (3.2) both set SP to 0xF000, so the first push writes 0xEFFF and 0xEFFE. |
 | F000-FFFF | ROM. Reads return ROM bytes. Writes have no effect the 8080 can observe. |
 
-**Monitor-owned ranges.** 0000-00FF and EF00-FFFF belong to the monitor. The HEX loader rejects any record that touches either range (`MONITOR_SPEC.md`, Intel HEX Loader). The other monitor commands do not guard these ranges.
+**Monitor-owned ranges.** 0000-00FF and EF00-FFFF belong to the monitor. The HEX loader rejects any record that would write into either range (EOF and zero-length records are accepted at any address) (`MONITOR_SPEC.md`, Intel HEX Loader). The other monitor commands do not guard these ranges.
 
 ### 1.1 Workspace Layout
 
