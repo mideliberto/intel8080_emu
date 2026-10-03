@@ -81,6 +81,7 @@ impl Drop for Trace {
     }
 }
 
+#[derive(Default)]
 pub struct Debugger {
     symbols: Vec<(u16, String)>, // sorted by address, file order within one address
     conds: Vec<Cond>,            // in the order set
@@ -91,7 +92,7 @@ pub struct Debugger {
 
 impl Debugger {
     pub fn new() -> Self {
-        Debugger { symbols: Vec::new(), conds: Vec::new(), ring: VecDeque::new(), trace: None, resume: false }
+        Self::default()
     }
 
     /// Loads `AAAA NAME` lines (rom/monitor.sym). Returns how many.

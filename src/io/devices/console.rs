@@ -10,6 +10,7 @@ use std::collections::VecDeque;
 /// Output beyond this many undrained bytes is discarded (DEVICE_SPECS 4: at least 2 MiB).
 pub const OUTPUT_CAP: usize = 2 * 1024 * 1024;
 
+#[derive(Default)]
 pub struct Console {
     input: VecDeque<u8>,
     output: Vec<u8>,
@@ -19,7 +20,7 @@ pub struct Console {
 impl Console {
     /// Power-on state: both buffers empty.
     pub fn new() -> Self {
-        Console { input: VecDeque::new(), output: Vec::new(), polled: false }
+        Self::default()
     }
 
     /// Bytes arriving from the terminal, in order.

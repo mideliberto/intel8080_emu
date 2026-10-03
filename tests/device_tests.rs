@@ -449,9 +449,12 @@ fn file_over_16_mb_is_01() {
     assert!(!r.mounted());
 }
 
+/// A mount name, the status it gives, and what to create in the storage dir first.
+type MountCase = (&'static [u8], u8, fn(&Path));
+
 #[test]
 fn a_failed_mount_unmounts_the_previous_file() {
-    let setup: [(&[u8], u8, fn(&Path)); 2] = [
+    let setup: [MountCase; 2] = [
         (b"BAD/", 0x02, |_| {}),
         (b"DIR", 0x01, |d| std::fs::create_dir(d.join("DIR")).unwrap()),
     ];

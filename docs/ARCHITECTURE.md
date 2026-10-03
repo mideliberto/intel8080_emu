@@ -402,7 +402,7 @@ The emulator turns host key presses into console input bytes:
 | Non-ASCII character | its UTF-8 bytes, in order |
 | Any other key (arrows, function keys, and so on) | none: dropped |
 
-Test: scripted Ctrl-A delivers 01 at `IN 01`; scripted Esc delivers 1B; scripted "é" delivers C3 A9; scripted Ctrl-E opens the prompt after the keys before it. Code: `map_key` in `src/main.rs`, tested there with the run loop.
+Test: scripted Ctrl-A delivers 01 at `IN 01`; scripted Esc delivers 1B; scripted "é" delivers C3 A9; scripted Ctrl-E opens the prompt after the keys before it. Code: `map_key` in `src/main.rs`, tested there with the run loop. The real binary under a pseudo-terminal (crossterm raw mode and key decoding, Backspace 7F -> 08, Ctrl-C, Ctrl-E and `c`, an interactive HLT and `q`, the terminal mode restored on exit, a piped run never touching it): `tests/terminal_tests.rs`, Unix only.
 
 On hardware the Pi passes every byte the terminal sends; the key map does not exist there. The ROM MUST NOT rely on receiving, or on not receiving, 03 or 05.
 

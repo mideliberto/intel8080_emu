@@ -492,7 +492,7 @@ Console I/O debugging session:
 - Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), Service Mailbox (0x10-0x13, `TIME`; the clock is a plain fn passed to `Mailbox::new`), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
 **Testing (verified 2026-10-03):**
-- 13 host + 130 CPU + 37 device + 30 mailbox + 32 monitor + 16 debugger = 258, all passing (strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
+- 13 host + 130 CPU + 37 device + 30 mailbox + 32 monitor + 16 debugger + 8 terminal = 266, all passing (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 
 ### In Progress
@@ -518,6 +518,12 @@ None open. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "cl
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Loose Ends: Clippy Clean, Real-Terminal Tests
+- `cargo clippy --all-targets` clean: Default for Debugger and Console (derived), Intel8080 and IoBus (`impl Default` calling `new()`: RESET state, and a 256-port array too long to derive); a `MountCase` alias in `device_tests.rs`.
+- `tests/terminal_tests.rs` (8, Unix): the real binary under a pty via `rexpect` (Unix-only dev-dependency), wrapped in `sh` so each test checks the exit status and `stty -g` before = after. Raw-mode boot, echo and run, Ctrl-C mid `JMP $`, Ctrl-E / bad line / `c`, interactive HLT / `q`, Backspace 7F -> 08 at `IN 01` and in a line edit, a piped `--script` run leaving the terminal alone. No pty: skips and passes.
+- Tests 258 -> 266. cargo-mutants `src/main.rs`: 8 missed -> 0 (65 caught, 5 timeouts, 6 unviable). Review: ship; 60 parallel runs without a flake, the no-pty skip checked under `sandbox-exec`, 9 hand mutations of main.rs all caught. Release exercisers 4/4.
+- What bit us: rexpect's `nix` pulled the runtime `libc` 0.2.178 -> 0.2.190 in Cargo.lock. Still untested: Ctrl-D at the interactive `dbg>` (the `Flow::Quit` arm); cargo-mutants doesn't generate it.
 
 ### 2026-10-03: Phase 6 Readings Made Normative
 - Mike confirmed the six Phase 6 literal readings, the 6.15 test wording and the Pi clock policy (Key Decisions, same date). Written into MONITOR_SPEC 6.15, DEVICE_SPECS 8 (a new TIME clock subsection, the precedence line, the OUT 10 rules, the implementation map) and HARDWARE_BUILD 5. Docs and test comments only; no code or ROM change.

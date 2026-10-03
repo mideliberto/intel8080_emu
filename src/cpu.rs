@@ -43,6 +43,12 @@ pub struct Intel8080 {
     transfers: Vec<Transfer>,         // data transfers of the last step
 }
 
+impl Default for Intel8080 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Intel8080 {
     /// Power-on. Registers, SP and RAM are undefined on a real 8080 (ARCHITECTURE 3.1);
     /// here they start at 0, and everything RESET defines comes from reset().

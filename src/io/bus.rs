@@ -6,6 +6,12 @@ pub struct IoBus {
     ports: [Option<Rc<RefCell<dyn IoDevice>>>; 256],
 }
 
+impl Default for IoBus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IoBus {
     pub fn new() -> Self {
         IoBus {

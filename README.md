@@ -16,7 +16,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Storage device (24-bit, 16MB) | ✅ |
 | Monitor ROM v0.5 (15 commands + Intel HEX loader) | ✅ |
 | Host-side debugger (breakpoints, watchpoints, I/O breaks, port trace, trace ring, ROM symbols) | ✅ |
-| 258 tests (13 host + 130 CPU + 37 device + 30 mailbox + 32 monitor + 16 debugger), plus 4 exercisers (`#[ignore]`) | ✅ |
+| 266 tests (13 host + 130 CPU + 37 device + 30 mailbox + 32 monitor + 16 debugger + 8 terminal), plus 4 exercisers (`#[ignore]`) | ✅ |
 | Intel HEX loader (Phase 5) | ✅ |
 | Service Mailbox (ports 10-13) and `TIME` / T (Phase 6) | ✅ |
 | Mailbox: assembler, HTTP, Claude (Phases 7-9) | 🔲 Future |
@@ -187,6 +187,7 @@ tests/
 ├── mailbox_tests.rs     # Service Mailbox at port level (DEVICE_SPECS 8), black-box from the spec
 ├── exerciser.rs         # TST8080, 8080PRE, CPUTEST, 8080EXM under a CP/M shim (#[ignore])
 ├── monitor_tests.rs     # Strict transcript harness: junk RAM, exact output to each prompt
+├── terminal_tests.rs    # The real binary under a pty: raw mode, key map, Ctrl-C/Ctrl-E, HLT prompt (Unix)
 └── transcripts/         # Monitor transcripts (data; also meant for hardware over the Pi console)
 ```
 
