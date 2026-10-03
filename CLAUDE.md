@@ -21,6 +21,7 @@
 - Finish the current phase before starting the next. Ideas for later go in `TODO.md` under Someday, not in code.
 - No abstraction without three concrete uses.
 - `cargo test` after every change. Nothing commits red.
+- Pi target stays green: `cargo check` and `cargo clippy --target aarch64-unknown-linux-musl --bins` before every commit (the Linux-only daemon code never compiles on the Mac otherwise).
 - No debug prints in commits. `git commit -A` when files were deleted.
 - **Hardware is the target.** ROM code and device protocols must be buildable with real parts: no emulator-only shortcuts in ROM, no device behavior a Pi coprocessor or period chip couldn't provide. Emulator conveniences (debugger, trace, test harness) stay on the Rust side and out of the 8080's view.
 - ROM changes: rebuild `monitor.bin` and `monitor.sym` (`cd rom && make`), commit both, and keep the bin within 4KB.
@@ -46,7 +47,7 @@
 This repo is the only source of truth for code and docs. The old Claude.ai Project is retired; everything from it was merged here on 2026-10-02. Where docs and code disagree, the code is what exists, not necessarily what was intended.
 
 ## End of Session (every time)
-1. `cargo test` green.
+1. `cargo test` green, plus the aarch64 musl `cargo check` and `cargo clippy --bins` (see Rules).
 2. Update `TODO.md` (check off, add, move to Open Decisions).
 3. Append a dated entry to Recent Sessions in `docs/COLLABORATION_LOG.md`: what was built, what was decided, what bit us. 3-6 bullets. If a real decision was made, add it to Key Decisions (newest first, never delete).
 4. Update Current State in the log and the Status block above if counts changed.
