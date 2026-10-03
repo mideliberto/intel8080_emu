@@ -1,292 +1,167 @@
-// storage.rs - Linear-addressed storage device
+// storage.rs - Storage (ports 08-0C) and mount (0D-0F): one device, DEVICE_SPECS 6-7.
 //
-// 24-bit addressing = 16MB address space
-// No sectors, no tracks, no banks. Just bytes.
-//
-// Port 0x08: Address low byte
-// Port 0x09: Address mid byte  
-// Port 0x0A: Address high byte
-// Port 0x0B: Data (read/write with auto-increment)
-// Port 0x0C: Read = Status, Write = Control
-//
-// Status bits:
-//   Bit 0: Mounted (1 = file mounted)
-//   Bit 1: Ready (always 1)
-//   Bit 7: EOF (address >= file size)
-//
-// Control commands:
-//   0x00: Reset address to 0
-//   0x01: Decrement address
-//   0x02: Flush write buffer
+// One file from one flat directory, addressed linearly with 24 bits. No sectors,
+// no tracks, no banks. Just bytes.
 
 use crate::io::IoDevice;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
+/// The address reaches 0xFFFFFF, so a file can hold 0x1000000 bytes.
+const MAX_SIZE: u64 = 0x100_0000;
+
 pub struct Storage {
+    dir: PathBuf,
     file: Option<File>,
-    address: u32,       // 24-bit, stored in 32 for convenience
-    file_size: u32,
+    size: u32,
+    address: u32,
+    /// Filename bytes since the last OUT 0E. Holds at most 13: 13 means "too long".
+    name: Vec<u8>,
+    mount_status: u8,
 }
 
 impl Storage {
-    pub fn new() -> Self {
-        Storage {
-            file: None,
-            address: 0,
-            file_size: 0,
-        }
+    /// Power-on state. Creates `dir` if it is missing; if that fails, every mount
+    /// returns 01 because the open fails.
+    pub fn new(dir: PathBuf) -> Self {
+        let _ = std::fs::create_dir_all(&dir);
+        Storage { dir, file: None, size: 0, address: 0, name: Vec::new(), mount_status: 0x01 }
     }
 
-    /// Mount a file for storage operations
-    pub fn mount(&mut self, path: &PathBuf) -> Result<(), String> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(path)
-            .map_err(|e| e.to_string())?;
-
-        let metadata = file.metadata().map_err(|e| e.to_string())?;
-        self.file_size = metadata.len() as u32;
-        self.file = Some(file);
-        self.address = 0;
-        Ok(())
-    }
-
-    /// Unmount current file
-    pub fn unmount(&mut self) {
-        if let Some(ref mut f) = self.file {
-            let _ = f.flush();
+    /// Flushes durably and closes. An fsync error here is not reported (DEVICE_SPECS 6).
+    fn unmount(&mut self) {
+        if let Some(file) = self.file.take() {
+            let _ = file.sync_all();
         }
-        self.file = None;
-        self.file_size = 0;
+        self.size = 0;
         self.address = 0;
     }
 
-    pub fn is_mounted(&self) -> bool {
-        self.file.is_some()
+    fn mount(&mut self) -> u8 {
+        self.unmount();
+        let name = self.name.to_ascii_uppercase();
+        let valid = !name.is_empty()
+            && name.len() <= 12
+            && name != b"."
+            && name != b".."
+            && name.iter().all(|&c| c.is_ascii_uppercase() || c.is_ascii_digit() || b".-_".contains(&c));
+        if !valid {
+            return 0x02;
+        }
+        // Valid names are ASCII, so this can't fail.
+        let path = self.dir.join(std::str::from_utf8(&name).unwrap());
+        let Ok(file) = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path) else {
+            return 0x01;
+        };
+        match file.metadata() {
+            Ok(m) if m.len() <= MAX_SIZE => {
+                self.size = m.len() as u32;
+                self.file = Some(file);
+                0x00
+            }
+            _ => 0x01,
+        }
+    }
+
+    fn advance(&mut self) {
+        self.address = (self.address + 1) & 0xFF_FFFF;
     }
 
     fn read_data(&mut self) -> u8 {
-        if let Some(ref mut file) = self.file {
-            if file.seek(SeekFrom::Start(self.address as u64)).is_ok() {
-                let mut buf = [0u8; 1];
-                if file.read_exact(&mut buf).is_ok() {
-                    self.increment_address();
-                    return buf[0];
-                }
+        let Some(file) = &mut self.file else {
+            self.advance();
+            return 0xFF;
+        };
+        if self.address >= self.size {
+            self.advance();
+            return 0xFF;
+        }
+        let mut buf = [0u8];
+        match file.seek(SeekFrom::Start(self.address as u64)).and_then(|_| file.read_exact(&mut buf)) {
+            Ok(()) => {
+                self.advance();
+                buf[0]
+            }
+            Err(_) => {
+                self.unmount();
+                0xFF
             }
         }
-        0xFF
     }
 
     fn write_data(&mut self, value: u8) {
-        if let Some(ref mut file) = self.file {
-            if file.seek(SeekFrom::Start(self.address as u64)).is_ok() {
-                let _ = file.write_all(&[value]);
-                // Expand file size tracking if we wrote past end
-                if self.address >= self.file_size {
-                    self.file_size = self.address + 1;
-                }
-                self.increment_address();
+        let Some(file) = &mut self.file else {
+            self.advance();
+            return;
+        };
+        match file.seek(SeekFrom::Start(self.address as u64)).and_then(|_| file.write_all(&[value])) {
+            Ok(()) => {
+                self.size = self.size.max(self.address + 1);
+                self.advance();
             }
+            Err(_) => self.unmount(),
         }
     }
 
     fn flush(&mut self) {
-        if let Some(ref mut file) = self.file {
-            let _ = file.flush();
+        if let Some(file) = &self.file {
+            if file.sync_all().is_err() {
+                self.unmount();
+            }
         }
     }
+}
 
-    fn increment_address(&mut self) {
-        // 24-bit wrap
-        self.address = (self.address.wrapping_add(1)) & 0x00FF_FFFF;
-    }
-
-    fn decrement_address(&mut self) {
-        // 24-bit wrap
-        self.address = (self.address.wrapping_sub(1)) & 0x00FF_FFFF;
+impl Drop for Storage {
+    fn drop(&mut self) {
+        self.unmount();
     }
 }
 
 impl IoDevice for Storage {
     fn read(&mut self, port: u8) -> u8 {
         match port {
-            0x08 => self.address as u8,                         // ADDR_LO
-            0x09 => (self.address >> 8) as u8,                  // ADDR_MID
-            0x0A => (self.address >> 16) as u8,                 // ADDR_HI
-            0x0B => self.read_data(),                           // DATA
-            0x0C => {                                           // STATUS
-                let mut status = 0x02;  // Bit 1: always ready
-                if self.is_mounted() {
-                    status |= 0x01;     // Bit 0: mounted
-                }
-                if self.address >= self.file_size {
-                    status |= 0x80;     // Bit 7: EOF
-                }
-                status
-            }
+            0x08 => self.address as u8,
+            0x09 => (self.address >> 8) as u8,
+            0x0A => (self.address >> 16) as u8,
+            0x0B => self.read_data(),
+            0x0C => 0x02 | self.file.is_some() as u8 | ((self.address >= self.size) as u8) << 7,
+            0x0F => self.mount_status,
             _ => 0xFF,
         }
     }
 
     fn write(&mut self, port: u8, value: u8) {
         match port {
-            0x08 => {  // ADDR_LO
-                self.address = (self.address & 0x00FFFF00) | (value as u32);
+            0x08 => self.address = (self.address & 0xFF_FF00) | value as u32,
+            0x09 => self.address = (self.address & 0xFF_00FF) | (value as u32) << 8,
+            0x0A => self.address = (self.address & 0x00_FFFF) | (value as u32) << 16,
+            0x0B => self.write_data(value),
+            0x0C => match value {
+                0x00 => self.address = 0,
+                0x01 => self.address = self.address.wrapping_sub(1) & 0xFF_FFFF,
+                0x02 => self.flush(),
+                _ => {}
+            },
+            0x0D => {
+                if value != 0 && self.name.len() <= 12 {
+                    self.name.push(value);
+                }
             }
-            0x09 => {  // ADDR_MID
-                self.address = (self.address & 0x00FF00FF) | ((value as u32) << 8);
-            }
-            0x0A => {  // ADDR_HI
-                self.address = (self.address & 0x0000FFFF) | ((value as u32) << 16);
-            }
-            0x0B => {  // DATA
-                self.write_data(value);
-            }
-            0x0C => {  // CONTROL
+            0x0E => {
                 match value {
-                    0x00 => self.address = 0,           // Reset address
-                    0x01 => self.decrement_address(),   // Decrement
-                    0x02 => self.flush(),               // Flush
+                    0x01 => self.mount_status = self.mount(),
+                    0x02 => {
+                        self.unmount();
+                        self.mount_status = 0x00;
+                    }
+                    0x03 => self.mount_status = if self.file.is_some() { 0x00 } else { 0x01 },
                     _ => {}
                 }
+                self.name.clear();
             }
             _ => {}
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-
-    fn temp_file_with_data(data: &[u8]) -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.bin");
-        let mut file = File::create(&path).unwrap();
-        file.write_all(data).unwrap();
-        file.flush().unwrap();
-        (dir, path)
-    }
-
-    #[test]
-    fn test_mount_unmount() {
-        let (_dir, path) = temp_file_with_data(&[0x41, 0x42, 0x43]);
-        let mut storage = Storage::new();
-        
-        assert!(!storage.is_mounted());
-        storage.mount(&path).unwrap();
-        assert!(storage.is_mounted());
-        storage.unmount();
-        assert!(!storage.is_mounted());
-    }
-
-    #[test]
-    fn test_24bit_address_set_get() {
-        let mut storage = Storage::new();
-        
-        // Set address to 0x123456
-        storage.write(0x08, 0x56);  // low
-        storage.write(0x09, 0x34);  // mid
-        storage.write(0x0A, 0x12);  // high
-        
-        assert_eq!(storage.read(0x08), 0x56);
-        assert_eq!(storage.read(0x09), 0x34);
-        assert_eq!(storage.read(0x0A), 0x12);
-        assert_eq!(storage.address, 0x123456);
-    }
-
-    #[test]
-    fn test_read_with_auto_increment() {
-        let (_dir, path) = temp_file_with_data(&[0x41, 0x42, 0x43, 0x44]);
-        let mut storage = Storage::new();
-        storage.mount(&path).unwrap();
-        
-        // Reset address
-        storage.write(0x0C, 0x00);
-        
-        // Read with auto-increment
-        assert_eq!(storage.read(0x0B), 0x41);
-        assert_eq!(storage.read(0x0B), 0x42);
-        assert_eq!(storage.read(0x0B), 0x43);
-        assert_eq!(storage.read(0x0B), 0x44);
-        
-        // Address should be 4 now
-        assert_eq!(storage.address, 4);
-    }
-
-    #[test]
-    fn test_write_with_auto_increment() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("write_test.bin");
-        
-        let mut storage = Storage::new();
-        storage.mount(&path).unwrap();
-        
-        // Write bytes
-        storage.write(0x0C, 0x00);  // Reset address
-        storage.write(0x0B, 0xAA);
-        storage.write(0x0B, 0xBB);
-        storage.write(0x0C, 0x02);  // Flush
-        
-        // Read back
-        storage.write(0x0C, 0x00);  // Reset address
-        assert_eq!(storage.read(0x0B), 0xAA);
-        assert_eq!(storage.read(0x0B), 0xBB);
-    }
-
-    #[test]
-    fn test_status_bits() {
-        let mut storage = Storage::new();
-        
-        // Not mounted: bit 0 = 0, bit 1 = 1 (ready)
-        let status = storage.read(0x0C);
-        assert_eq!(status & 0x01, 0);   // not mounted
-        assert_eq!(status & 0x02, 0x02); // ready
-    }
-
-    #[test]
-    fn test_eof_status() {
-        let (_dir, path) = temp_file_with_data(&[0x41, 0x42]);
-        let mut storage = Storage::new();
-        storage.mount(&path).unwrap();
-        
-        // At address 0, file size 2 - not EOF
-        let status = storage.read(0x0C);
-        assert_eq!(status & 0x80, 0);
-        
-        // Set address to 2 (past end)
-        storage.write(0x08, 0x02);
-        let status = storage.read(0x0C);
-        assert_eq!(status & 0x80, 0x80);  // EOF
-    }
-
-    #[test]
-    fn test_address_wrap_at_24bit() {
-        let mut storage = Storage::new();
-        
-        // Set address to 0xFFFFFF
-        storage.write(0x08, 0xFF);
-        storage.write(0x09, 0xFF);
-        storage.write(0x0A, 0xFF);
-        
-        // Increment should wrap to 0
-        storage.increment_address();
-        assert_eq!(storage.address, 0);
-    }
-
-    #[test]
-    fn test_decrement_command() {
-        let mut storage = Storage::new();
-        
-        storage.write(0x08, 0x05);  // address = 5
-        storage.write(0x0C, 0x01);  // decrement
-        
-        assert_eq!(storage.read(0x08), 0x04);
     }
 }

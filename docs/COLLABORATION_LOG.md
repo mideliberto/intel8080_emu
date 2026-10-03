@@ -445,10 +445,10 @@ Console I/O debugging session:
 - 2511 of 4096 bytes used (1585 free)
 
 **Devices:**
-- Console (0x00-0x02), Storage (0x08-0x0C, 24-bit / 16MB), Storage Mount (0x0D-0x0F), System Control (0xFE-0xFF)
+- Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
 **Testing (verified 2026-10-03):**
-- 8 unit + 129 CPU + 20 device + 16 monitor = 173, all passing (strict transcript harness, reference-model CPU tests)
+- 4 host + 129 CPU + 36 device + 16 monitor = 185, all passing (strict transcript harness, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 
 ### In Progress
@@ -458,7 +458,7 @@ Console I/O debugging session:
 
 ### Open Decisions
 
-None. All closed 2026-10-02. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
+Two host-only questions from 2026-10-03 (idle CPU at the prompt, exit at piped EOF); see `TODO.md` Open Decisions. Everything else closed 2026-10-02. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
 
 ### Blocked/Deferred
 
@@ -474,6 +474,13 @@ None. All closed 2026-10-02. The spec is the three normative docs: `docs/ARCHITE
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Devices and Host Run Loop (step C)
+- Storage and Mount merged into one device on 08-0F (no `Rc<RefCell>` link): every IN/OUT 0B advances, host I/O errors unmount, `sync_all` on flush/unmount/remount/Drop, mount rules per DEVICE_SPECS 7 (uppercase first, 13th byte = too long, `.`/`..` invalid, >16MB = 01, failed mount unmounts), every OUT 0E clears the name, 0F reads 01 at power-on.
+- Console is a FIFO plus a 2 MiB-capped output buffer with no terminal code; `null.rs`, `test_console.rs`, `storage_mount.rs` deleted. One `build_bus()` for main.rs and every harness; reset = build it again.
+- main.rs owns the host side: `map_key` per ARCHITECTURE 7.1 (Ctrl+Alt now dropped like Alt), pump every 10,000 steps, `run_loop` returns Halted/Quit, raw mode only on a real TTY, piped stdin goes in unmapped.
+- Tests: 36 port-level device tests, 4 run-loop tests, new transcript lines that fail on the old devices. cargo-mutants on the device and host files: every survivor equivalent, fsync-only or terminal-only.
+- What bit us: the Ctrl-C test hung instead of failing when its mutant survived (the script fed empty batches forever); the script now panics after 100 idle pumps. The README piped example never exited (EOF just waits at the prompt), so it now uses a halting example. Idle CPU and EOF-exit went to Open Decisions.
 
 ### 2026-10-03: CPU Fixed, Exercisers Green (step B)
 - AC fixed for SUB/SBB/CMP, DCR, ANA/ANI and DAA; POP PSW gives `(v&D5)|02`; aliases CB/D9/DD/ED/FD decoded, so no opcode panics. Reference-model tests lost their AC masks and now compare every flag. 8080EXM passes all 25 groups.

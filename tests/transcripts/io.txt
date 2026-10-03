@@ -16,6 +16,9 @@ FF
 > O 08 00
 > I 08
 00
+# Mount status reads 01 at power-on, what a query would return.
+> I 0F
+01
 
 # Missing arguments.
 > I

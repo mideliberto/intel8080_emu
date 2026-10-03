@@ -10,10 +10,7 @@
 // program ends by jumping to 0000, or returning to it; 0000 jumps into the monitor.
 // The test stops when PC reaches 0000.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
-use intel8080_emu::io::devices::test_console::TestConsole;
+use intel8080_emu::io::build_bus;
 use intel8080_emu::Intel8080;
 
 const BDOS: u16 = 0xEE00;  // CP/M programs put their stack below the BDOS entry (word at 0006)
@@ -50,8 +47,9 @@ fn run(name: &str, max_cycles: u64) -> Option<String> {
         return None;
     };
     let mut cpu = Intel8080::new();
-    let con = Rc::new(RefCell::new(TestConsole::new("")));
-    cpu.io_bus_mut().map_port(0x00, con.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let (bus, con) = build_bus(dir.path());
+    *cpu.io_bus_mut() = bus;
     for (addr, bytes) in SHIM {
         cpu.load_program(bytes, addr);
     }
@@ -61,10 +59,10 @@ fn run(name: &str, max_cycles: u64) -> Option<String> {
     while cpu.pc != 0x0000 {
         assert!(!cpu.halted, "{}: HLT at PC={:04X}", name, cpu.pc);
         assert!(cpu.cycles < max_cycles, "{}: not done after {} cycles, PC={:04X}\n{}",
-            name, max_cycles, cpu.pc, con.borrow().get_output());
+            name, max_cycles, cpu.pc, String::from_utf8_lossy(con.borrow().output()));
         cpu.execute_one();
     }
-    let out = con.borrow().get_output();
+    let out = String::from_utf8_lossy(con.borrow().output()).into_owned();
     println!("== {} ({} cycles)\n{}", name, cpu.cycles, out);
     Some(out)
 }

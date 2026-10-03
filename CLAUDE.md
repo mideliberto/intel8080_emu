@@ -6,7 +6,7 @@
 
 ## Status
 - Phase 4 complete (24-bit storage, 16MB). Phase 5 next: Intel HEX loader, parsed in ROM by the 8080.
-- 173 tests passing (8 unit + 129 CPU + 20 device + 16 monitor), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
+- 185 tests passing (4 host + 129 CPU + 36 device + 16 monitor), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
 - Monitor ROM v0.3, 14 commands, ~1.6KB ROM headroom
 - Spec solidified 2026-10-02: three normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC). No open decisions.
 - Live task list: `TODO.md`

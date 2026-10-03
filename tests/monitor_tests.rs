@@ -24,9 +24,8 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 
-use intel8080_emu::io::devices::storage::Storage;
-use intel8080_emu::io::devices::storage_mount::StorageMount;
-use intel8080_emu::io::devices::test_console::TestConsole;
+use intel8080_emu::io::build_bus;
+use intel8080_emu::io::devices::console::Console;
 use intel8080_emu::io::IoDevice;
 use intel8080_emu::Intel8080;
 
@@ -41,29 +40,18 @@ const BUDGET: u64 = 30_000_000;
 
 struct Mon {
     cpu: Intel8080,
-    con: Rc<RefCell<TestConsole>>,
-    storage: Rc<RefCell<Storage>>,
+    con: Rc<RefCell<Console>>,
     dir: tempfile::TempDir,
 }
 
-/// Power on with junk RAM and the ports mapped as in src/main.rs; returns the
+/// Power on with junk RAM and the port map main.rs uses (build_bus); returns the
 /// monitor and what boot printed up to the first prompt.
 fn power_on(overlay: bool) -> (Mon, Result<Vec<u8>, String>) {
     let mut cpu = Intel8080::new();
     cpu.load_program(&vec![JUNK; 0xF000], 0x0000);
-    let con = Rc::new(RefCell::new(TestConsole::new("")));
-    for p in 0x00..=0x02 {
-        cpu.io_bus_mut().map_port(p, con.clone());
-    }
     let dir = tempfile::tempdir().unwrap();
-    let storage = Rc::new(RefCell::new(Storage::new()));
-    for p in 0x08..=0x0C {
-        cpu.io_bus_mut().map_port(p, storage.clone());
-    }
-    let mount = Rc::new(RefCell::new(StorageMount::new(storage.clone(), dir.path().to_path_buf())));
-    for p in 0x0D..=0x0F {
-        cpu.io_bus_mut().map_port(p, mount.clone());
-    }
+    let (bus, con) = build_bus(dir.path());
+    *cpu.io_bus_mut() = bus;
     cpu.load_rom_from_file(Path::new("rom/monitor.bin")).unwrap();
     cpu.reset();
     (cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l) = (JUNK, JUNK, JUNK, JUNK, JUNK, JUNK, JUNK);
@@ -72,7 +60,7 @@ fn power_on(overlay: bool) -> (Mon, Result<Vec<u8>, String>) {
     if !overlay {
         cpu.rom_overlay_enabled = false;
     }
-    let mut m = Mon { cpu, con, storage, dir };
+    let mut m = Mon { cpu, con, dir };
     let banner = m.step(b"");
     (m, banner)
 }
@@ -126,8 +114,8 @@ fn unescape(text: &str) -> Vec<u8> {
 impl Mon {
     /// Type `input`, run to the next prompt, return what was printed (prompt stripped).
     fn step(&mut self, input: &[u8]) -> Result<Vec<u8>, String> {
-        self.con.borrow_mut().clear_output();
-        self.con.borrow_mut().add_input(input);
+        self.con.borrow_mut().take_output();
+        self.con.borrow_mut().push_input(input);
         let start = self.cpu.cycles;
         let mut quiet_since = None;
         loop {
@@ -136,12 +124,12 @@ impl Mon {
             }
             if self.cpu.cycles - start > BUDGET {
                 return Err(format!("no prompt within {} cycles after {:?}, PC={:04X}, output {:?}",
-                    BUDGET, show(input), self.cpu.pc, show(self.con.borrow().output_bytes())));
+                    BUDGET, show(input), self.cpu.pc, show(self.con.borrow().output())));
             }
             self.cpu.execute_one();
             let mut con = self.con.borrow_mut();
-            let at_prompt = con.read(0x02) & 0x01 == 0 && con.output_bytes().ends_with(b"> ");
-            let len = con.output_bytes().len();
+            let at_prompt = con.read(0x02) & 0x01 == 0 && con.output().ends_with(b"> ");
+            let len = con.output().len();
             drop(con);
             // At a prompt with no input left, it must stay quiet: a dump line can end in "> ".
             match quiet_since {
@@ -153,7 +141,7 @@ impl Mon {
                 _ => quiet_since = if at_prompt { Some((self.cpu.cycles, len)) } else { None },
             }
         }
-        let out = self.con.borrow().output_bytes().to_vec();
+        let out = self.con.borrow().output().to_vec();
         Ok(out[..out.len() - 2].to_vec())
     }
 
@@ -233,7 +221,7 @@ fn boot_fails_without_overlay() {
     let (m, banner) = power_on(false);
     let e = banner.expect_err("booted without the overlay");
     assert!(e.starts_with("HLT at PC=0001"), "{}", e);
-    assert!(m.con.borrow().output_bytes().is_empty());
+    assert!(m.con.borrow().output().is_empty());
 }
 
 // ---------- Transcripts ----------
@@ -317,7 +305,7 @@ fn storage() {
     assert_eq!(disk[4..0x100], [0x5A; 0xFC]);
     assert_eq!(disk[0x100..0x10002], vec![0x00; 0xFF02]);
     assert_eq!(disk[0x10002..0x10005], [0xA0, 0xA1, 0xA2]);
-    assert_eq!(m.storage.borrow_mut().read(0x0C) & 0x01, 0, "X - left the file mounted");
+    assert_eq!(m.cpu.io_bus_mut().read(0x0C) & 0x01, 0, "X - left the file mounted");
 }
 
 // ---------- G (not a transcript: the program ends in HLT, not at a prompt) ----------
@@ -330,13 +318,13 @@ fn go_runs_code() {
         for (i, b) in [0x3E, b'!', 0xD3, 0x00, 0x76].iter().enumerate() {
             m.run(&format!("F {:04X} {:04X} {:02X}", at + i as u16, at + i as u16, b));
         }
-        m.con.borrow_mut().clear_output();
-        m.con.borrow_mut().add_input(format!("{}\r", line));
+        m.con.borrow_mut().take_output();
+        m.con.borrow_mut().push_input(format!("{}\r", line).as_bytes());
         let start = m.cpu.cycles;
         while !m.cpu.halted && m.cpu.cycles - start < BUDGET {
             m.cpu.execute_one();
         }
         assert_eq!(m.cpu.pc, at + 5, "{}: halted at the wrong place", line);
-        assert_eq!(show(m.con.borrow().output_bytes()), format!("{}\\r\\n!", line));
+        assert_eq!(show(m.con.borrow().output()), format!("{}\\r\\n!", line));
     }
 }

@@ -79,7 +79,7 @@ ROM:
 **Features:**
 - 16MB address space (24-bit, linear)
 - Auto-increment on read/write
-- Filename validation (1-12 chars, alphanumerics plus `. - _`; `src/io/devices/storage_mount.rs:55`, `:95`). The decided rules (uppercasing, `.`/`..` rejected, more than 12 characters -> 02) are in DEVICE_SPECS and pending in TODO.md.
+- Filename validation per DEVICE_SPECS 7: uppercased, 1-12 chars of `A-Z 0-9 . - _`, not `.` or `..`. Storage and mount are one device since 2026-10-03 (`src/io/devices/storage.rs`).
 
 ---
 

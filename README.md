@@ -15,7 +15,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Console device | ✅ |
 | Storage device (24-bit, 16MB) | ✅ |
 | Monitor ROM v0.3 (14 commands) | ✅ |
-| 173 tests (8 unit + 129 CPU + 20 device + 16 monitor), plus 4 exercisers (`#[ignore]`) | ✅ |
+| 185 tests (4 host + 129 CPU + 36 device + 16 monitor), plus 4 exercisers (`#[ignore]`) | ✅ |
 | Intel HEX loader (Phase 5) | 🔲 Next |
 | Service Mailbox: time, HTTP, Claude (Phases 6-9) | 🔲 Future |
 
@@ -85,7 +85,7 @@ Ready.
 > 
 ```
 
-Ctrl-C quits the emulator. Host key mapping: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Ctrl-C quits the emulator. Host key mapping: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). With stdin piped instead of a terminal, its bytes go straight to the console. A piped run ends only on HLT (`HLT at PC=xxxx`) or Ctrl-C; at end of input the monitor just waits at its prompt. Example: `printf 'F 0200 0200 76\rG 0200\r' | cargo run`.
 
 ## ROM Development
 
@@ -104,20 +104,17 @@ S-100 style boot: RESET starts the CPU at 0x0000 with the ROM at 0xF000 mirrored
 
 ```
 src/
-├── main.rs              # Entry point
+├── main.rs              # Host side: terminal, key map, run loop
 ├── lib.rs               # Library exports
 ├── cpu.rs               # 8080 CPU emulation
 ├── registers.rs         # Register enums, flags
 └── io/
-    ├── mod.rs
+    ├── mod.rs           # build_bus: the port map (devices in power-on state)
     ├── bus.rs           # I/O port mapping
     ├── device.rs        # IoDevice trait
     └── devices/
-        ├── console.rs       # Terminal I/O
-        ├── storage.rs       # 24-bit linear storage
-        ├── storage_mount.rs # File mounting service
-        ├── test_console.rs  # Scripted testing
-        └── null.rs
+        ├── console.rs       # Console 00-02: input FIFO, output buffer
+        └── storage.rs       # Storage and mount 08-0F: 24-bit linear storage
 
 rom/
 ├── Makefile
@@ -147,7 +144,7 @@ docs/
 
 tests/
 ├── cpu_tests.rs         # CPU: reference-model flags, opcode cycle/length table, branches, wrap
-├── device_tests.rs      # Storage and mount at port level
+├── device_tests.rs      # Console, storage and mount at port level
 ├── exerciser.rs         # TST8080, 8080PRE, CPUTEST, 8080EXM under a CP/M shim (#[ignore])
 ├── monitor_tests.rs     # Strict transcript harness: junk RAM, exact output to each prompt
 └── transcripts/         # Monitor transcripts (data; also meant for hardware over the Pi console)

@@ -89,7 +89,7 @@ There is no software reset.
 - `reset()` models the RESET pin and nothing else. It sets PC=0, INTE=0, halted=false, overlay=1, clears any pending interrupt, and leaves A-L, flags, SP and RAM alone.
 - `Intel8080::new()` builds the struct and calls `reset()`, so there is one home for power-on state.
 - Test harnesses start registers, SP and RAM at values the ROM can't get lucky with. They fill RAM with a non-zero junk byte before boot, so a ROM that relies on zeroed RAM or a preset SP fails its tests. (Decided 2026-10-02.)
-- `new()` starts A-L, SP and RAM at 00 and flags at 02; the monitor harness overwrites them with junk before boot. Devices are created in their power-on state at process start, which is the emulator's only RESET. Any future host-side reset (Phase 10) MUST reset the devices as well as the CPU.
+- `new()` starts A-L, SP and RAM at 00 and flags at 02; the monitor harness overwrites them with junk before boot. Devices are created in their power-on state at process start by `build_bus` (`src/io/mod.rs`), which is the emulator's only RESET. Any future host-side reset (Phase 10) MUST reset the devices as well as the CPU.
 
 ### 3.2 Boot Sequence
 
@@ -402,7 +402,7 @@ The emulator turns host key presses into console input bytes:
 | Non-ASCII character | its UTF-8 bytes, in order |
 | Any other key (arrows, function keys, and so on) | none: dropped |
 
-Test: scripted Ctrl-A delivers 01 at `IN 01`; scripted Esc delivers 1B; scripted "é" delivers C3 A9. Current code maps Ctrl-A to 61 and drops Tab and Esc (`console.rs:81-84`); emulator change pending, TODO.md.
+Test: scripted Ctrl-A delivers 01 at `IN 01`; scripted Esc delivers 1B; scripted "é" delivers C3 A9. Code: `map_key` in `src/main.rs`, tested there with the run loop.
 
 On hardware the Pi passes every byte the terminal sends; the key map does not exist there. The ROM MUST NOT rely on receiving, or on not receiving, 03 or 05.
 
@@ -410,12 +410,12 @@ On hardware the Pi passes every byte the terminal sends; the key map does not ex
 
 | Convenience | Contract |
 |-------------|----------|
-| **Host input pump** | The host run loop reads pending host keyboard input at least once every 10,000 executed steps and puts the mapped bytes (7.1) into the console input FIFO in arrival order. The key source is injectable, so tests can script it. (Today input is read only inside `IN 02`, `console.rs:43-53`; emulator change pending, TODO.md.) |
+| **Host input pump** | The host run loop reads pending host keyboard input at least once every 10,000 executed steps and puts the mapped bytes (7.1) into the console input FIFO in arrival order. The key source is injectable, so tests can script it. Console output is drained to host stdout as often. When stdin is not a terminal, its bytes go to the FIFO unmapped and Ctrl-C is the shell's. Code: `run_loop` in `src/main.rs`. |
 | **Ctrl-C quits** | When the pump reads Ctrl-C, nothing goes into the FIFO. The run loop returns a quit status, and `main.rs` restores the terminal mode and exits. This works whatever the 8080 is doing, including `JMP $`. Test: script Ctrl-C while the CPU runs `JMP $`; the run loop returns quit within 10,000 steps, and `IN 01` never returns 03. |
-| **Halt** | `run()` returns a halted status when the CPU halts (5.8; current code: `run()` returns `()` on halt, status lands with the run-loop quit work in `TODO.md`); v1 has no interrupt source that could wake it. `main.rs` prints `HLT at PC=xxxx` to host stdout, where xxxx is PC (the address after the HLT), restores the terminal, and exits. |
+| **Halt** | The run loop returns a halted status when the CPU halts (5.8); v1 has no interrupt source that could wake it. `main.rs` prints `HLT at PC=xxxx` to host stdout, where xxxx is PC (the address after the HLT), restores the terminal, and exits. |
 | **Debugger hotkey** (Phase 10) | Ctrl-E opens an emulator-side prompt. Designed in Phase 10. Any reset it offers resets the devices too (3.1). |
 | **Host banner and exit lines** | "8080 Emulator", the build timestamp, and any exit message go to host stdout from `main.rs`, never from the CPU core or from a device the 8080 can see. |
-| **Test harness** | Allowed only on the host side: `TestConsole` (scripted input and captured output); test `IoDevice`s mapped with `map_port`, for example one that records every port access; `load_program` (writes that bypass the ROM and the overlay); a CPU with no ROM loaded; `interrupt(rst)` (5.7); direct access to the registers, memory, `cycles`, `halted` and `interrupts_enabled`. Trace and disassembly come with the debugger. |
+| **Test harness** | Allowed only on the host side: the real port map from `build_bus` with the `Console`'s host side (scripted input and captured output); test `IoDevice`s mapped with `map_port`, for example one that records every port access; `load_program` (writes that bypass the ROM and the overlay); a CPU with no ROM loaded; `interrupt(rst)` (5.7); direct access to the registers, memory, `cycles`, `halted` and `interrupts_enabled`. Trace and disassembly come with the debugger. |
 | **No throttle** | The emulator runs at host speed. `cycles` counts T-states only. |
 
 ### 7.3 Port Trace Format

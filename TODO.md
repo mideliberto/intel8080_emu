@@ -2,6 +2,8 @@
 
 ## Open Decisions (Mike decides before anyone codes against them)
 - None. All closed 2026-10-02; see COLLABORATION_LOG Key Decisions. The specs are docs/ARCHITECTURE.md, docs/DEVICE_SPECS.md, docs/MONITOR_SPEC.md.
+- Host idle CPU (2026-10-03): the pump polls with `Duration::ZERO`, so waiting at the prompt burns a full host core. ARCHITECTURE 7.2 doesn't fix the poll duration. Option: when a pump brings nothing and the console FIFO is empty, block in poll(1 ms). Host-only; the 8080 can't see wall time.
+- Piped stdin EOF (2026-10-03): a piped run never exits at end of input; it waits at the prompt until HLT or Ctrl-C. Exit at EOF (risks cutting output the CPU hasn't printed yet), or leave it?
 
 ## Current
 - [x] Apply alignment package (archived: docs/archive/HANDOFF_2026-10.md)
@@ -30,20 +32,20 @@ Budget: ~250 bytes of the 1585 free (a working sketch came in at 176).
 Emulator:
 - [x] Delete `src/io/devices/timer.rs` and its port hooks in `src/cpu.rs` (ports 0x30-0x32, tick at ~:947). Keep a CPU interrupt input `interrupt(rst)` with 8080A acceptance (EI delay, HLT wake, 11 cycles); tests only.
 - [x] HLT: `execute_one` fetches nothing while halted; `run()` returns on halt; main.rs prints `HLT at PC=xxxx`, restores the terminal, exits; `perform_hlt` stops printing.
-- [ ] Host input pump + Ctrl-C quit in the emulator run loop (today input is read only inside IN 02, `console.rs:43-53`); host key map per ARCHITECTURE (`console.rs:81-84`); `run()` returns a quit/halted status (ARCHITECTURE 7.2; today it returns `()`)
-- [ ] Console output 8-bit transparent: `console.rs:68` prints `value as char`, so bytes 80-FF go out as 2 UTF-8 bytes
+- [x] Host input pump + Ctrl-C quit in the emulator run loop; host key map per ARCHITECTURE; the run loop returns a quit/halted status (ARCHITECTURE 7.2). Done 2026-10-03: `run_loop`/`map_key` in `src/main.rs`; piped stdin feeds the console unmapped
+- [x] Console output 8-bit transparent (was `value as char`, so bytes 80-FF went out as 2 UTF-8 bytes)
 - [x] `IoBus::map_port` panics on 0xFE/0xFF (CPU-owned ports) instead of silently never being called
 - [x] Power-on: `reset()` = RESET pin only (PC, INTE, halted, overlay, pending interrupt); `new()` calls `reset()`; no zeroed registers or preset SP; the harness fills RAM with junk (ARCHITECTURE 3.1). Harness side done: RAM and A-L = 76, flags = D7, SP = 0000 at boot
-- [ ] Merge Storage + StorageMount into one device serving 08-0F (drop the `Rc<RefCell<Storage>>`)
-- [ ] One Console (input VecDeque + output buffer, no crossterm); host polling, key map and Ctrl-C/E in main.rs; delete `test_console.rs`
+- [x] Merge Storage + StorageMount into one device serving 08-0F (drop the `Rc<RefCell<Storage>>`)
+- [x] One Console (input VecDeque + output buffer, no crossterm); host polling, key map and Ctrl-C/E in main.rs; delete `test_console.rs` (and the unused `null.rs`)
 - [x] `scripts/fetch_exercisers.sh` (pinned SHA-256) + `#[ignore]` `tests/exerciser.rs`. Write the CP/M shim in 8080 assembly, not Rust hooks, so the same bytes run on hardware: 0005 JMP to a print routine at <= EEFF; 0000 JMP to WARM (not HLT, which hangs hardware with no INT source). Goal: 8080EXM all PASS; the exercisers are also the chip-acceptance test. Done 2026-10-03: all four pass. The shim's 0000 jumps to F000 (cold start) until the ROM has WARM
-- [ ] Console: 2 MiB output cap, discard on full; clear output on reset
-- [ ] Device reset = rebuild the IoBus and devices from config (no `reset()` on IoDevice, no Send). Storage `Drop` does `File::sync_all`; flush uses `sync_all` (`File::flush` is a no-op, `storage.rs:61/100`)
-- [ ] One port-mapping function shared by main.rs and a future Pi daemon binary (one crate, two binaries)
+- [x] Console: 2 MiB output cap, discard on full; clear output on reset (reset rebuilds the Console)
+- [x] Device reset = rebuild the IoBus and devices from config (no `reset()` on IoDevice, no Send). Storage `Drop` does `File::sync_all`; flush uses `sync_all` (`File::flush` was a no-op)
+- [x] One port-mapping function shared by main.rs and a future Pi daemon binary (one crate, two binaries). Done 2026-10-03: `build_bus` in `src/io/mod.rs`, used by main.rs and all three harnesses
 - [x] Strict monitor harness stores transcripts as data files, so the same files drive hardware conformance over the Pi TCP console (`tests/transcripts/*.txt`, format in the `tests/monitor_tests.rs` header)
 - [x] Port 0xFE: any write disables overlay; drop 0xFF cold reset (`src/cpu.rs:758-769`). Overlay writes go through to RAM (`src/cpu.rs:212`)
-- [ ] Storage: every IN/OUT 0B advances the address (mounted or not; `storage.rs:72-96`); any host I/O error unmounts; flush/unmount fsync; host file > 16 MB fails mount with 01. Already true, needs tests only: power-on 0C=82, storage dir created at startup (`main.rs:35`)
-- [ ] Mount: names > 12 chars -> 02 (`storage_mount.rs:95` truncates); failed mount unmounts previous; every OUT 0E (any value) clears the name buffer; uppercase before validate/open; 0F reads 01 at power-on
+- [x] Storage: every IN/OUT 0B advances the address (mounted or not); any host I/O error unmounts; flush/unmount fsync; host file > 16 MB fails mount with 01. Tests: power-on 0C=82, storage dir created at startup (now in `Storage::new`)
+- [x] Mount: names > 12 chars -> 02 (was truncated); failed mount unmounts previous; every OUT 0E (any value) clears the name buffer; uppercase before validate/open; 0F reads 01 at power-on
 ROM:
 - [ ] G pushes WARM (`WARM: LXI SP,STACK_TOP` before MAIN_LOOP) before PCHL (`rom/monitor.asm:876-885`)
 - [ ] CONOUT = `OUT 00h / RET` (drop the TX poll, `rom/monitor.asm:175-183`). Must land before the board exists: until then the first Pi access after reset is IN 02, not OUT 00
@@ -69,11 +71,11 @@ Every item was reproduced by a scratch test or confirmed by tracing the asm.
 - [x] Interrupt acknowledge adds 0 cycles (`handle_interrupt` :290). Expected 11 for RST.
 
 ### Devices
-- [ ] `..` and `.` pass validation, mount fails with 0x01 instead of 0x02 (`storage_mount.rs:55`). Repro: name `..`, mount: status 01.
-- [ ] Flush and write errors are swallowed (`storage.rs:88`, flush has no fsync). W prints "Written" regardless.
+- [x] `..` and `.` pass validation, mount fails with 0x01 instead of 0x02. Repro: name `..`, mount: status 01. Fixed 2026-10-03.
+- [x] Flush and write errors are swallowed (flush had no fsync). W prints "Written" regardless. Device side fixed 2026-10-03 (errors unmount); the W status check is the ROM item above.
 - [x] `map_port` silently ineffective for 0x30-0x32, 0xFE and 0xFF: the CPU intercepts them first (`cpu.rs:758-782`). 0x30-0x32 goes away with the timer deletion.
-- [ ] Ctrl-C can't stop a program that doesn't poll the console (`console.rs:43-53, 76-80`). Repro: `G` into `JMP $`, then ^C: the process keeps running.
-- [ ] Control keys mangled (`console.rs:81-84`). Repro: Ctrl-A arrives as 0x61, Ctrl-S as 0x73; Esc and Tab are dropped.
+- [x] Ctrl-C can't stop a program that doesn't poll the console. Repro: `G` into `JMP $`, then ^C: the process keeps running. Fixed 2026-10-03 (host pump).
+- [x] Control keys mangled. Repro: Ctrl-A arrives as 0x61, Ctrl-S as 0x73; Esc and Tab are dropped. Fixed 2026-10-03 (`map_key`).
 
 ### Monitor ROM (`rom/monitor.asm`)
 - [ ] L/W count 0 moves 65536 bytes (:1351-1358, :1420-1427). Repro: `L 0 0200 0` wipes the workspace; the next `I 02` cold-boots.
@@ -135,10 +137,10 @@ Method: a 16-agent review workflow (CPU first, then ROM and devices) with every 
 - [ ] Contracts: READ_HEX_WORD returns the same flags for "absent" and "junk". Adopt Z=absent / C=invalid (7 peek sites collapse; fixes G, L/W count and S). One RANGE helper (4 uses: C, D, F, S) fixes all four tracked range bugs for -3 net bytes and deletes both `CPI 0F0H` heuristics.
 
 ### Devices
-- [ ] Console and TestConsole duplicate the protocol. The shipped Console has zero coverage and pulls crossterm into the device layer the Pi reuses (see Open Decisions).
-- [ ] StorageMount holds `Rc<RefCell<Storage>>`: it is !Send and splits one Pi device across two structs (see Open Decisions).
+- [x] Console and TestConsole duplicate the protocol. The shipped Console has zero coverage and pulls crossterm into the device layer the Pi reuses. Fixed 2026-10-03: one Console, tested at port level.
+- [x] StorageMount holds `Rc<RefCell<Storage>>`: it is !Send and splits one Pi device across two structs. Fixed 2026-10-03: one device.
 - [ ] The W flush (OUT 0C <- 02) can't be observed by any test.
-- [ ] IN 02 costs about 1.2 ms of wall time (a 1 ms poll), so console output is throttled to about 850 chars/s. Fixed by the bare-OUT CONOUT plus `poll(Duration::ZERO)` every N steps in the host pump.
+- [x] IN 02 costs about 1.2 ms of wall time (a 1 ms poll), so console output is throttled to about 850 chars/s. Fixed 2026-10-03: `poll(Duration::ZERO)` every 10,000 steps in the host pump.
 
 ## Blocked
 - [ ] R command - needs register capture on return (Phase 10)

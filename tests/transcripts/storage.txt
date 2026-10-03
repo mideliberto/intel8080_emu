@@ -100,6 +100,16 @@ Invalid hex value
 Invalid hex value
 > X BAD/NAME
 Invalid filename
+# A failed mount unmounts the previous file; names over 12 characters, "." and ".."
+# are invalid; a lowercase name is accepted (DEVICE_SPECS 7).
+> X
+No storage mounted
+> X LONGNAME12345
+Invalid filename
+> X ..
+Invalid filename
+> X test.bin
+Mounted
 
 # Unmount. "Unmounted" exists only in a current monitor.bin (the stale-bin guard).
 > X -
@@ -108,6 +118,11 @@ Unmounted
 No storage mounted
 > I 08
 00
+# Not mounted, IN 0B reads FF and still advances the address (DEVICE_SPECS 6).
+> I 0B
+FF
+> I 08
+01
 > L 0 0200
 No storage mounted
 > W 0200 0

@@ -55,7 +55,7 @@ Normative. Every I/O port the 8080 can see, at register level. Where the emulato
    - Every Pi device returns to its power-on state: storage unmounted (flushed durably and closed, address 000000), filename buffer empty, mount status 01, mailbox IDLE with the command buffer and response cleared and any running request aborted, console input FIFO empty, console output buffer empty.
    - An access cut off by RESET may or may not have taken effect. Its device state is then reset as above.
    - No ROM code is involved.
-   - **Emulator:** RESET happens only at process start, when every device is created in its power-on state. Any future host-side reset (Phase 10) MUST also return every device to its power-on state.
+   - **Emulator:** RESET happens only at process start, when `build_bus` (`src/io/mod.rs`) creates every device in its power-on state. Any future host-side reset (Phase 10) MUST also return every device to its power-on state, by calling `build_bus` again.
 9. **Pi service restart:** if the Pi's device service restarts (crash, update or reboot) while the 8080 runs, every Pi device returns to its power-on state and the 8080 is not notified. Clients detect this by checking status:
    - storage: status bit 0 drops to 0 (section 6);
    - mailbox: status reads 00 after an execute (section 8).
@@ -118,7 +118,7 @@ The console is a Pi FIFO device behind READY. The terminal connects to the Pi; t
 
 ### Behavior
 
-- **OUT 00:** the byte goes to the terminal unchanged: 8-bit transparent, no translation, no CR/LF insertion. `OUT 00` never waits on the terminal. When no terminal is attached, or the Pi's output buffer is full, the byte is discarded. The Pi's output buffer holds at least 2 MiB, more than any single monitor command prints (`C 0000 FFFF` prints up to 1,114,112 bytes). Bytes are discarded only when it is full. The emulator re-encodes bytes 80-FF as UTF-8 (`src/io/devices/console.rs:68`; emulator change pending, TODO.md).
+- **OUT 00:** the byte goes to the terminal unchanged: 8-bit transparent, no translation, no CR/LF insertion. `OUT 00` never waits on the terminal. When no terminal is attached, or the Pi's output buffer is full, the byte is discarded. The Pi's output buffer holds at least 2 MiB, more than any single monitor command prints (`C 0000 FFFF` prints up to 1,114,112 bytes). Bytes are discarded only when it is full. The emulator's buffer is 2 MiB (`OUTPUT_CAP`, `src/io/devices/console.rs`); the host run loop drains it to stdout.
 - **IN 01 with input waiting** returns the oldest byte and removes it from the FIFO. A byte is "waiting" from the moment it reaches the Pi. Arrival never depends on whether the 8080 has read `IN 02`.
 - **IN 01 with the FIFO empty** returns 00 and changes nothing.
 - **Input bytes** are delivered in arrival order and unchanged, including control characters (00-1F, 7F) and bytes 80-FF. The device delivers every byte the terminal sends.
@@ -193,7 +193,6 @@ Every `IN 0B` and every `OUT 0B` advances the address by exactly 1, mounted or n
 
 - **Read-your-writes:** a read returns the last byte written to that address, whether or not it has been flushed.
 - **Maximum file size** is 0x1000000 bytes (16 MB), the most the address can reach.
-- The emulator does not advance the address on a past-EOF read or on any access while not mounted (`src/io/devices/storage.rs:72-96`; emulator change pending, TODO.md).
 
 ### Status (IN 0C)
 
@@ -224,8 +223,7 @@ Example values: 82 (not mounted), 03 (mounted, inside the file), 83 (mounted, at
 - A client detects failure by reading status bit 0 after its transfer (after its final flush, for writes). The same check catches a Pi service restart in the middle of a transfer (rule 2.9).
 - `L` and `W` perform this check and print `Storage error` when bit 0 is 0 (`MONITOR_SPEC.md`, L: Load from storage and W: Write to storage).
 - An fsync error during unmount, or during the unmount step of a mount, is not reported: 0F still reads 00 for unmount. Software that needs certainty flushes and checks bit 0 before it unmounts.
-- The emulator swallows write errors and its flush and unmount do not fsync (`src/io/devices/storage.rs:61`, `:88`, `:100`; emulator change pending, TODO.md).
-- The error path cannot be exercised by `cargo test` (no fault injection). It is verified by review and on hardware.
+- The error path cannot be exercised by `cargo test` (no fault injection), and neither can fsync. Both are verified by review and on hardware. The emulator fsyncs with `File::sync_all`, and dropping the device (process exit, device reset) unmounts it the same way.
 
 ### Power-on
 
@@ -235,7 +233,7 @@ Not mounted, address 000000, status 82.
 
 ## 7. Storage Mount (Ports 0D-0F)
 
-Selects the file that storage (section 6) addresses. All files sit in one flat storage directory, with no subdirectories. In the emulator that directory is `./storage/`; on the Pi it is a configured directory on the SD card. The device service creates the storage directory at startup if it is missing. If the directory does not exist and cannot be created, every mount returns 01 (the emulator conforms: `src/main.rs:35`).
+Selects the file that storage (section 6) addresses. All files sit in one flat storage directory, with no subdirectories. In the emulator that directory is `./storage/`; on the Pi it is a configured directory on the SD card. The device service creates the storage directory at startup if it is missing. If the directory does not exist and cannot be created, every mount returns 01 (the emulator creates it in `Storage::new`, `src/io/devices/storage.rs`).
 
 ### Registers
 
@@ -251,7 +249,6 @@ Selects the file that storage (section 6) addresses. All files sit in one flat s
 - Every `OUT 0E`, whatever the value, empties the buffer after its command runs. A command therefore always sees exactly the characters sent since the previous `OUT 0E`, or since power-on, RESET or a Pi service restart (rules 2.8 and 2.9).
 - **Resync rule:** a client MUST write `OUT 0Eh` = 03 (query) before it sends the first name character. This discards any half-sent name left by an aborted earlier client or by `O 0D`.
 - Power-on: empty.
-- The emulator truncates the buffer at 12 characters (`src/io/devices/storage_mount.rs:95`) and clears it only after a mount (`:103`); emulator change pending, TODO.md.
 
 ### Commands (0E)
 
@@ -265,7 +262,7 @@ Selects the file that storage (section 6) addresses. All files sit in one flat s
 ### Mount (command 01), in order
 
 1. Unmount the current file, if any: flush durably, close it, and set the address to 000000. A failed mount leaves nothing mounted.
-2. Convert `a`-`z` in the name to `A`-`Z`. Host files whose names contain lowercase letters cannot be reached.
+2. Convert `a`-`z` in the name to `A`-`Z`. Host files whose names contain lowercase letters cannot be reached (on a case-sensitive host filesystem such as the Pi's ext4; a case-insensitive one, such as default macOS APFS, matches them anyway).
 3. Validate the name. Any failure sets status 02, and nothing is mounted:
    - The name is 1-12 characters long. A name of 13 or more returns 02 and is never truncated.
    - Every character is `A`-`Z`, `0`-`9`, `.`, `-` or `_`.
@@ -278,8 +275,6 @@ Selects the file that storage (section 6) addresses. All files sit in one flat s
 
 Mounting the name that is already mounted closes and reopens the file: status 00, address 000000.
 
-The emulator does not yet uppercase names, accepts `.` and `..` as valid (`src/io/devices/storage_mount.rs:55`), keeps the previous file mounted on a failed mount, and does not check the 16 MB limit (emulator change pending, TODO.md).
-
 ### Status codes (IN 0F)
 
 | Value | After Mount | After Unmount | After Query |
@@ -289,7 +284,7 @@ The emulator does not yet uppercase names, accepts `.` and `..` as valid (`src/i
 | 02 | Invalid filename | - | - |
 | FF | Reserved; never returned (READY) | | |
 
-`IN 0F` has no side effect and returns the last result until the next command. The power-on value is 01, which is what a query would return. The emulator starts at 00 (`src/io/devices/storage_mount.rs:37`; emulator change pending, TODO.md).
+`IN 0F` has no side effect and returns the last result until the next command. The power-on value is 01, which is what a query would return.
 
 ### Reference client
 
@@ -436,7 +431,8 @@ Superseded on 2026-10-02 (see COLLABORATION_LOG Key Decisions):
 
 | Device | Emulator | Hardware |
 |--------|----------|----------|
-| Console 00-02 | `src/io/devices/console.rs` (crossterm); `src/io/devices/test_console.rs` (test harness, same protocol) | Pi, with the terminal connected to the Pi |
-| Storage 08-0C, Mount 0D-0F | `src/io/devices/storage.rs`, `src/io/devices/storage_mount.rs` (std::fs) | Pi: the same Rust code, files on its SD card |
+| Port map 00-6F | `build_bus` (`src/io/mod.rs`), used by `main.rs` and every test harness | Pi daemon: the same function |
+| Console 00-02 | `src/io/devices/console.rs` (input FIFO and output buffer, no terminal code); the terminal side is `src/main.rs` | Pi, with the terminal connected to the Pi |
+| Storage 08-0C, Mount 0D-0F | `src/io/devices/storage.rs`, one device (std::fs) | Pi: the same Rust code, files on its SD card |
 | Service Mailbox 10-13 | Rust `IoDevice` (Phase 6) | Pi: the same Rust code behind GPIO |
 | System control FE-FF | `src/cpu.rs` | 74HCT74 and decode (`ARCHITECTURE.md`, Overlay Glue) |
