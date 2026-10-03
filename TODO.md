@@ -1,9 +1,9 @@
 # TODO
 
 ## Open Decisions (Mike decides before anyone codes against them)
-- The 2026-10-02 set closed 2026-10-02 and the 2026-10-03 set closed 2026-10-03; see COLLABORATION_LOG Key Decisions. The specs are docs/ARCHITECTURE.md, docs/DEVICE_SPECS.md, docs/MONITOR_SPEC.md.
-- Idle wait, measured (2026-10-03, host-only): shipped as decided. Idle at the monitor prompt (piped stdin at EOF): about 28% of a core in a release build, about 75% in debug (was about 100%); the 10,000 steps between waits still cost host time. The catch: the trigger (pump brought nothing, FIFO empty) is also true for any compute-bound program, so it sleeps 1 ms every 10,000 steps. Measured, release: a 26M-step `DCX B` loop run with `G` takes 4.85 s, was 0.33 s (15x slower). ARCHITECTURE 7.2 "No throttle" now says "apart from the idle wait". Accept, or narrow the trigger (for example: also require that the 8080 read `IN 02` during the last pump interval, which is what an idle prompt does and a compute loop does not)?
-- Debugger location with workspace symbols (2026-10-03, host-only): with workspace labels, "nearest symbol at or below" named every user-area address after the workspace (`0100 STOR_ADDR+19`). Shipped: NAME+n only within the same memory-map region (ARCHITECTURE 1), so `0100` prints as `0100` and `00FF` as `STOR_ADDR+18` (the free tail of the workspace). ARCHITECTURE 7.4 Location says so. Keep, or something else?
+- The 2026-10-02 set closed 2026-10-02 and the 2026-10-03 sets closed 2026-10-03; see COLLABORATION_LOG Key Decisions. The specs are docs/ARCHITECTURE.md, docs/DEVICE_SPECS.md, docs/MONITOR_SPEC.md.
+- [x] Idle wait slowed compute-bound programs 15x (2026-10-03): closed 2026-10-03, the wait now also requires an `IN 02` read in the last pump interval (ARCHITECTURE 7.2); the 26M-step loop is back to no-wait speed.
+- [x] Debugger NAME+n only within one memory-map region (2026-10-03): accepted by Mike 2026-10-03 (ARCHITECTURE 7.4 Location).
 
 ## Current
 - [x] Apply alignment package (archived: docs/archive/HANDOFF_2026-10.md)

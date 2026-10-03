@@ -20,8 +20,8 @@ const BUILD_TIMESTAMP: &str = env!("BUILD_TIMESTAMP");
 /// Host input is read at least this often, in executed steps (ARCHITECTURE 7.2).
 const PUMP_STEPS: u64 = 10_000;
 
-/// How long a pump waits for host input when it brought nothing and the console
-/// input FIFO is empty (ARCHITECTURE 7.2), so an idle 8080 does not spin a host core.
+/// How long a pump waits for host input when the 8080 is polling an empty console
+/// (ARCHITECTURE 7.2, `idle_waits`), so an idle 8080 does not spin a host core.
 const IDLE_WAIT: Duration = Duration::from_millis(1);
 
 #[derive(Debug, PartialEq)]
@@ -205,10 +205,9 @@ fn prompt(
 /// Runs until the CPU halts (unless `halt_stops`), `input` signals quit, or `prompt`
 /// returns anything but Resume. `input(wait)` waits up to `wait` for host input and
 /// returns the console bytes that arrived since its last call, and a host signal that
-/// came after them. Each pump calls it with no wait, then, when it brought nothing and
-/// the console input FIFO is empty, once more with IDLE_WAIT. A pump runs before the
-/// first step and then every PUMP_STEPS steps. Console output is drained to `out` as
-/// often. Every step goes through the debugger; a debugger stop, Ctrl-E, or a halt with
+/// came after them. Each pump calls it with no wait, then, when `idle_waits`, once more
+/// with IDLE_WAIT. A pump runs before the first step and then every PUMP_STEPS steps.
+/// Console output is drained to `out` as often. Every step goes through the debugger; a debugger stop, Ctrl-E, or a halt with
 /// `halt_stops` calls `prompt` with the reason, after a CR LF if the console output so
 /// far does not end with LF.
 fn run_loop(
@@ -230,7 +229,8 @@ fn run_loop(
             Some("halt".to_string())
         } else {
             let (mut bytes, mut signal) = input(Duration::ZERO);
-            if bytes.is_empty() && signal.is_none() && !console.borrow().has_input() {
+            let polled = console.borrow_mut().take_polled();
+            if idle_waits(bytes.is_empty() && signal.is_none(), !console.borrow().has_input(), polled) {
                 (bytes, signal) = input(IDLE_WAIT);
             }
             console.borrow_mut().push_input(&bytes);
@@ -254,6 +254,13 @@ fn run_loop(
             }
         }
     }
+}
+
+/// Whether a pump waits IDLE_WAIT for host input (ARCHITECTURE 7.2): only when it
+/// brought nothing, the console input FIFO is empty, and the 8080 read IN 02 during the
+/// last pump interval. A compute-bound program does not poll, so it never waits.
+fn idle_waits(brought_nothing: bool, fifo_empty: bool, polled: bool) -> bool {
+    brought_nothing && fifo_empty && polled
 }
 
 /// OUT 00 never waits: a host write error loses the bytes, like a missing terminal.
@@ -491,9 +498,17 @@ mod tests {
     }
 
     #[test]
-    fn a_pump_waits_only_when_it_brings_nothing_and_the_fifo_is_empty() {
-        // IN 01 / JMP 0000: reads one byte per loop, so "ab" keeps the FIFO non-empty for a while.
-        let (mut cpu, console, _dir) = machine(&[0xDB, 0x01, 0xC3, 0x00, 0x00]);
+    fn idle_waits_only_when_nothing_came_the_fifo_is_empty_and_the_8080_polled() {
+        for i in 0..8 {
+            let (nothing, empty, polled) = (i & 1 != 0, i & 2 != 0, i & 4 != 0);
+            assert_eq!(idle_waits(nothing, empty, polled), i == 7, "{} {} {}", nothing, empty, polled);
+        }
+    }
+
+    #[test]
+    fn a_pump_waits_only_while_the_8080_polls_an_empty_fifo() {
+        // IN 02 / IN 01 / JMP 0000: polls and reads one byte per loop.
+        let (mut cpu, console, _dir) = machine(&[0xDB, 0x02, 0xDB, 0x01, 0xC3, 0x00, 0x00]);
         let mut waits = Vec::new();
         let mut batches = vec![vec![], vec![ch('a'), ch('b')], vec![], vec![ctrl('c')]].into_iter();
         let keys = |wait: Duration| {
@@ -505,24 +520,39 @@ mod tests {
         assert_eq!(
             waits,
             [
-                (zero, false),      // pump 1: nothing, FIFO empty...
-                (IDLE_WAIT, false), // ...so it waits, and "ab" arrives
-                (zero, false),      // pump 2: the 8080 read both bytes, nothing comes...
+                (zero, false),      // pump 1: nothing, but no step has run, so no poll yet
+                (zero, false),      // pump 2: "ab" arrives
+                (zero, false),      // pump 3: the 8080 read both and polled, nothing comes...
                 (IDLE_WAIT, false), // ...so it waits, and Ctrl-C arrives
             ]
         );
 
-        // Bytes still in the FIFO: no wait.
-        let (mut cpu, console, _dir) = machine(&[0xC3, 0x00, 0x00]);
+        // Polling, but a byte stays in the FIFO: no wait.
+        // IN 02 / JMP 0000
+        let (mut cpu, console, _dir) = machine(&[0xDB, 0x02, 0xC3, 0x00, 0x00]);
         console.borrow_mut().push_input(b"x");
         let mut waits = Vec::new();
-        let mut batches = vec![vec![], vec![ctrl('c')]].into_iter();
+        let mut batches = vec![vec![], vec![], vec![ctrl('c')]].into_iter();
         let keys = |wait: Duration| {
             waits.push(wait);
             pump(batches.next().unwrap().into_iter())
         };
         assert_eq!(run(&mut cpu, &console, keys, &mut Vec::new()), Exit::Quit);
-        assert_eq!(waits, [Duration::ZERO, Duration::ZERO]);
+        assert_eq!(waits, [Duration::ZERO; 3]);
+    }
+
+    #[test]
+    fn a_compute_bound_program_never_waits() {
+        // LXI B,0000 / DCX B / MOV A,B / ORA C / JNZ 0003 / HLT: 262,144 steps, no I/O.
+        let (mut cpu, console, _dir) = machine(&[0x01, 0x00, 0x00, 0x0B, 0x78, 0xB1, 0xC2, 0x03, 0x00, 0x76]);
+        let mut pumps = 0;
+        let keys = |wait: Duration| {
+            assert_eq!(wait, Duration::ZERO, "idle wait in a compute loop");
+            pumps += 1;
+            (vec![], None)
+        };
+        assert_eq!(run(&mut cpu, &console, keys, &mut Vec::new()), Exit::Halted);
+        assert_eq!(pumps, 27);
     }
 
     #[test]

@@ -63,6 +63,14 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-03: Idle Wait Only While the 8080 Polls the Console
+**Decision:** Mike closed the two host-only decisions left open by the 2026-10-03 implementation:
+- **Idle wait trigger:** a pump waits up to 1 ms for host input only when it brought nothing, the console input FIFO is empty, AND the 8080 read `IN 02` during the last pump interval. This narrows the 2026-10-03 "Host idle CPU" decision below, which fired for any compute-bound program. Host-only (ARCHITECTURE 7.2).
+- **Debugger NAME+n:** accepted as shipped. A location is named after the nearest symbol at or below it only within the same memory-map region (ARCHITECTURE 7.4 Location), so user RAM is never `STOR_ADDR+n`.
+
+**Rationale:** The intent was "block when idle at the prompt". An empty FIFO alone doesn't mean idle; a program polling an empty FIFO does. Measured, release: a 26M-step loop went from 15x slower back to no-wait speed, and idle at the prompt is unchanged at about 27% of a core.
+**Mantra check:** One bool on the Console, set by `IN 02`, read and cleared by the run loop. No timers, no heuristics on step counts.
+
 ### 2026-10-03: Host Idle, Halt Prompt, Fail-Fast Scripts, Workspace Symbols, Trace Repeats
 **Decision:** Mike closed the 2026-10-03 open decisions:
 - **Host idle CPU:** when a pump brings nothing and the console input FIFO is empty, block for host input up to 1 ms instead of polling with `Duration::ZERO`. Host-only (ARCHITECTURE 7.2).
@@ -461,7 +469,7 @@ Console I/O debugging session:
 - Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
 **Testing (verified 2026-10-03):**
-- 11 host + 130 CPU + 36 device + 23 monitor + 16 debugger = 216, all passing (strict transcript harness, reference-model CPU tests, port-level device tests)
+- 13 host + 130 CPU + 37 device + 23 monitor + 16 debugger = 219, all passing (strict transcript harness, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 
 ### In Progress
@@ -471,7 +479,7 @@ Console I/O debugging session:
 
 ### Open Decisions
 
-The 2026-10-03 set (idle CPU, piped EOF, debugger options, MONITOR_SPEC 4.4 rule 4 and 6.1 wording, shim exit vs WARM) closed 2026-10-03; see Key Decisions. Still open, both host-only (`TODO.md` Open Decisions): the idle wait's slowdown of compute-bound programs, and the debugger's NAME+n region rule. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
+The 2026-10-03 set (idle CPU, piped EOF, debugger options, MONITOR_SPEC 4.4 rule 4 and 6.1 wording, shim exit vs WARM) closed 2026-10-03, and so did the two host-only follow-ups (idle wait only while the 8080 polls, the debugger's NAME+n region rule); see Key Decisions. None open. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
 
 ### Blocked/Deferred
 
@@ -487,6 +495,13 @@ The 2026-10-03 set (idle CPU, piped EOF, debugger options, MONITOR_SPEC 4.4 rule
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Idle Wait Narrowed to a Polling 8080
+- The idle wait now also requires that the 8080 read `IN 02` since the previous pump: `Console::take_polled` (a flag `IN 02` sets) and the pure `idle_waits` in `src/main.rs`. Compute-bound programs never wait.
+- Measured, release: the 26M-step `DCX B` loop run with `G` takes 0.20 s, the same as a build with no wait (the old trigger took 15x longer); idle at the prompt (piped stdin at EOF) about 27% of a core, unchanged.
+- Tests 216 -> 219: the decision function over all 8 combinations, the run-loop wait sequence for a polling program, a compute-bound loop that never sees a wait, and the Console poll flag at port level. Each new check fails with the `IN 02` condition removed or the flag never set. Release exercisers 4/4.
+- Decided: both open host-only decisions closed (Key Decisions: Idle Wait Only While the 8080 Polls the Console). ARCHITECTURE 7.2 Idle wait row says the exact trigger and the measurements.
+- What bit us: a program that polls `IN 02` inside a compute loop (a break-key check) still waits 1 ms per 10,000 steps. Nothing in the ROM does that today; written into 7.2.
 
 ### 2026-10-03: The 2026-10-03 Decisions Implemented
 - Host idle wait (1 ms when a pump brings nothing and the FIFO is empty); interactive HLT opens `dbg>` (piped and scripted runs still print `HLT at PC=xxxx` and exit); a bad `--script` line exits 2; piped EOF unchanged and now written down; no WARM vector, the shim keeps F000.

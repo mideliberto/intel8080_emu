@@ -13,12 +13,13 @@ pub const OUTPUT_CAP: usize = 2 * 1024 * 1024;
 pub struct Console {
     input: VecDeque<u8>,
     output: Vec<u8>,
+    polled: bool,
 }
 
 impl Console {
     /// Power-on state: both buffers empty.
     pub fn new() -> Self {
-        Console { input: VecDeque::new(), output: Vec::new() }
+        Console { input: VecDeque::new(), output: Vec::new(), polled: false }
     }
 
     /// Bytes arriving from the terminal, in order.
@@ -40,13 +41,21 @@ impl Console {
     pub fn take_output(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.output)
     }
+
+    /// True if the 8080 read IN 02 since the last call (ARCHITECTURE 7.2, idle wait).
+    pub fn take_polled(&mut self) -> bool {
+        std::mem::take(&mut self.polled)
+    }
 }
 
 impl IoDevice for Console {
     fn read(&mut self, port: u8) -> u8 {
         match port {
             0x01 => self.input.pop_front().unwrap_or(0x00),
-            0x02 => 0x02 | !self.input.is_empty() as u8,
+            0x02 => {
+                self.polled = true;
+                0x02 | !self.input.is_empty() as u8
+            }
             _ => 0xFF,
         }
     }

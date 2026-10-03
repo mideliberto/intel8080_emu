@@ -123,6 +123,19 @@ fn console_input_is_a_fifo() {
 }
 
 #[test]
+fn console_host_side_sees_status_polls() {
+    let mut r = rig();
+    assert!(!r.con.borrow_mut().take_polled(), "power-on");
+    r.inp(0x01);
+    r.out(0x00, 0x41);
+    assert!(!r.con.borrow_mut().take_polled(), "IN 01 and OUT 00 are not polls");
+    r.inp(0x02);
+    r.inp(0x02);
+    assert!(r.con.borrow_mut().take_polled());
+    assert!(!r.con.borrow_mut().take_polled(), "take clears");
+}
+
+#[test]
 fn console_is_8_bit_transparent() {
     let mut r = rig();
     let all: Vec<u8> = (0..=255).collect();
