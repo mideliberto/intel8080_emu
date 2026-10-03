@@ -2,14 +2,14 @@
 
 Normative. This is the contract for everything the monitor ROM shows the user: the banner, the prompt, line input, the argument grammar, every command, the messages, the Intel HEX loader, the `G` return contract and the ROM routine contracts. It replaces the deleted `MONITOR_IMPLEMENTATION_STATUS.md`.
 
-**Scope.** Monitor ROM v0.4 (v0.3 plus Phase 5, the HEX loader), Phase 6 (the `T` command) and the 2026-10-02 decisions. Phases 7-10 get one-line placeholders (Future Commands).
+**Scope.** Monitor ROM v0.5 (v0.3 plus Phase 5, the HEX loader, and Phase 6, the `T` command) and the 2026-10-02 decisions. Phases 7-10 get one-line placeholders (Future Commands).
 
 **Elsewhere (one fact, one home):**
 - `ARCHITECTURE.md`: the memory map, workspace layout, stack page, reset and boot sequence, WARM entry code, the ROM overlay, the hardware interface (READY, the Pi window), and Host-Side Conveniences (the host key map, Ctrl-C quit, the Ctrl-E debugger hotkey).
 - `DEVICE_SPECS.md`: every port protocol (console, storage, mount, Service Mailbox, system control) and the READY contract as software sees it.
 - `TODO.md`: the work queue and every known difference between the code and this spec.
 
-**Status of this spec.** All decisions are made (2026-10-02; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6) is not yet.
+**Status of this spec.** All decisions are made (2026-10-02; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6, v0.5) is implemented (2026-10-03).
 
 ---
 
@@ -37,7 +37,7 @@ Built: <date> <time><CR><LF>
 Ready.<CR><LF>
 ```
 
-- `<version>` is `0.4` today (`MSG_BANNER` in `rom/monitor.asm`; Phase 5). A phase that changes the command set bumps it in the same commit.
+- `<version>` is `0.5` today (`MSG_BANNER` in `rom/monitor.asm`; Phase 6). A phase that changes the command set bumps it in the same commit.
 - `<date>` and `<time>` are the assembler's `DATE` and `TIME` at build time.
 - Tests MUST NOT match on the version, date or time. A banner check matches only `8080 Monitor v`.
 - **Input across reset.** RESET empties the console input FIFO (`DEVICE_SPECS.md`, Rules Common to All Ports), so the monitor never sees bytes typed before a reset. Bytes that arrive after the reset are ordinary input and are processed after the banner. The ROM has no input-drain loop.
@@ -78,7 +78,7 @@ After READ_LINE returns:
 2. An empty line (nothing, or only spaces) prints the prompt again, with no message.
 3. The first non-space character selects the command. `a`-`z` fold to `A`-`Z`.
 4. `:` selects the Intel HEX loader (Intel HEX Loader). It is not a command letter. Leading spaces before `:` are allowed.
-5. The recognized characters are `C D E F G H I L M O S W X ?` and `:`. Phase 6 adds `T`.
+5. The recognized characters are `C D E F G H I L M O S T W X ?` and `:`. `T` came with Phase 6.
 6. Anything else prints `Unknown command. Type ? for help.` This includes the letters reserved for later phases (Future Commands) until they are implemented.
 
 Arguments start right after the command character. The space between the letter and the first argument is optional, so `D0200` is the same as `D 0200`.
@@ -342,10 +342,10 @@ Commands:
   ?                - Help
 ```
 
-- The `:LLAAAATT..CC` line shipped with Phase 5. The `T` line is added in Phase 6. Each line ships in the same commit as its feature.
+- The `:LLAAAATT..CC` line shipped with Phase 5 and the `T` line with Phase 6. Each line ships in the same commit as its feature.
 - Arguments after `?` are ignored.
 
-### 6.15 T: Time (Phase 6)
+### 6.15 T: Time
 
 `T`
 

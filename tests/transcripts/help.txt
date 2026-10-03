@@ -12,6 +12,7 @@ Commands:
   M src dst cnt    - Move memory
   O port value     - Output to port
   S start end pat  - Search memory
+  T                - Show time
   W mem stor [cnt] - Write to storage
   X [file | -]     - Mount/unmount storage
   :LLAAAATT..CC    - Intel HEX record
@@ -29,6 +30,7 @@ Commands:
   M src dst cnt    - Move memory
   O port value     - Output to port
   S start end pat  - Search memory
+  T                - Show time
   W mem stor [cnt] - Write to storage
   X [file | -]     - Mount/unmount storage
   :LLAAAATT..CC    - Intel HEX record

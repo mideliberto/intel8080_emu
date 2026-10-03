@@ -1,6 +1,7 @@
 // device_tests.rs - Console, storage and mount at port level (DEVICE_SPECS 1, 2, 4, 6, 7).
 // Every access goes through the bus that build_bus returns (the port map main.rs uses),
-// plus the console's host side and the storage directory; no private state.
+// plus the console's host side and the storage directory; no private state. The
+// mailbox (10-13, DEVICE_SPECS 8) is in mailbox_tests.rs.
 //
 // Not testable here: the I/O error paths (no fault injection) and whether flush,
 // unmount and Drop reach the disk (fsync can't be observed). Both are by review.
@@ -73,7 +74,7 @@ impl Rig {
 #[test]
 fn unassigned_pi_window_ports_read_ff() {
     let mut r = rig();
-    for port in (0x03..=0x07).chain(0x10..=0x6F) {
+    for port in (0x03..=0x07).chain(0x14..=0x6F) {
         r.out(port, 0x00);
         assert_eq!(r.inp(port), 0xFF, "port {:02X}", port);
     }

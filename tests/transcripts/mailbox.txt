@@ -1,0 +1,87 @@
+# Service Mailbox from the monitor (DEVICE_SPECS 8) and T (MONITOR_SPEC 6.15).
+# Format: tests/monitor_tests.rs header. Runs on hardware with the Pi clock set
+# (NTP or RTC; unset, TIME is 83): nothing here depends on the time's value.
+#
+# T's own output is a time, which an exact transcript can't match; the shape
+# NNNN-NN-NN NN:NN:NN, the port sequence and Service error are Rust-side in
+# monitor_tests.rs (Time). This file covers what is exact: the mailbox through I and O,
+# and the state T leaves behind.
+
+# Power-on: IDLE, and IN 13 reads 00 outside AVAIL. 10 and 11 are write-only (rule 2.1).
+> I 12
+00
+> I 13
+00
+> I 10
+FF
+> I 11
+FF
+
+# Execute with nothing sent: an empty command word is 80. ERROR persists and IN 13
+# reads 00 in it.
+> O 11 01
+> I 12
+80
+> I 13
+00
+> I 12
+80
+
+# Clear: IDLE.
+> O 11 02
+> I 12
+00
+
+# Case-sensitive: "time" is 80.
+> O 10 74
+> O 10 69
+> O 10 6D
+> O 10 65
+> O 11 01
+> I 12
+80
+
+# Execute emptied the buffer. "TIME " (trailing space) and "TIME UTC" are 82.
+> O 10 54
+> O 10 49
+> O 10 4D
+> O 10 45
+> O 10 20
+> O 11 01
+> I 12
+82
+> O 10 54
+> O 10 49
+> O 10 4D
+> O 10 45
+> O 10 20
+> O 10 55
+> O 10 54
+> O 10 43
+> O 11 01
+> I 12
+82
+
+# "TIME": AVAIL right after execute (never 01). Clear discards the response.
+> O 10 54
+> O 10 49
+> O 10 4D
+> O 10 45
+> O 11 01
+> I 12
+02
+> O 11 02
+> I 12
+00
+> I 13
+00
+
+# Undefined control values change nothing (rule 2.6), writes to 12 and 13 are
+# ignored (rule 2.2).
+> O 11 00
+> O 11 03
+> O 11 FF
+> O 12 02
+> O 13 41
+> I 12
+00

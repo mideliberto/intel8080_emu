@@ -8,6 +8,15 @@
 - [x] HEX "nothing is written on any failure": closed 2026-10-03, MONITOR_SPEC 7.2 now says nothing outside the stack page (option B, matches the ROM).
 - [x] HEX 7.1 vs READ_LINE control characters: closed 2026-10-03, documented, not rejected. MONITOR_SPEC 7.1 now says control characters never reach the stored line; `hex.txt` loads a record with an embedded Tab, Esc and NUL and one corrected with BS and DEL.
 - [x] HEX `Line too long` wording: closed 2026-10-03, renamed `Record too long` (ROM, MONITOR_SPEC 5/7, transcripts).
+- [ ] MONITOR_SPEC 6.15 says T tests "match the shape ..., never a value. No injectable clock is needed." The T transcript and the monitor's T tests match the shape only, but Phase 6 also injects the clock (`Mailbox::new(clock)`, a plain fn): `tests/mailbox_tests.rs` checks exact bytes and padding on fixed clocks, and both it and `t_with_the_pi_clock_not_set_prints_service_error` reach 83 through a failing clock. Proposed: reword the bullet to "Transcripts match the shape ...; emulator tests may inject a clock". Not edited: Mike's call.
+- [ ] Pi daemon `TIME` clock: DEVICE_SPECS 8 says 83 when the Pi clock is not set (no NTP sync, no RTC). The emulator's `mailbox::local_time` never reports "not set" (it fails only before 1970). How the Pi daemon detects "not set" (`adjtimex` sync state? `/run/systemd/timesync/synchronized`?) is undecided; it lands with the Pi daemon. Related: "the Pi's local time" depends on the Pi's TZ setting, which no spec names.
+- [ ] Spec ambiguities found reconciling Phase 6 (2026-10-03). Each is implemented and tested at its most literal reading; confirm or change:
+  - MONITOR_SPEC 6.15 step 4, "Any response bytes already printed stay on the line before it": read as the same line, no CR LF first (`2026-Service error`).
+  - DEVICE_SPECS 8 placeholder words `ASM`, `DIS`, `GET`, `ASK` give 80 in Phase 6 (unknown until their phase defines them), not 82.
+  - `OUT 10` of 00 is appended like any byte ("Each OUT 10 appends one byte"); port 0D, by contrast, ignores 00.
+  - `OUT 10` in AVAIL, DONE or ERROR is not in the transitions table: it appends and changes no state or response; the bytes wait for the next execute.
+  - Precedence: overflow (81) wins over parsing (80/82), and parsing wins over the clock (83).
+  - TIME field range: the clock (a Rust fn) must return in-range fields (year 0-9999, month 1-12, ...); the device formats them and does not check, so an out-of-range field would make TIME longer than 19 bytes. `local_time` cannot produce one. Alternative: range-check every field and give 83 ("host error"). Years below 1000 are zero-padded (`0999-...`).
 
 ## Current
 - [x] Apply alignment package (archived: docs/archive/HANDOFF_2026-10.md)
@@ -32,6 +41,14 @@ Budget was ~250 bytes, from a 176-byte sketch that left out the five messages an
 7. [x] Type 01 prints `Loaded`; the five HEX messages per MONITOR_SPEC 5.
 8. [x] Tests: `tests/transcripts/hex.txt` (every 7.5 vector, CRLF, LF and CR pastes, bad record mid-stream, truncation inside a paste, step-order cases incl. a wrong CC followed by junk, guard edges, LINE_BUFFER targets, LAST_DUMP_ADDR and LAST_EXAM_ADDR untouched), `hex_records_are_validated_before_any_write` (debugger: no memory write and no OUT but the console before HR_WRITE), `hex_guard_sweep` (step 6 on every page, 5,120 records). Mutants of the loader: 18/18 killed.
 9. [x] `monitor.bin` v0.4 rebuilt, size recorded, docs updated.
+
+## Done: Phase 6 - Time (2026-10-03)
+1. [x] Service Mailbox device `src/io/devices/mailbox.rs`, mapped at 10-13 by `build_bus`: 128-byte buffer with overflow flag (81), execute from any state, clear = power-on state, IN 13 per state, command word before the first 20h, `TIME` exact or 82, empty/lowercase/unknown 80. No worker, no BUSY: TIME completes within the execute access.
+2. [x] Clock: `Mailbox::new(clock: fn() -> Option<(u16, u8, u8, u8, u8, u8)>)`, (year, month, day, hour, minute, second); the device formats the 19 bytes, so the padding is device code the Pi daemon shares and tests can reach. A plain fn is the simplest seam: no trait, no Box, the default is `mailbox::local_time` (host `localtime_r` via the `libc` crate, already in the lock through crossterm), and a test passes a fixed or a failing closure. None means "clock not set" (83).
+3. [x] ROM: `CMD_TIME` is the DEVICE_SPECS 8 reference client inline (one user until Phase 7), `Service error` tail, dispatch, help line, v0.5. +115 bytes (2456 -> 2571).
+4. [x] Tests: `tests/transcripts/time.txt` (new `\d` escape: any decimal digit, expected output only), the reference-client port sequence (`t_runs_the_reference_client`), 83 -> `Service error`, and a scripted device (`t_prints_service_error`, `t_handles_every_status_the_reference_client_does`) for BUSY, an empty response, binary bytes, 00 after execute and an error mid-response. ROM mutants of T: 20/20 killed. Device hand mutants: 13/16 killed; the 3 survivors are equivalent today (an empty response -> DONE is unreachable with TIME; clearing the response on an error and IN 13 outside AVAIL are unobservable because the response is empty whenever the status is not AVAIL).
+5. [x] Reconciled with an independent black-box test set written from the specs alone: `tests/mailbox_tests.rs` (28 tests + 1 year-padding test + the placeholder-word test, moved from `device_tests.rs` in review), `tests/transcripts/mailbox.txt`, 5 T tests in `monitor_tests.rs`. No spec disagreement with the implementation. One change: the clock returned 19 preformatted bytes, which made the zero-padding test check its own formatter, so formatting moved into the device (item 2). Duplicates removed: 10 of the 11 implementer mailbox tests in `device_tests.rs` (the placeholder-word case stays there), `time_runs_the_reference_client` and `time_with_the_clock_not_set_is_service_error` (subsumed by the black-box `t_` tests). Device mutants re-run on the merged set: 11/11 killed.
+6. [x] Review (ship, all low): dropped `Script`, `time_handles_every_status` and `t_prints_one_time_line` (a 49-mutant ROM campaign kills the same 48 without them; the survivor is the banner version, which 1.1 forbids tests to match); dropped the partial year > 9999 -> 83 guard (field range logged in Open Decisions); `local_time` converts with `time_t::try_from`, so a 32-bit time_t past 2038 gives 83 instead of 1901; the mailbox tests all live in `mailbox_tests.rs`; transcript headers say the Pi clock must be set on hardware.
 
 ## Decided, to implement (from the specs; small, not Phase 5)
 Emulator:
@@ -154,7 +171,6 @@ All done 2026-10-03 (step E): the WARM/error-tail/one-parser/RANGE refactor from
 - [ ] R command - needs register capture on return (Phase 10)
 
 ## Someday
-- [ ] Phase 6: Service Mailbox device (0x10-0x13), ROM mailbox client, `TIME` + T
 - [ ] Phase 7: Assembler/disassembler (mailbox `ASM`/`DIS`)
 - [ ] Phase 8: HTTP GET (mailbox `GET`)
 - [ ] Phase 9: Claude (mailbox `ASK`, Q command)

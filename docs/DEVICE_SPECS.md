@@ -27,10 +27,10 @@ Normative. Every I/O port the 8080 can see, at register level. Where the emulato
 | 0D | - | Filename char | Mount | yes | Implemented |
 | 0E | - | Command | Mount | yes | Implemented |
 | 0F | Status | - | Mount | yes | Implemented |
-| 10 | - | Command byte | Service Mailbox | yes | Phase 6 |
-| 11 | - | Control | Service Mailbox | yes | Phase 6 |
-| 12 | Status | - | Service Mailbox | yes | Phase 6 |
-| 13 | Response byte | - | Service Mailbox | yes | Phase 6 |
+| 10 | - | Command byte | Service Mailbox | yes | Implemented |
+| 11 | - | Control | Service Mailbox | yes | Implemented |
+| 12 | Status | - | Service Mailbox | yes | Implemented |
+| 13 | Response byte | - | Service Mailbox | yes | Implemented |
 | 14-6F | unassigned | unassigned | Pi window | yes | - |
 | 70-FD | unmapped | unmapped | local chips (none fitted) | no | - |
 | FE | unmapped | Overlay off | System control | no | Implemented |
@@ -434,5 +434,5 @@ Superseded on 2026-10-02 (see COLLABORATION_LOG Key Decisions):
 | Port map 00-6F | `build_bus` (`src/io/mod.rs`), used by `main.rs` and every test harness | Pi daemon: the same function |
 | Console 00-02 | `src/io/devices/console.rs` (input FIFO and output buffer, no terminal code); the terminal side is `src/main.rs` | Pi, with the terminal connected to the Pi |
 | Storage 08-0C, Mount 0D-0F | `src/io/devices/storage.rs`, one device (std::fs) | Pi: the same Rust code, files on its SD card |
-| Service Mailbox 10-13 | Rust `IoDevice` (Phase 6) | Pi: the same Rust code behind GPIO |
+| Service Mailbox 10-13 | `src/io/devices/mailbox.rs`. `TIME` reads a clock passed to `Mailbox::new` (a plain fn returning the date and time fields; the device formats the 19 bytes): `build_bus` passes the host's local time (`mailbox::local_time`), tests pass a fixed or a failing one | Pi: the same Rust code behind GPIO, with a clock that reports "not set" (83) |
 | System control FE-FF | `src/cpu.rs` | 74HCT74 and decode (`ARCHITECTURE.md`, Overlay Glue) |

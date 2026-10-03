@@ -469,34 +469,35 @@ Console I/O debugging session:
 
 **CPU Core:** All 256 opcodes (5 undocumented aliases decoded), flags match ARCHITECTURE 5.1-5.3 including AC, 8080A interrupt input (EI delay, HLT wake), reset() = RESET pin. All four exercisers pass, 8080EXM included
 
-**Monitor ROM v0.4:**
-- 14 commands: D, E, F, M, S, C, H, G, I, O, L, W, X, ?, to MONITOR_SPEC sections 1-6, 8, 9, 11 (strict arguments, WARM, G return, memmove, Storage error, Mount failed)
+**Monitor ROM v0.5:**
+- 15 commands: D, E, F, M, S, C, H, G, I, O, L, W, X, T, ?, to MONITOR_SPEC sections 1-6, 8, 9, 11 (strict arguments, WARM, G return, memmove, Storage error, Mount failed)
 - Intel HEX loader (Phase 5, MONITOR_SPEC 7): a `:` line is one record, validated in full (pass 1: steps 1-4) before the type, the guard and the write (pass 2)
+- T (Phase 6, MONITOR_SPEC 6.15): mailbox `TIME` through the DEVICE_SPECS 8 reference client, `Service error` on 00 after execute or 80-FF
 - ROM overlay boot mechanism; CONOUT is OUT 00 / RET, so the first Pi access after reset is the banner's OUT 00
-- 2456 of 4096 bytes used (1640 free; `make size`)
+- 2571 of 4096 bytes used (1525 free; `make size`)
 
 **Debugger (host-side, ARCHITECTURE 7.4):** Ctrl-E / `--debug` / `--script`, break, step, registers, memory, disassembly with ROM symbols (`rom/monitor.sym`), watchpoints, I/O breaks, port trace, 256-step trace ring
 
 **Devices:**
-- Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
+- Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), Service Mailbox (0x10-0x13, `TIME`; the clock is a plain fn passed to `Mailbox::new`), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
 **Testing (verified 2026-10-03):**
-- 13 host + 130 CPU + 37 device + 26 monitor + 16 debugger = 222, all passing (strict transcript harness, reference-model CPU tests, port-level device tests)
+- 13 host + 130 CPU + 37 device + 30 mailbox + 32 monitor + 16 debugger = 258, all passing (strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 
 ### In Progress
 
-- **Phase 6:** Service Mailbox (0x10-0x13), `TIME` + T. Next.
+- **Phase 6:** done 2026-10-03 (Service Mailbox, `TIME`, T, v0.5). Phase 7 (`ASM`/`DIS`, A and U) is next and not started; it is designed when it starts.
 - **Review findings:** 2026-10-02 review found CPU flag bugs, ROM range and parse bugs, and vacuous tests. All fixed by 2026-10-03 (steps A-E); `TODO.md` keeps the repros.
 
 ### Open Decisions
 
-None open. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
+From Phase 6, in `TODO.md`: the MONITOR_SPEC 6.15 test bullet ("no injectable clock is needed", "never a value") vs the injected clock the device and port tests use; how the Pi daemon detects "clock not set" for 83; and six spec readings from the Phase 6 reconcile, each implemented literally (6.15 "Service error" on the same line, placeholder words give 80, NUL appended on 10, OUT 10 outside IDLE, 81 > 80/82 > 83 precedence, the TIME field range: the clock must return in-range fields, the device does not check). Before them: none open. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
 
 ### Blocked/Deferred
 
 - **R command:** Needs return mechanism (Phase 10). The debugger itself shipped 2026-10-03
-- **Pi services:** one Service Mailbox at 0x10-0x13. Phase 6 `TIME`, 7 `ASM`/`DIS`, 8 `GET`, 9 `ASK`
+- **Pi services:** one Service Mailbox at 0x10-0x13. Phase 6 `TIME` done; 7 `ASM`/`DIS`, 8 `GET` (brings the background worker and BUSY), 9 `ASK`
 - **8253 timer / interrupts:** Someday
 
 ### Future Vision (Documented, Not Started)
@@ -507,6 +508,14 @@ None open. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2'
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Phase 6, Time (v0.5)
+- `src/io/devices/mailbox.rs` per DEVICE_SPECS 8, mapped at 10-13 by `build_bus`: 128-byte buffer (exactly 128 accepted, overflow -> 81 on execute), execute from any state, clear = the power-on state, IN 13 = 00 with no side effect outside AVAIL, command word before the first 20h, `TIME` exact or 82, empty/lowercase/unknown 80. TIME completes within the execute access, so no worker and no BUSY.
+- Clock: `Mailbox::new(clock: fn() -> Option<(u16, u8, u8, u8, u8, u8)>)` (date and time fields; the device formats the 19 bytes), None = not set (83). `build_bus` passes `mailbox::local_time` (`localtime_r` via `libc`, already in the lock through crossterm; the only new direct dependency); tests pass a fixed or a failing closure. Simplest seam that makes the value and the 83 path deterministic.
+- ROM: `CMD_TIME` is the reference client inline (T is its only user, no abstraction until Phase 7 brings more), `Service error` tail, dispatch, help line, banner v0.5. 2456 -> 2571 bytes (+115).
+- Tests 222 -> 258: `time.txt` with a new `\d` transcript escape (any decimal digit, expected output only) so the transcript still runs on hardware; the exact reference-client port sequence on a fixed clock; 83 -> `Service error`; a scripted device for BUSY, an empty response, 00 after execute and an error mid-response. ROM mutants of T 20/20 killed; device hand mutants 13/16, the 3 survivors equivalent today. Release exercisers 4/4.
+- Black-box spec tests: an independent set written from DEVICE_SPECS 8 and MONITOR_SPEC 6.15 alone, each test quoting its sentence (`tests/mailbox_tests.rs`, `mailbox.txt`, 5 T tests). They found no place where the implementation contradicts the spec. The one fix was on our side: the clock handed the device 19 preformatted bytes, so the "zero-padded" test only exercised its own formatter; formatting moved into the device, where the Pi daemon shares it. Where the two sets read ambiguous spec text, both took the literal reading; six such readings are logged in TODO Open Decisions (same-line `Service error`, placeholders = 80, NUL on 10, OUT 10 outside IDLE, 81 > 80/82 > 83, the TIME field range). Review (ship, all low): dropped three redundant T tests (a 49-mutant ROM campaign kills the same 48 without them), dropped a partial year > 9999 guard, `local_time` no longer wraps on a 32-bit time_t, all mailbox tests in one file.
+- What bit us: MONITOR_SPEC 6.15 says T tests need no injectable clock and never match a value; the port tests do both. Logged in TODO Open Decisions rather than reworded. Also: "clock not set" has no meaning on the emulator host, so 83 is reachable only through an injected clock; Pi detection is open.
 
 ### 2026-10-03: Phase 5, the Intel HEX Loader (v0.4)
 - 3-way implement and judge: three candidate loaders were built independently and judged against the union of their tests, 2,400 fuzzed records checked against an independent model of 7.2/7.3, and mutants. The two-pass one shipped: one labelled block per MONITOR_SPEC 7.2 step, the step 6 formula as written, and nothing written outside the stack page on any failure. The smallest candidate (+247) decoded into LINE_BUFFER during validation, which fails that reading of 7.2.

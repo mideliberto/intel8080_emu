@@ -15,7 +15,8 @@
 //                         A lone `>` types an empty line.
 //   < text                type `text` exactly (no CR added, no echo assumed)
 //   anything else         one expected output line; CR LF is appended
-// Escapes, in all three: \r \n \\ \xHH. Write a trailing space as \x20, an
+// Escapes, in all three: \r \n \\ \xHH. In expected output only, \d matches any
+// decimal digit (T prints the time, matched by shape). Write a trailing space as \x20, an
 // output line that starts with "> " as \x3E\x20, one that starts with '#' as \x23,
 // and an empty output line as a trailing \r\n on the line before it.
 // Transcripts only display memory they wrote first: on hardware RAM is random.
@@ -28,6 +29,7 @@ use intel8080_emu::cpu::Transfer;
 use intel8080_emu::debugger::Debugger;
 use intel8080_emu::io::build_bus;
 use intel8080_emu::io::devices::console::Console;
+use intel8080_emu::io::devices::mailbox::Mailbox;
 use intel8080_emu::io::IoDevice;
 use intel8080_emu::Intel8080;
 
@@ -93,26 +95,33 @@ fn show(bytes: &[u8]) -> String {
     s
 }
 
-fn unescape(text: &str) -> Vec<u8> {
+/// Transcript text as bytes; None is `\d`, any decimal digit.
+fn unescape(text: &str) -> Vec<Option<u8>> {
     let mut out = Vec::new();
     let mut it = text.bytes();
     while let Some(b) = it.next() {
         if b != b'\\' {
-            out.push(b);
+            out.push(Some(b));
             continue;
         }
         match it.next() {
-            Some(b'r') => out.push(b'\r'),
-            Some(b'n') => out.push(b'\n'),
-            Some(b'\\') => out.push(b'\\'),
+            Some(b'r') => out.push(Some(b'\r')),
+            Some(b'n') => out.push(Some(b'\n')),
+            Some(b'\\') => out.push(Some(b'\\')),
+            Some(b'd') => out.push(None),
             Some(b'x') => {
                 let hex = [it.next().unwrap(), it.next().unwrap()];
-                out.push(u8::from_str_radix(std::str::from_utf8(&hex).unwrap(), 16).unwrap());
+                out.push(Some(u8::from_str_radix(std::str::from_utf8(&hex).unwrap(), 16).unwrap()));
             }
             e => panic!("bad escape \\{:?} in {:?}", e.map(|c| c as char), text),
         }
     }
     out
+}
+
+/// Typed transcript text: no `\d`.
+fn typed(text: &str) -> Vec<u8> {
+    unescape(text).into_iter().map(|b| b.unwrap_or_else(|| panic!("\\d in input {:?}", text))).collect()
 }
 
 impl Mon {
@@ -162,27 +171,32 @@ impl Mon {
     fn play(&mut self, name: &str) {
         let path = format!("tests/transcripts/{}.txt", name);
         let text = std::fs::read_to_string(&path).unwrap();
-        let mut steps: Vec<(usize, Vec<u8>, Vec<u8>)> = Vec::new();
+        let mut steps: Vec<(usize, Vec<u8>, Vec<Option<u8>>)> = Vec::new();
         for (i, line) in text.lines().enumerate() {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
             if line == ">" || line.starts_with("> ") {
-                let typed = unescape(line.get(2..).unwrap_or(""));
-                let mut echo = typed.clone();
-                echo.extend_from_slice(b"\r\n");
-                steps.push((i + 1, [&typed[..], b"\r"].concat(), echo));
-            } else if let Some(typed) = line.strip_prefix("< ") {
-                steps.push((i + 1, unescape(typed), Vec::new()));
+                let line = typed(line.get(2..).unwrap_or(""));
+                let echo = line.iter().copied().chain(*b"\r\n").map(Some).collect();
+                steps.push((i + 1, [&line[..], b"\r"].concat(), echo));
+            } else if let Some(line) = line.strip_prefix("< ") {
+                steps.push((i + 1, typed(line), Vec::new()));
             } else {
                 let step = steps.last_mut().unwrap_or_else(|| panic!("{}:{}: output before input", path, i + 1));
                 step.2.extend(unescape(line));
-                step.2.extend_from_slice(b"\r\n");
+                step.2.extend([Some(b'\r'), Some(b'\n')]);
             }
         }
         for (line, input, expected) in steps {
             let got = self.step(&input).unwrap_or_else(|e| panic!("{}:{}: {}", path, line, e));
-            assert_eq!(show(&got), show(&expected), "{}:{}", path, line);
+            // A digit where the transcript has \d shows as \d, so the two strings compare.
+            let want: String = expected.iter().map(|e| e.map_or("\\d".to_string(), |b| show(&[b]))).collect();
+            let seen: String = got.iter().enumerate().map(|(i, &b)| match expected.get(i) {
+                Some(None) if b.is_ascii_digit() => "\\d".to_string(),
+                _ => show(&[b]),
+            }).collect();
+            assert_eq!(seen, want, "{}:{}", path, line);
         }
     }
 
@@ -459,6 +473,163 @@ fn storage_error_when_the_file_goes_away_mid_transfer() {
         m.cpu.io_bus_mut().write(0x0E, 0x02);
         assert_eq!(show(&m.step(b"").unwrap()), "Storage error\\r\\n", "{}", line);
     }
+}
+
+// ---------- T: Time (MONITOR_SPEC 6.15, DEVICE_SPECS 8) ----------
+
+#[test]
+fn time() {
+    boot().play("time");
+}
+
+impl Mon {
+    /// Replace the mailbox at 10-13 (build_bus maps one with the host clock).
+    fn map_mailbox(&mut self, device: Rc<RefCell<dyn IoDevice>>) {
+        for port in 0x10..=0x13 {
+            self.cpu.io_bus_mut().map_port(port, device.clone());
+        }
+    }
+}
+
+/// `NNNN-NN-NN NN:NN:NN`, N a decimal digit. 6.15: "Tests match the shape
+/// NNNN-NN-NN NN:NN:NN (N = decimal digit), never a value."
+fn is_time_shape(b: &[u8]) -> bool {
+    b.len() == 19
+        && b.iter().enumerate().all(|(i, &c)| match i {
+            4 | 7 => c == b'-',
+            10 => c == b' ',
+            13 | 16 => c == b':',
+            _ => c.is_ascii_digit(),
+        })
+}
+
+#[test]
+fn mailbox() {
+    boot().play("mailbox");
+}
+
+#[test]
+fn t_runs_the_reference_client() {
+    // 6.15 step 1: "Runs the mailbox command TIME with the reference client in
+    // DEVICE_SPECS.md (Service Mailbox): clear (OUT 11h <- 02h), send T I M E to OUT 10h,
+    // execute (OUT 11h <- 01h), then poll IN 12h."
+    // Step 2: "Each response byte read from IN 13h is printed to the console as it arrives."
+    // Step 3: "On status 03h (DONE), prints <CR><LF>."
+    // "T sends exactly TIME." "T uses ports 10h-13h."
+    // The clear comes first (DEVICE_SPECS 8, resync rule), so a half-sent command left in
+    // the device by O 10 does not reach T.
+    use Transfer::{In, Out};
+    let mut m = boot();
+    m.run("O 10 58");
+    m.run("O 10 20");
+    for line in ["T", "T UTC"] {
+        let n = m.ports.len();
+        let out = m.run(line);
+        let seen: Vec<Transfer> = m.ports[n..].iter().filter(|t| !matches!(t, In(0x01, _) | In(0x02, _))).copied().collect();
+        let resp: Vec<u8> = seen.iter().filter_map(|t| match t { In(0x13, b) => Some(*b), _ => None }).collect();
+        assert!(is_time_shape(&resp), "{}: {:?}", line, show(&resp));
+        let mut want: Vec<Transfer> = format!("{}\r\n", line).bytes().map(|b| Out(0x00, b)).collect();
+        want.extend([Out(0x11, 0x02), Out(0x10, b'T'), Out(0x10, b'I'), Out(0x10, b'M'), Out(0x10, b'E'), Out(0x11, 0x01)]);
+        for &b in &resp {
+            want.extend([In(0x12, 0x02), In(0x13, b), Out(0x00, b)]);
+        }
+        want.extend([In(0x12, 0x03), Out(0x00, 0x0D), Out(0x00, 0x0A), Out(0x00, b'>'), Out(0x00, b' ')]);
+        assert_eq!(seen, want, "{}", line);
+        assert_eq!(out, format!("{}\\r\\n", show(&resp)), "{}", line);
+    }
+    // T leaves the mailbox DONE with nothing left to read (DEVICE_SPECS 8: "DONE and ERROR
+    // persist until the next execute or clear"; IN 13 outside AVAIL reads 00).
+    assert_eq!(m.run("I 12"), "03\\r\\n");
+    assert_eq!(m.run("I 13"), "00\\r\\n");
+    assert_eq!(m.run("I 12"), "03\\r\\n");
+    // T works from ERROR too (execute from "any" state).
+    m.run("O 11 01");
+    assert_eq!(m.run("I 12"), "80\\r\\n");
+    let out = m.run("T");
+    assert!(is_time_shape(out.strip_suffix("\\r\\n").unwrap().as_bytes()), "{:?}", out);
+}
+
+/// A scripted mailbox at 10-13, standing in for anything a Pi could answer, including
+/// BUSY, a failure mid-response and a restart, which TIME itself never produces.
+/// IN 12 reads 00 until an execute. After it, each IN 12 returns the next of `statuses`
+/// (the last one repeats), and IN 13 pops `bytes` while the last status read was 02.
+struct ScriptedMailbox {
+    statuses: std::collections::VecDeque<u8>,
+    bytes: std::collections::VecDeque<u8>,
+    status: u8,
+    executed: bool,
+}
+
+impl IoDevice for ScriptedMailbox {
+    fn read(&mut self, port: u8) -> u8 {
+        match port {
+            0x12 if self.executed => {
+                if let Some(s) = self.statuses.pop_front() {
+                    self.status = s;
+                }
+                self.status
+            }
+            0x12 => 0x00,
+            0x13 if self.executed && self.status == 0x02 => self.bytes.pop_front().unwrap_or(0x00),
+            0x13 => 0x00,
+            _ => 0xFF,
+        }
+    }
+    fn write(&mut self, port: u8, value: u8) {
+        if port == 0x11 && value == 0x01 {
+            self.executed = true;
+        }
+    }
+}
+
+/// Boot, put a ScriptedMailbox at 10-13, run T; returns T's output (echo stripped).
+fn t_against(statuses: &[u8], bytes: &[u8]) -> String {
+    let mut m = boot();
+    let stub = Rc::new(RefCell::new(ScriptedMailbox {
+        statuses: statuses.iter().copied().collect(),
+        bytes: bytes.iter().copied().collect(),
+        status: 0x00,
+        executed: false,
+    }));
+    m.map_mailbox(stub);
+    m.run("T")
+}
+
+#[test]
+fn t_prints_service_error() {
+    // 6.15 step 4: "On status 00h after execute (Pi service restarted) or 80h-FFh, prints
+    // Service error. Any response bytes already printed stay on the line before it."
+    // Messages (5): "Service error | T (Phase 6): mailbox status 00 after execute, or 80-FF".
+    for status in [0x00, 0x80, 0x81, 0x82, 0x83, 0x84, 0xC0, 0xFF] {
+        assert_eq!(t_against(&[status], b""), "Service error\\r\\n", "status {:02X}", status);
+    }
+    // A failure mid-response (DEVICE_SPECS 8: "The request fails (including mid-response)
+    // | BUSY, AVAIL | ERROR"): the bytes printed so far stay, then the message.
+    assert_eq!(t_against(&[0x02, 0x02, 0x02, 0x02, 0x02, 0x83], b"2026-"), "2026-Service error\\r\\n");
+    // A Pi restart mid-response reads 00 (DEVICE_SPECS 2.9).
+    assert_eq!(t_against(&[0x02, 0x00], b"2"), "2Service error\\r\\n");
+}
+
+#[test]
+fn t_handles_every_status_the_reference_client_does() {
+    // DEVICE_SPECS 8 reference client: 01 polls again, 02 reads and sinks a byte, 03 ends.
+    // "BUSY can follow AVAIL in the middle of a response ... One polling loop handles every
+    // case." "A response may be empty." "Response bytes can be any value 00-FF. The end is
+    // marked by status, not by a terminator."
+    assert_eq!(t_against(&[0x01, 0x01, 0x01, 0x02, 0x01, 0x01, 0x02, 0x01, 0x03], b"AB"), "AB\\r\\n");
+    assert_eq!(t_against(&[0x03], b""), "\\r\\n");
+    assert_eq!(t_against(&[0x02, 0x02, 0x02, 0x02, 0x03], &[0x00, 0x0D, 0xFF, 0x7F]), "\\x00\\r\\xFF\\x7F\\r\\n");
+}
+
+#[test]
+fn t_with_the_pi_clock_not_set_prints_service_error() {
+    // DEVICE_SPECS 8, TIME: "If the Pi clock is not set (no NTP sync and no RTC), the
+    // result is 83." 6.15 step 4: 80h-FFh prints Service error.
+    let mut m = boot();
+    let mb = Rc::new(RefCell::new(Mailbox::new(|| None)));
+    m.map_mailbox(mb);
+    assert_eq!(m.run("T"), "Service error\\r\\n");
+    assert_eq!(m.run("I 12"), "83\\r\\n");
 }
 
 // ---------- G entry (not a transcript: the program is a HLT) ----------

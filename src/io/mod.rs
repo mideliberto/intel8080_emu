@@ -6,6 +6,7 @@ pub use bus::IoBus;
 pub use device::IoDevice;
 
 use devices::console::Console;
+use devices::mailbox::{self, Mailbox};
 use devices::storage::Storage;
 use std::cell::RefCell;
 use std::path::Path;
@@ -22,6 +23,10 @@ pub fn build_bus(storage_dir: &Path) -> (IoBus, Rc<RefCell<Console>>) {
     let storage = Rc::new(RefCell::new(Storage::new(storage_dir.to_path_buf())));
     for port in 0x08..=0x0F {
         bus.map_port(port, storage.clone());
+    }
+    let mailbox = Rc::new(RefCell::new(Mailbox::new(mailbox::local_time)));
+    for port in 0x10..=0x13 {
+        bus.map_port(port, mailbox.clone());
     }
     (bus, console)
 }

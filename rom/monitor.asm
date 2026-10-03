@@ -10,7 +10,7 @@
 ;   EF00-EFFF  monitor stack (SP starts at F000)
 ;   F000-FFFF  this ROM (also at 0000 through the overlay until OUT FE)
 ;
-; Ports: 00-02 console, 08-0C storage, 0D-0F mount, FE overlay off.
+; Ports: 00-02 console, 08-0C storage, 0D-0F mount, 10-13 mailbox, FE overlay off.
 ;
 ; Routine contracts: the header above each routine lists its inputs, outputs
 ; and the registers it trashes. A register that a header lists neither as an
@@ -41,6 +41,12 @@ STORAGE_CTRL        EQU     0CH         ; Write: control, Read: status (bit 0 = 
 MOUNT_FILENAME      EQU     0DH
 MOUNT_CTRL          EQU     0EH
 MOUNT_STATUS        EQU     0FH
+
+; Service Mailbox Ports (0x10-0x13, DEVICE_SPECS 8)
+MAILBOX_DATA        EQU     10H         ; Write: append a command byte
+MAILBOX_CTRL        EQU     11H         ; Write: 01 execute, 02 clear
+MAILBOX_STATUS      EQU     12H         ; Read: 00 idle, 01 busy, 02 avail, 03 done, 80-FF error
+MAILBOX_RESPONSE    EQU     13H         ; Read: pop a response byte
 
 STACK_TOP       EQU     0F000H      ; Stack grows down from ROM
 
@@ -162,6 +168,8 @@ NOT_LOWER:
         JZ      CMD_OUTPUT
         CPI     'S'
         JZ      CMD_SEARCH
+        CPI     'T'
+        JZ      CMD_TIME
         CPI     'L'
         JZ      CMD_LOAD
         CPI     'W'
@@ -204,6 +212,9 @@ ERR_REC_TYPE:
         JMP     PRINT_WARM
 ERR_ADDR_RANGE:
         LXI     H,MSG_ADDR_RANGE
+        JMP     PRINT_WARM
+ERR_SERVICE:
+        LXI     H,MSG_SERVICE
         JMP     PRINT_WARM
 
 ; ============================================
@@ -980,6 +991,39 @@ CS_NEXT:
         JNZ     CS_LOOP
         JMP     WARM
 
+; CMD_TIME - T (arguments ignored). Mailbox TIME with the reference client
+; (DEVICE_SPECS 8): clear, send TIME, execute, then poll status and print each
+; response byte as it arrives. DONE prints CR LF. 00 after execute (the Pi
+; service restarted) or 80-FF prints Service error, after any bytes already
+; printed. 01 (busy) polls again; 04-7F is never returned.
+CMD_TIME:
+        MVI     A,02H               ; Clear (resync)
+        OUT     MAILBOX_CTRL
+        MVI     A,'T'
+        OUT     MAILBOX_DATA
+        MVI     A,'I'
+        OUT     MAILBOX_DATA
+        MVI     A,'M'
+        OUT     MAILBOX_DATA
+        MVI     A,'E'
+        OUT     MAILBOX_DATA
+        MVI     A,01H               ; Execute
+        OUT     MAILBOX_CTRL
+CT_POLL:
+        IN      MAILBOX_STATUS
+        CPI     01H
+        JC      ERR_SERVICE         ; 00 after execute: Pi restarted
+        JZ      CT_POLL             ; 01 busy
+        CPI     03H
+        JZ      CT_DONE             ; 03 done
+        JNC     ERR_SERVICE         ; 80-FF error
+        IN      MAILBOX_RESPONSE    ; 02 avail
+        CALL    CONOUT
+        JMP     CT_POLL
+CT_DONE:
+        CALL    PRINT_CRLF
+        JMP     WARM
+
 ; CMD_HELP - ? (arguments ignored)
 CMD_HELP:
         LXI     H,MSG_HELP
@@ -1240,7 +1284,7 @@ CW_LOOP:
 
 MSG_BANNER:
         DB      CR,LF
-        DB      "8080 Monitor v0.4",CR,LF
+        DB      "8080 Monitor v0.5",CR,LF
         DB      'Built: ', DATE, ' ', TIME, CR, LF
         DB      "Ready.",CR,LF
         DB      0
@@ -1258,6 +1302,7 @@ MSG_HELP:
         DB      "  M src dst cnt    - Move memory",CR,LF
         DB      "  O port value     - Output to port",CR,LF
         DB      "  S start end pat  - Search memory",CR,LF
+        DB      "  T                - Show time",CR,LF
         DB      "  W mem stor [cnt] - Write to storage",CR,LF
         DB      "  X [file | -]     - Mount/unmount storage",CR,LF
         DB      "  :LLAAAATT..CC    - Intel HEX record",CR,LF
@@ -1300,6 +1345,8 @@ MSG_REC_TYPE:
         DB      "Bad record type",CR,LF,0
 MSG_ADDR_RANGE:
         DB      "Address out of range",CR,LF,0
+MSG_SERVICE:
+        DB      "Service error",CR,LF,0
 
 ; ROM_END - first byte after the ROM contents. make size: ROM_END - F000.
 ROM_END:

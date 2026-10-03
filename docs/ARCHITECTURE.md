@@ -496,7 +496,7 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 
 ## 8. Later Phases (Placeholders)
 
-- **Phase 6:** Service Mailbox device (ports 10-13), mailbox `TIME`, and the `T` command. Protocol: `DEVICE_SPECS.md` (Service Mailbox). Command: `MONITOR_SPEC.md`. No memory-map or circuit change.
+- **Phase 6 (done 2026-10-03):** Service Mailbox device (ports 10-13), mailbox `TIME`, and the `T` command. Protocol: `DEVICE_SPECS.md` (Service Mailbox). Command: `MONITOR_SPEC.md`. No memory-map or circuit change.
 - **Phases 7-9:** more mailbox commands (`ASM`/`DIS`, `GET`, `ASK`). No architecture change.
 - **Phase 10:** what is left after the debugger (7.4): the monitor's `R` command, which needs the `G` return contract to capture registers.
 - **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6).

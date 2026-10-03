@@ -27,6 +27,7 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 | M | `M src dst cnt` | Move memory; overlap-safe (memmove) |
 | O | `O port val` | Output to port |
 | S | `S start end b1 [.. b8]` | Search for 1-8 bytes |
+| T | `T` | Show time (mailbox `TIME`); `Service error` on a mailbox failure |
 | W | `W mem stor [cnt]` | Write to storage (24-bit `stor`), then flush; `cnt` default 0100 |
 | X | `X [file \| -]` | `X` query, `X name` mount, `X -` unmount |
 | ? | `?` | Help |
@@ -51,7 +52,6 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 
 | Cmd | Phase | Description |
 |-----|-------|-------------|
-| T | 6 | Show time (mailbox `TIME`) |
 | A | 7 | Assemble (mailbox `ASM`) |
 | U | 7 | Unassemble (mailbox `DIS`) |
 | N | 8 | HTTP GET (mailbox `GET`) |
@@ -88,7 +88,7 @@ Detail: [DEVICE_SPECS.md](DEVICE_SPECS.md).
 | 03-07 | Unassigned (Pi window) | - |
 | 08-0C | Storage | Implemented |
 | 0D-0F | Storage mount | Implemented |
-| 10-13 | Service Mailbox | Phase 6 |
+| 10-13 | Service Mailbox | Implemented |
 | 14-6F | Unassigned (Pi window) | - |
 | 70-FD | Unmapped (local, none fitted) | - |
 | FE | System control (W) | Implemented |
@@ -131,7 +131,7 @@ Detail: [DEVICE_SPECS.md](DEVICE_SPECS.md).
 - Names: 1-12 of `A-Z 0-9 . - _`; the device uppercases. More than 12 gives 02.
 - Mount creates a missing file. A failed mount leaves nothing mounted. Files over 16 MB fail with 01.
 
-### Service Mailbox (10-13, Phase 6)
+### Service Mailbox (10-13)
 
 | Port | Dir | Function |
 |------|-----|----------|

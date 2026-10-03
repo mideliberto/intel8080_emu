@@ -9,8 +9,8 @@
 | 3 | Execution & I/O | ✅ Complete |
 | 4 | Storage System | ✅ Complete |
 | 5 | Program Loading | ✅ Complete |
-| **6** | **Time** | **🔲 Next** |
-| 7 | Development Tools | 🔲 Future |
+| 6 | Time | ✅ Complete |
+| **7** | **Development Tools** | **🔲 Next** |
 | 8 | Internet Services | 🔲 Future |
 | 9 | Claude Integration | 🔲 Future |
 | 10 | R command (debugger done early) | 🔲 Future |
@@ -100,15 +100,17 @@ ROM:
 
 ---
 
-## Phase 6: Time
+## Phase 6: Time ✅ COMPLETE (2026-10-03)
 
 **Goal:** The 8080 knows what time it is.
 
 **Tasks:**
-- [ ] Service Mailbox device (Rust), ports 0x10-0x13 (`DEVICE_SPECS.md`, Service Mailbox)
-- [ ] `TIME` mailbox command
-- [ ] ROM mailbox client (the `DEVICE_SPECS.md` reference client)
-- [ ] T command (`MONITOR_SPEC.md`)
+- [x] Service Mailbox device (Rust), ports 0x10-0x13 (`DEVICE_SPECS.md`, Service Mailbox): `src/io/devices/mailbox.rs`, mapped by `build_bus`
+- [x] `TIME` mailbox command. The clock is a plain fn passed to `Mailbox::new` that returns the date and time fields (the device formats them): `build_bus` passes the host's local time (`localtime_r` through the `libc` crate), tests pass a fixed or a failing one
+- [x] ROM mailbox client (the `DEVICE_SPECS.md` reference client), inline in `CMD_TIME`: T is its only user until Phase 7
+- [x] T command (`MONITOR_SPEC.md`), help line, monitor v0.5
+
+**Done:** +115 bytes (2456 -> 2571): 56 the client and T, 5 dispatch, 6 the error tail, 16 `Service error`, 32 the help line. Tests: `tests/mailbox_tests.rs` (30 port-level tests written black-box from DEVICE_SPECS 8, each quoting its sentence; exact values on an injected clock, the host-clock value against `date`), `tests/transcripts/time.txt` (T by shape via the `\d` transcript escape), `tests/transcripts/mailbox.txt` (the mailbox through I and O, exact), `t_runs_the_reference_client` (every non-console-poll port access of T), `t_with_the_pi_clock_not_set_prints_service_error` (83), `t_prints_service_error` and `t_handles_every_status_the_reference_client_does` (scripted devices for BUSY, empty and binary responses, 00 after execute, every error code, errors mid-response). ROM mutants of T: 20/20 killed; review campaign over CMD_TIME, dispatch, help, messages and banner: 48/49, the survivor the banner version (1.1: tests never match it).
 
 **Success Criteria:**
 - `T` prints `YYYY-MM-DD HH:MM:SS` then CR LF. Tests match the shape `NNNN-NN-NN NN:NN:NN`.

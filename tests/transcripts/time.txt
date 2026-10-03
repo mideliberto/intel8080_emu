@@ -1,0 +1,28 @@
+# T: Time (MONITOR_SPEC 6.15). Format: tests/monitor_tests.rs header.
+# The Pi's local time, matched by shape only (\d is any decimal digit).
+# On hardware the Pi clock must be set (NTP or RTC); unset, T prints Service error.
+
+> T
+\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d
+
+# Lowercase folds; arguments are ignored (T always sends exactly TIME), with
+# or without a space after the letter.
+> t
+\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d
+> T UTC
+\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d
+> Tjunk
+\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d
+
+# A half-sent command left in the mailbox by an earlier client is discarded:
+# T clears before it sends (DEVICE_SPECS 8, resync rule).
+> O 10 54
+> O 10 49
+> T
+\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d
+
+# The mailbox is left in DONE: the response was read to the end.
+> I 12
+03
+> I 13
+00
