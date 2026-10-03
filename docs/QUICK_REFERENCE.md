@@ -48,7 +48,7 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 ### HEX loader
 
 - Accepts types 00 (data) and 01 (EOF, prints `Loaded`). Max 34 data bytes per record.
-- Rejects any record that writes outside 0100-EEFF.
+- Rejects any record that writes outside 0100-EEFF (0100-CFFF in the RAM test build).
 - Validates the whole record (length, syntax, checksum, type, range) before writing a byte.
 
 ### Future commands
@@ -166,9 +166,13 @@ Detail: [ARCHITECTURE.md](ARCHITECTURE.md) (Memory Map).
 | 0080-00FF | Monitor workspace |
 | 0100-EEFF | User programs |
 | EF00-EFFF | Monitor stack page (SP = F000) |
-| F000-FFFF | ROM (4 KB) |
+| F000-FFFF | ROM (4 KB). Writes do nothing unless jumper JP-WE is fitted (never in normal use) |
 
 User programs do their own I/O through the ports. ROM routine addresses are not an API.
+
+**RAM test build** (ARCHITECTURE 2.1): `rom/monitor_ram.hex`, the monitor at D000 for testing ROM changes on the board without a burn. Paste it at the resident prompt, then `G D000` (banner ends ` RAM`); `G F000` goes back. While it runs, D000-EEFF is its own: the HEX loader takes 0100-CFFF, and F, M and L refuse the image.
+
+**`pi8080d --sim rom/monitor.bin --storage DIR`** (PI_DAEMON 16): the Pi daemon with the CPU model on a simulated board, on a Pi or the Mac, before the board exists.
 
 ---
 

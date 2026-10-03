@@ -63,6 +63,16 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-03: `pi8080d --sim`, the RAM Test Build, Board Debug Aids
+**Decision:** Mike decided to add four things, and to correct the MONITOR_SPEC 6.17 U cost to the measurement (descriptive, not behavior: about 4,450-5,600 cycles a line).
+- **`pi8080d --sim FILE`** (PI_DAEMON 16): the daemon runs the emulator's 8080 (CPU model, ROM image, the test `Bridge`) on the simulated board instead of GPIO, so the TCP console, the unit, storage, the TIME clock and the trace run on a Pi or any Linux/macOS box before the board exists. Only the `Gpio` implementation differs.
+- **RAM test build** (ARCHITECTURE 2.1): the same `monitor.asm` assembled at D000 as `rom/monitor_ram.hex`, loaded through the resident monitor's HEX loader and run with `G D000`, so ROM changes run on the board without burning EEPROMs. The shipped ROM's memory map and command set do not change.
+- **Logic-analyzer headers and status LEDs** (ARCHITECTURE 6.11-6.12, HARDWARE_BUILD 3.1): three 2x10 headers; WAIT, HALT, INTE and HLDA LEDs, HALT derived because the 8080A has no HALT pin and the status latch is gone.
+- **EEPROM write-enable jumper JP-WE** (ARCHITECTURE 6.10): AT28C64B /WE from MEMW to F000-FFFF only with the jumper fitted, open by default. The burn routine is Someday.
+
+The choices made while building them, and the ones that need Mike, are in `TODO.md` Open Decisions ("2026-10-03 additions"); this entry records only his decision.
+**Rationale:** ROM changes and the Pi stack get tested on real hardware without burning EEPROMs and before the board exists; the board gets the instruments bring-up needs.
+
 ### 2026-10-03: Phase 7 Specified: ASM, DIS, A and U
 **Decision:** Mike accepted every Phase 7 recommendation. Homes: DEVICE_SPECS 8 (the grammar, the DIS line, R1/R2, the vectors) and MONITOR_SPEC 6.16-6.17 (the commands, 6.17.1 vectors).
 - **Q-ALIAS:** a starred mnemonic assembles to the lowest opcode of its group (`NOP*` 08, `JMP*` CB, `RET*` D9, `CALL*` DD). The byte round trip fails only for 10 18 20 28 30 38 ED FD, listed once in DEVICE_SPECS 8 R2.
@@ -517,16 +527,17 @@ Console I/O debugging session:
 - A and U (Phase 7, MONITOR_SPEC 6.16-6.17): mailbox `ASM` and `DIS`; only `.` ends A. T, A and U share MB_SEND/MB_PUT/MB_GET, the DEVICE_SPECS 8 reference client
 - ROM overlay boot mechanism; CONOUT is OUT 00 / RET, so the first Pi access after reset is the banner's OUT 00
 - 2893 of 4096 bytes used (1203 free; `make size`)
+- RAM test build (ARCHITECTURE 2.1): `rom/monitor_ram.hex`, the same source at D000 (guard top D000, F/M/L refuse the image, ` RAM` banner), loaded through the resident HEX loader and run with `G D000`, in the harness and over TCP on `pi8080d --sim`. Reviewed and fixed 2026-10-03
 
 **Debugger (host-side, ARCHITECTURE 7.4):** Ctrl-E / `--debug` / `--script`, break, step, registers, memory, disassembly with ROM symbols (`rom/monitor.sym`), watchpoints, I/O breaks, port trace, 256-step trace ring
 
 **Devices:**
 - Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), Service Mailbox (0x10-0x13, `TIME`, `ASM`, `DIS`; the clock is a plain fn passed to `Mailbox::new`; `ASM`/`DIS` read the one opcode table in `src/disasm.rs`, which the debugger shares), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
-**Pi daemon `pi8080d` (code, 2026-10-03; PI_DAEMON.md):** `src/pi/mod.rs` (the `Gpio` seam, `setup_pins`, `serve`: the bus loop, RESET handling, TCP console, trace), `src/pi/linux.rs` (`GpioMem`, the RESET line by raw v2 ioctl, `ntp_local_time`), `src/pi_main.rs`. Every transcript passes through it on the simulated board (`tests/sim/`). The static aarch64 musl binary cross-builds on the Mac with `rust-lld`. Reviewed and fixed 2026-10-03; the simulator gaps left are listed in `TODO.md`. Not yet run on a Pi (PI_DAEMON 14)
+**Pi daemon `pi8080d` (code, 2026-10-03; PI_DAEMON.md):** `src/pi/mod.rs` (the `Gpio` seam, `setup_pins`, `serve`: the bus loop, RESET handling, TCP console, trace), `src/pi/linux.rs` (`GpioMem`, the RESET line by raw v2 ioctl, `ntp_local_time`), `src/pi_main.rs`. Every transcript passes through it on the simulated board (`src/pi/sim.rs`). `--sim FILE` runs the same board with the CPU model, so the whole Pi stack runs before the board exists (PI_DAEMON 16). The static aarch64 musl binary cross-builds on the Mac with `rust-lld`. Reviewed and fixed 2026-10-03; the simulator gaps left are listed in `TODO.md`. Not yet run on a Pi (PI_DAEMON 14)
 
 **Testing (verified 2026-10-03):**
-- 13 host + 130 CPU + 37 device + 34 mailbox + 42 monitor + 18 Pi daemon + 16 debugger + 8 terminal = 298, all passing (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
+- 13 host + 130 CPU + 37 device + 34 mailbox + 44 monitor + 18 Pi daemon + 16 debugger + 8 terminal = 300, all passing (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 
 ### In Progress
@@ -538,7 +549,7 @@ Console I/O debugging session:
 
 ### Open Decisions
 
-One open: the MONITOR_SPEC 6.17 U cost figure (about 9,500 cycles a line) vs about 4,450-5,600 measured on v0.6 (`TODO.md`, Open Decisions). The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon and Phase 7 sets closed 2026-10-03 too. The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
+Open: the choices flagged while building `--sim`, the RAM test build and the board debug aids (`TODO.md`, Open Decisions, "2026-10-03 additions"), and whether the halted 8080's floating buses want bus-hold or pulls. The MONITOR_SPEC 6.17 U cost figure was corrected to the measurement 2026-10-03. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon and Phase 7 sets closed 2026-10-03 too. The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
 
 ### Blocked/Deferred
 
@@ -554,6 +565,20 @@ One open: the MONITOR_SPEC 6.17 U cost figure (about 9,500 cycles a line) vs abo
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: `--sim`, RAM Build and Board Aids Review Fixes
+- `sim_mode_plays_transcripts_over_tcp` gained a fourth run: paste `rom/monitor_ram.hex` over TCP, `G D000`, one guarded F, each step expected to print what it prints on the local path. On a closed console, a read error or a bad exit it kills the daemon and fails with the daemon's stderr, where a board violation's panic lands.
+- `ram/guard.txt` checks that F and M still accept EF00, just above the image. The review's suggested case (`M CFF0 FFF0 10`) would not have killed its own mutant: IMG_GUARD looks at the destination's first page, and only EF00-EFFF tells `< 1F` from `< 20`. Rebuilt the mutant RAM image in a scratch copy; it now fails at guard.txt:40.
+- Bring-up step 3: the RAM loop reads each ROM byte back after writing it and HLTs on a difference. A miswired /WE shows data polling (I/O7 complemented) on that read, so the loop stops at F000 having rewritten one byte with its own value.
+- Docs: sigrok example uses `-A parallel=items` (`words` is empty without `wordsize`); MONITOR_SPEC 6.17 gives the whole `U addr` command as 20-25 ms; ARCHITECTURE 2.1 says 3.2 requirement 1 covers the reset path only; 6.11 and 6.12 wording. PI_DAEMON 16.5 and TODO describe the new run.
+- What bit us: a fresh `cp -R` of `rom/` left `make` thinking the mutant was up to date, and the first mutation run "survived" against the unmutated hex. `make -B` for mutants.
+
+### 2026-10-03: `pi8080d --sim`, RAM Test Build, Board Debug Aids
+- `--sim FILE`: `SimBoard` and `Bridge` moved from the tests into `src/pi/sim.rs` (one new knob, `wait_timeout`, None so READY never times out); `pi_main` became `cfg(unix)` and runs the CPU model on its own thread while `serve` runs unchanged. The built binary plays three transcripts over TCP in `cargo test`. `scripts/pi8080d-sim.conf` is the unit drop-in.
+- RAM test build: `asl -D RAMBUILD` puts the monitor at D000 with the HEX guard top at D000, F/M/L refusing D000-EEFF (`IMG_GUARD`, RAM build only, flagged for Mike) and ` RAM` in the banner. The ROM build is byte-identical but DATE/TIME, `monitor.sym` identical. `rom/monitor_ram.hex` (16-byte records) is committed; 16 transcripts plus `ram/guard.txt` pass on the RAM monitor after a 3.9M-cycle paste through the resident loader.
+- Board docs: JP-WE (138 decode in series with the jumper and a pull-up at ROM /WE, so an open jumper holds /WE high even with the 138 pulled), status LEDs with a derived HALT term, three analyzer headers with sigrok notes, BOM and bring-up. The ROM-write bring-up test runs from RAM and writes back what it read, one byte at a time with a read-back check, so a miswired /WE stops it at F000 on the AT28C64B's data polling; it checks /Y7 on the analyzer.
+- MONITOR_SPEC 6.17 U cost corrected (4,450-5,600 cycles a line). Tests 298 -> 300; release exercisers 4/4; clippy clean on the host and aarch64 musl.
+- What bit us: the first drafts guarded the RAM image only through the HEX loader and called F/M/L protection "declined", though Mike's text asked for it; and a bring-up step that wrote 00 over F000-FFFF would have erased the ROM it ran from if the gate were miswired.
 
 ### 2026-10-03: Pi Daemon Review Fixes
 - `Rig::finish` strips ` ; xN` only from IN/OUT lines. Trace collapsed two adjacent RESETs into `RESET ; x2`, so the reset-count asserts could not tell one reset from two; deleting the post-release `reset_edge()` (5.2 step 5) now fails 6 tests instead of none.

@@ -16,11 +16,12 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Storage device (24-bit, 16MB) | ✅ |
 | Monitor ROM v0.6 (17 commands + Intel HEX loader) | ✅ |
 | Host-side debugger (breakpoints, watchpoints, I/O breaks, port trace, trace ring, ROM symbols) | ✅ |
-| 298 tests (13 host + 130 CPU + 37 device + 34 mailbox + 42 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 4 exercisers (`#[ignore]`) | ✅ |
+| 300 tests (13 host + 130 CPU + 37 device + 34 mailbox + 44 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 4 exercisers (`#[ignore]`) | ✅ |
 | Intel HEX loader (Phase 5) | ✅ |
 | Service Mailbox (ports 10-13) and `TIME` / T (Phase 6) | ✅ |
 | Mailbox `ASM`/`DIS`, A and U (Phase 7) | ✅ |
-| Pi daemon `pi8080d` ([PI_DAEMON](docs/PI_DAEMON.md)): every transcript passes through it on a simulated board; static aarch64 binary links | ✅ Code; 🔲 bench |
+| Pi daemon `pi8080d` ([PI_DAEMON](docs/PI_DAEMON.md)): every transcript passes through it on a simulated board; `--sim` runs the whole Pi stack with the CPU model before the board exists; static aarch64 binary links | ✅ Code; 🔲 bench |
+| RAM test build of the monitor (`rom/monitor_ram.hex`, `G D000`): ROM changes on the board without a burn ([ARCHITECTURE](docs/ARCHITECTURE.md) 2.1) | ✅ |
 | Mailbox: HTTP, Claude (Phases 8-9) | 🔲 Future |
 
 ## Monitor Commands
@@ -76,7 +77,7 @@ scripts/fetch_exercisers.sh
 cargo test --release --test exerciser -- --ignored --nocapture
 ```
 
-The Pi daemon `pi8080d` (Linux only; on any other OS it prints `pi8080d: Linux only`) cross-builds on the Mac as a static binary, with the linker Rust ships:
+The Pi daemon `pi8080d` (Linux; with `--sim`, also macOS) cross-builds on the Mac as a static binary, with the linker Rust ships:
 
 ```bash
 rustup target add aarch64-unknown-linux-musl     # once
@@ -84,7 +85,7 @@ cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d
 scp target/aarch64-unknown-linux-musl/release/pi8080d pi:/usr/local/bin/
 ```
 
-On the Pi: `pi8080d --storage DIR [--listen ADDR:PORT] [--trace FILE]`, or the unit `scripts/pi8080d.service`. The console is TCP, `127.0.0.1:8080` by default: `ssh -L 8080:localhost:8080 pi`, then `socat -,rawer,escape=0x1d TCP:localhost:8080`. Deployment: [docs/PI_DAEMON.md](docs/PI_DAEMON.md) 11.
+On the Pi: `pi8080d --storage DIR [--listen ADDR:PORT] [--trace FILE] [--sim FILE]`, or the unit `scripts/pi8080d.service`. `--sim rom/monitor.bin` runs the emulated 8080 on a simulated board instead of GPIO, on the Pi or the Mac (`cargo run --bin pi8080d -- --sim rom/monitor.bin --storage /tmp/pi8080d`); the unit drop-in is `scripts/pi8080d-sim.conf` ([docs/PI_DAEMON.md](docs/PI_DAEMON.md) 16). The console is TCP, `127.0.0.1:8080` by default: `ssh -L 8080:localhost:8080 pi`, then `socat -,rawer,escape=0x1d TCP:localhost:8080`. Deployment: [docs/PI_DAEMON.md](docs/PI_DAEMON.md) 11.
 
 ## Running
 
@@ -142,7 +143,8 @@ The monitor ROM uses the AS macro assembler (Alfred Arnold).
 
 ```bash
 cd rom
-make          # monitor.bin and monitor.sym (debugger symbols); commit both
+make          # monitor.bin, monitor.sym (debugger symbols) and monitor_ram.hex
+              # (RAM test build at D000, ARCHITECTURE 2.1); commit all three
 ```
 
 ## ROM Overlay Boot
@@ -154,7 +156,7 @@ S-100 style boot: RESET starts the CPU at 0x0000 with the ROM at 0xF000 mirrored
 ```
 src/
 ├── main.rs              # Host side: terminal, key map, run loop, debugger prompt
-├── pi_main.rs           # pi8080d: arguments, signals, startup order (Linux only)
+├── pi_main.rs           # pi8080d: arguments, signals, startup order, --sim
 ├── lib.rs               # Library exports
 ├── cpu.rs               # 8080 CPU emulation
 ├── debugger.rs          # Debugger: commands, breaks, watchpoints, trace ring, port trace
@@ -162,6 +164,7 @@ src/
 ├── registers.rs         # Register enums, flags
 ├── pi/
 │   ├── mod.rs           # Pi daemon: Gpio trait, pin setup, bus loop, RESET, TCP console
+│   ├── sim.rs           # SimBoard (the 8080 board at the GPIO register level) and Bridge: tests and --sim
 │   └── linux.rs         # GpioMem (/dev/gpiomem, RESET line ioctls), NTP-gated clock
 └── io/
     ├── mod.rs           # build_bus: the port map (devices in power-on state)
@@ -176,7 +179,8 @@ rom/
 ├── Makefile
 ├── monitor.asm          # Monitor ROM source
 ├── monitor.bin          # Compiled ROM (4KB)
-└── monitor.sym          # ROM labels for the debugger ('AAAA NAME')
+├── monitor.sym          # ROM labels for the debugger ('AAAA NAME')
+└── monitor_ram.hex      # RAM test build at D000 (Intel HEX; paste, then G D000)
 
 examples/
 └── hello.asm            # Example 8080 program
@@ -184,6 +188,7 @@ examples/
 scripts/
 ├── fetch_exercisers.sh  # Downloads the exercisers to tests/data/exercisers (pinned SHA-256)
 ├── pi8080d.service      # systemd unit for the Pi daemon
+├── pi8080d-sim.conf     # systemd drop-in: pi8080d --sim
 └── zip_source.sh
 
 storage/                 # Mounted storage files
@@ -206,11 +211,10 @@ tests/
 ├── device_tests.rs      # Console, storage and mount at port level
 ├── mailbox_tests.rs     # Service Mailbox at port level (DEVICE_SPECS 8), black-box from the spec
 ├── exerciser.rs         # TST8080, 8080PRE, CPUTEST, 8080EXM under a CP/M shim (#[ignore])
-├── monitor_tests.rs     # Strict transcript harness: junk RAM, exact output to each prompt; every transcript also through the Pi daemon
+├── monitor_tests.rs     # Strict transcript harness: junk RAM, exact output to each prompt; every transcript also through the Pi daemon, some through pi8080d --sim and the RAM test build
 ├── pi_daemon_tests.rs   # Pi daemon: RESET, faults, startup, stop, TCP console on the simulated board
-├── sim/mod.rs           # SimBoard: the 8080 board at the GPIO register level, with protocol checks
 ├── terminal_tests.rs    # The real binary under a pty: raw mode, key map, Ctrl-C/Ctrl-E, HLT prompt (Unix)
-└── transcripts/         # Monitor transcripts (data; also meant for hardware over the Pi console)
+└── transcripts/         # Monitor transcripts (data; also meant for hardware over the Pi console); ram/ only for the RAM test build
 ```
 
 ## I/O Port Map

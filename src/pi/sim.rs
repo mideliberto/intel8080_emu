@@ -1,11 +1,13 @@
-// sim/mod.rs - The simulated board (PI_DAEMON 13.1): the ARCHITECTURE 6.4 circuit at the
+// pi/sim.rs - The simulated board (PI_DAEMON 13.1): the ARCHITECTURE 6.4 circuit at the
 // logic level, behind the daemon's `Gpio` seam. The daemon thread reads and writes the
-// register file; the test thread plays the 8080 with `begin`/`wait` and the RESET line.
-// Every handshake obligation is checked on the board side; the first violation is
-// recorded, wakes the test thread and panics the daemon thread.
-#![allow(dead_code)] // shared by monitor_tests and pi_daemon_tests, each using a part
+// register file; the other thread plays the 8080 with `begin`/`wait` (directly, or through
+// `Bridge` from a CPU model) and the RESET line. Every handshake obligation is checked on
+// the board side; the first violation is recorded, wakes the 8080 thread and panics the
+// daemon thread. Used by the tests and by `pi8080d --sim` (PI_DAEMON 16); the fault
+// knobs and test helpers ship with it, unused by `--sim`.
 
-use intel8080_emu::pi::*;
+use super::*;
+use crate::io::IoDevice;
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -43,6 +45,9 @@ pub struct Knobs {
     pub release_event_delay: Duration,
     /// ACK reads high whatever is driven.
     pub ack_stuck_high: bool,
+    /// `wait` and `wait_paused` panic after this long; None waits forever (`--sim`: READY
+    /// has no timeout, ARCHITECTURE 6.4 rule 4).
+    pub wait_timeout: Option<Duration>,
 }
 
 /// Pins outside the 20 in GPFSEL0-2 hold ALT functions, as on a running Pi (I2C on
@@ -57,12 +62,12 @@ impl Default for Knobs {
             gap: Duration::from_micros(1),
             release_event_delay: Duration::ZERO,
             ack_stuck_high: false,
+            wait_timeout: Some(Duration::from_secs(10)),
         }
     }
 }
 
 const SEED: u32 = 0x8080_2026;
-const TIMEOUT: Duration = Duration::from_secs(10);
 const D_MASK: u32 = 0xFF << D_SHIFT;
 /// GPFSEL field masks of the pins outside the 20 (BCM 0-3; 14, 15, 18, 19; 28, 29).
 const FSEL_OUTSIDE: [u32; 3] = [0o7777 | 0o77 << 30, 0o77 << 12 | 0o77 << 24, 0o77 << 24 | 0o3 << 30];
@@ -152,10 +157,10 @@ impl SimBoard {
         self.0 .0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Waits on the board until `ready` holds, a violation is recorded or 10 s pass.
+    /// Waits on the board until `ready` holds, a violation is recorded or `wait_timeout` passes.
     fn wait_for<T>(&self, what: &str, mut ready: impl FnMut(&mut State) -> Option<T>) -> T {
-        let deadline = Instant::now() + TIMEOUT;
         let mut st = self.lock();
+        let deadline = st.knobs.wait_timeout.map(|t| Instant::now() + t);
         loop {
             if let Some(v) = &st.violation {
                 panic!("board violation: {} (seed {:08X})", v, SEED);
@@ -164,12 +169,14 @@ impl SimBoard {
                 return t;
             }
             let now = Instant::now();
-            if now >= deadline {
-                panic!("{}: timed out after 10 s; board: {} (seed {:08X})", what, st.describe(), SEED);
+            if deadline.is_some_and(|d| now >= d) {
+                panic!("{}: timed out after {:?}; board: {} (seed {:08X})", what, st.knobs.wait_timeout.unwrap(),
+                       st.describe(), SEED);
             }
             st.advance(now);
             // Short waits: a queued access starts on time even if the daemon is parked.
-            st = self.0 .1.wait_timeout(st, (deadline - now).min(Duration::from_millis(1))).unwrap().0;
+            let nap = deadline.map_or(MS, |d| (d - now).min(MS));
+            st = self.0 .1.wait_timeout(st, nap).unwrap().0;
         }
     }
 
@@ -180,7 +187,7 @@ impl SimBoard {
         st.advance(Instant::now());
     }
 
-    /// The oldest completion. Panics on a recorded violation or after 10 s.
+    /// The oldest completion. Panics on a recorded violation or after `wait_timeout`.
     pub fn wait(&self) -> Done {
         self.wait_for("wait", |st| st.done.pop_front())
     }
@@ -555,5 +562,25 @@ impl Gpio for SimBoard {
         st.edge_calls += 1;
         self.0 .1.notify_all();
         edge
+    }
+}
+
+/// The Pi window as the 8080 sees it (PI_DAEMON 13.2, 16.2): an `IoDevice` a CPU model maps
+/// on 00-6F. Each access is a REQ/ACK handshake on the board, served by `serve` on another
+/// thread.
+pub struct Bridge(pub SimBoard);
+
+impl IoDevice for Bridge {
+    fn read(&mut self, port: u8) -> u8 {
+        self.0.begin(port, Access::In);
+        match self.0.wait() {
+            Done::In(v) => v,
+            d => panic!("IN {:02X}: {:?}", port, d),
+        }
+    }
+
+    fn write(&mut self, port: u8, value: u8) {
+        self.0.begin(port, Access::Out(value));
+        assert_eq!(self.0.wait(), Done::Out, "OUT {:02X} {:02X}", port, value);
     }
 }

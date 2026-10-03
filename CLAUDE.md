@@ -5,10 +5,11 @@
 **Mantra:** "A fool admires complexity, genius admires simplicity."
 
 ## Status
-- Phase 7 complete (mailbox `ASM`/`DIS`, A and U, the shared ROM mailbox client). Pi daemon `pi8080d` (`docs/PI_DAEMON.md`) code done 2026-10-03: `src/pi/`, `src/pi_main.rs`; every transcript passes through it on the simulated board (`tests/sim/`); the static aarch64 musl binary links. Bench checks pending (PI_DAEMON 14).
-- 298 tests passing (13 host + 130 CPU + 37 device + 34 mailbox + 42 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
+- Phase 7 complete (mailbox `ASM`/`DIS`, A and U, the shared ROM mailbox client). Pi daemon `pi8080d` (`docs/PI_DAEMON.md`) code done 2026-10-03: `src/pi/`, `src/pi_main.rs`; every transcript passes through it on the simulated board (`src/pi/sim.rs`); `--sim` runs the whole Pi stack on that board with the CPU model (PI_DAEMON 16); the static aarch64 musl binary links. Bench checks pending (PI_DAEMON 14).
+- RAM test build (ARCHITECTURE 2.1): `rom/monitor_ram.hex`, the monitor at D000, loaded through the resident HEX loader for testing ROM changes on the board. Board debug aids specified 2026-10-03: analyzer headers, status LEDs, JP-WE (ARCHITECTURE 6.10-6.12).
+- 300 tests passing (13 host + 130 CPU + 37 device + 34 mailbox + 44 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
 - Monitor ROM v0.6, 17 commands plus the `:` HEX loader, matches MONITOR_SPEC. 2893 of 4096 bytes used (`cd rom && make size`), ~1.2KB headroom
-- Spec: four normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC since 2026-10-02; PI_DAEMON since 2026-10-03). Open decisions: one, the MONITOR_SPEC 6.17 U cycle figure vs the measurement (`TODO.md`).
+- Spec: four normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC since 2026-10-02; PI_DAEMON since 2026-10-03). Open decisions: the choices flagged in the 2026-10-03 additions (`--sim`, RAM build, JP-WE, analyzer) and the halt bus float (`TODO.md`).
 - Live task list: `TODO.md`
 
 ## Roles
@@ -24,12 +25,12 @@
 - Pi target stays green: `cargo check` and `cargo clippy --target aarch64-unknown-linux-musl --bins` before every commit (the Linux-only daemon code never compiles on the Mac otherwise).
 - No debug prints in commits. `git commit -A` when files were deleted.
 - **Hardware is the target.** ROM code and device protocols must be buildable with real parts: no emulator-only shortcuts in ROM, no device behavior a Pi coprocessor or period chip couldn't provide. Emulator conveniences (debugger, trace, test harness) stay on the Rust side and out of the 8080's view.
-- ROM changes: rebuild `monitor.bin` and `monitor.sym` (`cd rom && make`), commit both, and keep the bin within 4KB.
+- ROM changes: rebuild `monitor.bin`, `monitor.sym` and `monitor_ram.hex` (`cd rom && make`), commit all three, and keep the bin within 4KB.
 - **Architectural decisions do not get made silently here.** If a question changes a port map, memory map, ROM command set, or device protocol, stop, write it under Open Decisions in `TODO.md`, and ask Mike. Docs that disagree with the code count: log it, don't pick a winner.
 
 ## Build
 - `cargo test` / `cargo run`
-- ROM: `cd rom && make` (AS Macro Assembler: `asl` + `p2bin`). Commit `monitor.bin` and `monitor.sym` (debugger symbols), not `.lst`/`.p`/`.noi`.
+- ROM: `cd rom && make` (AS Macro Assembler: `asl` + `p2bin`). Commit `monitor.bin`, `monitor.sym` (debugger symbols) and `monitor_ram.hex` (RAM test build, ARCHITECTURE 2.1), not `.lst`/`.p`/`.noi`.
 
 ## Key Files
 - `docs/COLLABORATION_LOG.md` - history, decisions, lessons. Read Current State first.

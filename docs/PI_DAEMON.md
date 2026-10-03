@@ -1,6 +1,6 @@
 # Pi Daemon
 
-Normative: the fourth normative spec, with `ARCHITECTURE.md`, `DEVICE_SPECS.md` and `MONITOR_SPEC.md` (decided 2026-10-03, COLLABORATION_LOG Key Decisions; binding). The one home for the software that runs on the Raspberry Pi behind the 8080's I/O ports: `pi8080d`. Implemented 2026-10-03 (`src/pi/`, `src/pi_main.rs`, `tests/sim/`, `tests/pi_daemon_tests.rs`); what only the built board can show is section 14.
+Normative: the fourth normative spec, with `ARCHITECTURE.md`, `DEVICE_SPECS.md` and `MONITOR_SPEC.md` (decided 2026-10-03, COLLABORATION_LOG Key Decisions; binding). The one home for the software that runs on the Raspberry Pi behind the 8080's I/O ports: `pi8080d`. Implemented 2026-10-03 (`src/pi/`, `src/pi_main.rs`, `tests/pi_daemon_tests.rs`), with the simulated-board mode `--sim` (section 16, decided and built 2026-10-03); what only the built board can show is section 14.
 
 **Scope (one fact, one home):**
 - `ARCHITECTURE.md` 6.4 owns the circuit, the 20-GPIO pin map, the IN/OUT handshake and the power and boot rules. `ARCHITECTURE.md` 6.6 owns RESET. `ARCHITECTURE.md` 7.3 owns the port-trace line format and 7.4 the trace diff recipe. This file says how the daemon meets them and cites them; it does not restate them.
@@ -15,7 +15,7 @@ The rule behind every section: **the daemon is the emulator's port map behind GP
 
 ## 1. Shape
 
-- One process, **one thread**. The thread owns the IoBus, busy-polls GPLEV0, serves each request inline, and in the gaps runs the console's TCP socket and the trace file. The IoBus and devices stay `Rc<RefCell<..>>` and are never shared across threads (devices are not `Send`: COLLABORATION_LOG Key Decisions, 2026-10-03, Pi Daemon).
+- One process, **one thread**. The thread owns the IoBus, busy-polls GPLEV0, serves each request inline, and in the gaps runs the console's TCP socket and the trace file. The IoBus and devices stay `Rc<RefCell<..>>` and are never shared across threads (devices are not `Send`: COLLABORATION_LOG Key Decisions, 2026-10-03, Pi Daemon). Under `--sim` (16) a second thread plays the 8080 on the simulated board; this thread does not change.
 - No interrupts, no async runtime, no worker threads. v1 has no mailbox worker: `TIME`, `ASM` and `DIS` complete within the execute access, inline on this thread (`DEVICE_SPECS.md` 3.3, 8). Mailbox commands that do not complete within the execute access run on other cores; Phase 8 designs that worker (`TODO.md`, Someday).
 - The daemon serves every port 00-6F (`ARCHITECTURE.md` 6.3). It never sees 70-FF.
 
@@ -29,12 +29,13 @@ One crate, a second binary (`HARDWARE_BUILD.md` 5, Code). No new dependencies: `
 |------|----------|-------------|
 | `src/pi/mod.rs` | Pin and register constants (3.2), the `Gpio` trait (3.1), `setup_pins` (3.3), `serve`: the bus loop (4), RESET handling (5), console pass (7). Portable. | every target |
 | `src/pi/linux.rs` | `GpioMem` (the real `Gpio`: `/dev/gpiomem` mmap plus the RESET line request), `ntp_local_time` (8). `#[cfg(target_os = "linux")]` | Linux only |
-| `src/pi_main.rs` | `pi8080d`: arguments (10), signal flag, startup order (10), calls `pi::serve`. On any other OS, `main` prints `pi8080d: Linux only` and exits 2. | every target |
+| `src/pi/sim.rs` | `SimBoard`, the simulated board (13.1), and `Bridge`, the 8080 side's `IoDevice` (13.2, 16.2). Portable. In the library since 2026-10-03 so that `--sim` can run it; its fault knobs and test helpers ship in the binary, unused by `--sim`. | every target |
+| `src/pi_main.rs` | `pi8080d`: arguments (10), signal flag, startup order (10); calls `pi::serve` with `GpioMem`, or under `--sim` with the simulated board and the 8080 thread (16). `cfg(unix)`. Without `--sim` on a Unix other than Linux it prints `pi8080d: Linux only (or --sim FILE)` and exits 2; on a non-Unix OS, `pi8080d: Unix only`, exit 2. | every target |
 | `src/lib.rs` | `pub mod pi;` | every target |
-| `tests/sim/mod.rs` | The simulated board (13.1). Test code only, not in the library. | every target |
 | `tests/pi_daemon_tests.rs` | Fault, RESET, startup, stop and console tests (13.3). | every target |
-| `tests/monitor_tests.rs` | Gains the daemon path for the transcripts (13.2) and the ignored `w_command_cycles` helper (12.2). | every target |
+| `tests/monitor_tests.rs` | Gains the daemon path for the transcripts (13.2), the `--sim` binary test (16.5, Unix) and the ignored `w_command_cycles` helper (12.2). | every target |
 | `scripts/pi8080d.service` | The systemd unit (11). | (installed on the Pi) |
+| `scripts/pi8080d-sim.conf` | The `--sim` drop-in for the unit (16.4). | (installed on the Pi, or any Linux box) |
 | `.cargo/config.toml` | `rust-lld` as the linker for the musl target (below). | (build host) |
 
 `Cargo.toml` gains `default-run`, so plain `cargo run` still runs the emulator:
@@ -98,7 +99,7 @@ pub trait Gpio {
 
 - **Register level, not signal level.** The real implementation is two `read_volatile`/`write_volatile` one-liners and a non-blocking `read` of the line-event fd. Every register offset, bit mask, FSEL field and handshake step lives in portable code that the tests run. A signal-level trait (`ack(bool)`, `drive(u8)`) would hide exactly the code most likely to be wrong in the part the tests can't reach.
 - **The `reset_edge` contract** is "edges since the previous call", judged by when the edge happened, not when it was delivered. A late-delivered edge from before the previous call is therefore ignored however late it arrives (5.1, 5.2).
-- **Two implementations:** `GpioMem` (Linux) and `SimBoard` (tests). That is short of the rule of three. It is a deliberate exception, the same kind as the mailbox `Clock` seam: without it the bus loop, the code with the hardest failure modes (lost, doubled or hung accesses), could only be tested on the bench, and "nothing commits red" would not cover it. The alternatives are worse: a cfg-swapped concrete type can't run both in one build and still needs the simulator, and record-and-replay of register traffic tests the recording, not the protocol. Decided 2026-10-03: a logged exception to the rule of three (COLLABORATION_LOG Key Decisions).
+- **Two implementations:** `GpioMem` (Linux) and `SimBoard` (the tests and `--sim`, 16). That is short of the rule of three. It is a deliberate exception, the same kind as the mailbox `Clock` seam: without it the bus loop, the code with the hardest failure modes (lost, doubled or hung accesses), could only be tested on the bench, and "nothing commits red" would not cover it. The alternatives are worse: a cfg-swapped concrete type can't run both in one build and still needs the simulator, and record-and-replay of register traffic tests the recording, not the protocol. Decided 2026-10-03: a logged exception to the rule of three (COLLABORATION_LOG Key Decisions).
 - `serve` is generic over `G: Gpio`. No `dyn`, no `Box`.
 
 ### 3.2 Registers and pins
@@ -314,12 +315,13 @@ Command-line flags only. No config file.
 | `--listen ADDR:PORT` | `127.0.0.1:8080` | Console listener (7.1). Loopback by default, reached with `ssh -L` (11); pass a wildcard address to open it to the LAN. Under systemd use a loopback or wildcard address (`0.0.0.0`, `[::]`), never an interface address: the unit does not wait for the network (11) |
 | `--storage DIR` | required | Storage directory (6) |
 | `--trace FILE` | none | Port trace (9) |
+| `--sim FILE` | none | Simulated board (16): runs the 8080 model with the 4096-byte ROM image FILE instead of opening the GPIO |
 
-- A bad or missing argument prints the usage line and exits 2, like the emulator.
+- A bad or missing argument prints the usage line and exits 2, like the emulator: `usage: pi8080d --storage DIR [--listen ADDR:PORT] [--trace FILE] [--sim FILE]`.
 - **CPU core:** not a flag. systemd `CPUAffinity=` (11) or `taskset -c 3` for a manual run pins the process.
 - **Signals:** SIGTERM and SIGINT set a static `AtomicBool` (handler via `libc::signal`), which `pi_main` passes to `serve` as `stop` (4.1).
-- **Startup order** (`pi_main`): parse arguments; `GpioMem::open()`; `pi::setup_pins` (3.3); `gpio.request_reset()` (5.1); bind the listener; open the trace; `serve`. Any `Err` prints `pi8080d: ` and the message to stderr and exits 1.
-- Logging is stderr only (journald under systemd): startup settings, client connect, input EOF and disconnect, each RESET, errors. Nothing per access.
+- **Startup order** (`pi_main`): parse arguments; `GpioMem::open()`; `pi::setup_pins` (3.3); `gpio.request_reset()` (5.1); bind the listener; open the trace; `serve`. Under `--sim`: parse arguments; read the ROM image (16.4); `SimBoard::new` (16.2); `pi::setup_pins`; bind the listener; open the trace; start the 8080 thread (16.2); `serve`. Any `Err` prints `pi8080d: ` and the message to stderr and exits 1.
+- Logging is stderr only (journald under systemd): startup settings, client connect, input EOF and disconnect, each RESET, errors. Nothing per access. The startup line gives the listener's bound address, so `--listen 127.0.0.1:0` reports its port: `pi8080d: console on ADDR:PORT, storage DIR, trace FILE|off`, plus `, board simulated, ROM FILE` under `--sim`.
 
 ---
 
@@ -353,6 +355,7 @@ WantedBy=multi-user.target
 
   No `After=network-online.target`: the listener binds without a network, and the 8080 is stalled until the daemon runs, so the daemon starts as early as it can. `StartLimitIntervalSec=0` keeps it retrying every second through a transient early-boot failure (udev not yet done with `/dev/gpiomem` or the gpiochip); without it systemd gives up after 5 starts in 10 s and the 8080 stalls until someone logs in. A configuration refusal (ALT function, wrong SoC) then only repeats in the journal. A crash restarts it in a second; the 8080 waits under READY meanwhile (`DEVICE_SPECS.md` 3.4) and its devices come back fresh (`DEVICE_SPECS.md` 2.9).
 - **Reaching the console from the Mac** with the loopback default: `ssh -L 8080:localhost:8080 pi`, then `socat -,rawer,escape=0x1d TCP:localhost:8080`.
+- **Simulated board:** with the 16.4 drop-in installed, the same unit runs `--sim`. Remove it to go back to the board.
 
 ---
 
@@ -385,19 +388,19 @@ Bring-up step 5 (`HARDWARE_BUILD.md` 3), with the 8080 board powered (`ARCHITECT
 
 ## 13. Tests
 
-Everything here runs in `cargo test` on any OS. The simulated board stands in for the 8080 board and `GpioMem`; nothing in the daemon knows it is simulated.
+Everything here runs in `cargo test` on any OS. The simulated board stands in for the 8080 board and `GpioMem`; nothing in the daemon knows it is simulated. It is the same `SimBoard` that `--sim` runs (16); the `--sim` binary test is 16.5.
 
-### 13.1 The simulated board (`tests/sim/mod.rs`)
+### 13.1 The simulated board (`src/pi/sim.rs`)
 
 `SimBoard` implements `Gpio` and models the `ARCHITECTURE.md` 6.4 circuit at the logic level, shared between the daemon thread and the test thread (`Arc`, a `Mutex` for the state and a `Condvar` for every change the other side waits on):
 
 - **Register file:** GPFSEL0-2, the output latch, REG1 pulls. GPSET0/GPCLR0 change the latch. GPLEV0 is composed: pins in output mode read their latch bit; A0-A6, DIR, D0-D7 (data 245 enabled while DIR is high), REQ and RESET come from the 8080 side; D0-D7 read 00 (pull-downs) while DIR is low and they are inputs. Knobs set the initial register state and can force a D bit stuck at a value or ACK stuck high.
-- **8080 side:** `begin(port, In | Out(v))` queues an access. The head of the queue sets A, DIR, the OUT data and the WAIT flip-flop Q. `wait()` returns the oldest completion (the IN latch byte, or "aborted by RESET"), or panics with the board state after 10 s. Outside an access A and D read pseudo-random values and DIR reads high, so sampling without REQ shows up as garbage. The values come from a fixed-seed xorshift32; every SimBoard panic prints the seed.
+- **8080 side:** `begin(port, In | Out(v))` queues an access. The head of the queue sets A, DIR, the OUT data and the WAIT flip-flop Q. `wait()` returns the oldest completion (the IN latch byte, or "aborted by RESET"), or panics with the board state after `wait_timeout` (10 s by default; `--sim` waits forever, 16.2). Outside an access A and D read pseudo-random values and DIR reads high, so sampling without REQ shows up as garbage. The values come from a fixed-seed xorshift32; every SimBoard panic prints the seed.
 - **WAIT flip-flop:** cleared by a rising edge of ACK (detected in `write`) or by RESET. **REQ** = Q, or still high for `req_fall` (default 400 ns) after the ACK edge, showing the old access's A, DIR and D, as the real REQ lags the edge.
 - **Gap:** the next queued access does not set Q until `gap` (default 1 us) after the previous ACK edge, as the 8080 can't issue the next access sooner. With `gap` = 0 and `req_fall` = 0 the ACK edge loads the next queued access in the same `write`, so GPLEV0 never shows REQ low between queued accesses.
 - **IN latch:** captures the D output latch on a LATCH rising edge.
 - **RESET:** `reset(on)` sets the level, clears Q, aborts the access in flight and queues an edge event stamped with the current `Instant`. `release_event_delay` (default 0) delays delivery of the falling-edge event, not its stamp, as the kernel does. `reset_edge()` implements the 3.1 contract (true only for delivered events stamped at or after its previous call) and counts its calls (`edge_calls()`).
-- **Test helpers:** `pulse_reset()` (13.3), `stick_d(Some((bit, level)))` and `stick_d(None)`, `peek(off)` (a register without a daemon read's side effects), `writes()`, `edge_calls()` and `wait_edge_calls(n)`, and `check()` (fails with a recorded violation). Knobs are a `Knobs` struct: GPFSEL0-2 and the output latch at power-on (by default ALT functions on BCM 0-3 and 14-15, and every latch bit high, so a write that changes another pin or turns ACK or LATCH into an output before driving it low is caught), `req_fall`, `gap`, `release_event_delay`, `ack_stuck_high`.
+- **Test helpers:** `pulse_reset()` (13.3), `stick_d(Some((bit, level)))` and `stick_d(None)`, `peek(off)` (a register without a daemon read's side effects), `writes()`, `edge_calls()` and `wait_edge_calls(n)`, and `check()` (fails with a recorded violation). Knobs are a `Knobs` struct: GPFSEL0-2 and the output latch at power-on (by default ALT functions on BCM 0-3 and 14-15, and every latch bit high, so a write that changes another pin or turns ACK or LATCH into an output before driving it low is caught), `req_fall`, `gap`, `release_event_delay`, `ack_stuck_high`, `wait_timeout` (`Option<Duration>`, default 10 s). They ship in the library with the board (2); `--sim` uses none but `wait_timeout`.
 - **Unfair lock:** a GPLEV0 read that shows REQ low yields the thread after releasing the `Mutex`. std's `Mutex` is not fair, and the daemon polls in a tight loop; without the yield the test thread waited tens of microseconds per access for the lock (the 100 KiB input test took 16 s instead of 2).
 - **Pause hook:** `pause_next_request()` makes the daemon's next GPLEV0 read that shows a new request (REQ high from Q, after a read has shown ACK low: the read that ends step 8 can already show the next request, and the daemon does not sample from it) compute its value and then park on the `Condvar` (releasing the `Mutex`, so `reset` and `begin` can run) until `resume()`. `wait_paused()` blocks the test thread until the daemon is parked (panics after 10 s). Every pause test calls it before touching RESET, so it covers "the daemon has sampled the request and not yet ACKed it", which stands for a slow device call (an fsync) or a descheduled thread.
 
@@ -426,7 +429,7 @@ Intel8080 --IN/OUT 00-6F--> Bridge (IoDevice) --begin/wait--> SimBoard <--Gpio--
             test thread <------------------- TCP 127.0.0.1:ephemeral -------------- console
 ```
 
-- The CPU boots exactly as `power_on` does (junk RAM and registers, `monitor.bin`), but its IoBus maps a `Bridge` on 00-6F: `read` is `begin(port, In)` then `wait()`, `write` is `begin(port, Out(v))` then `wait()`. FE and FF stay in the CPU model; 70-FD stay unmapped.
+- The CPU boots exactly as `power_on` does (junk RAM and registers, `monitor.bin`), but its IoBus maps a `Bridge` (`pi::sim::Bridge`, which `--sim` also uses) on 00-6F: `read` is `begin(port, In)` then `wait()`, `write` is `begin(port, Out(v))` then `wait()`. FE and FF stay in the CPU model; 70-FD stay unmapped.
 - The daemon thread runs `setup_pins` and `pi::serve` on the `SimBoard` with a temporary storage directory, `mailbox::local_time`, a listener on `127.0.0.1:0`, a trace file and its own stop flag. The test connects its client **before** starting the daemon, so the banner is never discarded for want of a client.
 - Same files, same parser, same `play`. `Mon.con: Rc<RefCell<Console>>` becomes `Mon.side: Side`, with `enum Side { Local(Rc<RefCell<Console>>), Daemon(TcpStream) }`. The only per-mode difference is where input goes (`push_input` or the socket) and where output is read (`take_output`, or the socket until it has as many bytes as the 8080 sent with `OUT 00`). Both modes use one at-prompt rule, read from `Mon.ports`: the 8080 has done at least as many `IN 01` since the step began as bytes were typed, its `OUT 00` bytes since the step began end with `> `, and it stays quiet for 2,000 cycles. The local harness switches to this rule too, so there are not two.
 - After the last step: set the stop flag, join the daemon thread, then assert the daemon's trace file equals `Mon.ports` restricted to 00-6F and collapsed by the `ARCHITECTURE.md` 7.3 repeat rule, line for line, `; xN` counts included. With no RESET in the run the two sequences are the same accesses, so they must match exactly.
@@ -493,5 +496,85 @@ The one list. Each closes on the built board, at the bring-up step given (`HARDW
 - Pi 5 (RP1 registers), Pi 3.
 - Hardware single-step (decision HW-STEP).
 - A measurement mode (`--measure`): the scope and the TCP client give the step 5 numbers (12.2). Add a tool only if the bench shows one is needed.
+- RESET under `--sim` (16.3): restarting the daemon is the power cycle.
+- A throttled or cycle-timed `--sim` 8080. The ROM is timing-independent (`ARCHITECTURE.md` 3.2 requirement 6).
 - A mailbox worker thread (Phase 8).
 - Statistics, a status port, a web page. The trace and the logs are the instruments.
+
+---
+
+## 16. Simulated Board (`--sim`)
+
+Decided 2026-10-03 (Mike, COLLABORATION_LOG Key Decisions). `pi8080d --sim FILE` runs the whole Pi software stack with the emulator's CPU model on the simulated board of 13.1 in place of the 8080 board: the daemon, the TCP console, the unit, the storage directory, the TIME clock and the trace, on a real Pi (or any Linux or macOS box) before the board exists. It also runs the RAM test build workflow (`ARCHITECTURE.md` 2.1).
+
+The rule: **only the `Gpio` implementation differs.** `serve` gets a `SimBoard` in place of a `GpioMem`. Nothing in `src/pi/mod.rs` knows the difference.
+
+### 16.1 What is simulated, what is real
+
+| Part | Under `--sim` |
+|---|---|
+| `pi::setup_pins`, `pi::serve` (bus loop, abort rule, console pass, stop) | Real: the same code, on the main thread |
+| Devices (`build_bus`), storage directory (`--storage`) | Real |
+| TCP console (`--listen`, 7) | Real |
+| TIME clock (8) | Real: `ntp_local_time` on Linux, `mailbox::local_time` elsewhere (no `adjtimex`) |
+| Port trace (`--trace`, 9) | Real: the same lines a board gives for the same accesses |
+| Signals, stop, Storage flush (4.1, 10) | Real |
+| systemd unit (11) | Real, with the 16.4 drop-in |
+| GPIO register block, RESET line | Simulated: `SimBoard` (13.1), every protocol check armed |
+| 8080, ROM, RAM, overlay, ports FE/FF and 70-FD | Simulated: `Intel8080` with the ROM image FILE, on its own thread (16.2) |
+| Timing | Not modeled. Between accesses the 8080 runs at host speed (`ARCHITECTURE.md` 7.2, no throttle); each Pi-window access is a cross-thread handshake (cost: 13.2) |
+| `GpioMem`, `/dev/gpiomem`, the gpiochip, the BCM2711 check | Not used: `--sim` never opens them, so it runs on any SoC |
+
+### 16.2 The 8080 thread
+
+`pi_main` starts it after the listener and the trace are open, just before `serve`:
+
+1. `Intel8080::new()` and `load_rom`, as `main.rs` does: RAM and registers 00, PC 0000, overlay set (`ARCHITECTURE.md` 3.1). Unlike 13.2, no junk fill: a real board's RAM is random, which the transcript harness covers.
+2. Its IoBus maps `pi::sim::Bridge` on 00-6F: `read` is `begin(port, In)` then `wait()`, `write` is `begin(port, Out(v))` then `wait()`. FE and FF stay in the CPU model; 70-FD stay unmapped. This is the 13.2 wiring with the CPU on its own thread.
+3. It runs `execute_one` until a halt, then logs `pi8080d: 8080 halted at PC=xxxx` (the PC after the HLT) and parks for good. v1 has no interrupt source (`ARCHITECTURE.md` 5.8) and `--sim` has no RESET (16.3), so a halted 8080 stays halted until the daemon restarts. The console stays up.
+
+- The board is `SimBoard::new(Knobs { wait_timeout: None, ..Knobs::default() })`. READY has no timeout (`ARCHITECTURE.md` 6.4 rule 4): a slow fsync stalls the 8080, never panics it. Every other knob keeps its default.
+- The 8080 thread owns the `Intel8080`; the main thread owns the IoBus and the devices. They share only the `SimBoard` (`Arc`), as in 13.2. Devices still never cross threads (1).
+- A `SimBoard` protocol violation (13.1) panics the daemon thread, which under `--sim` is the main thread: the process exits 101 and systemd restarts it. A violation is a daemon bug, and it is meant to be loud.
+- On stop (4.1) `serve` flushes Storage and returns as on the board, and the process exits 0. The 8080 thread, running or blocked in `wait()`, ends with it.
+
+### 16.3 RESET and power
+
+- **No RESET under `--sim`.** Nothing drives the simulated RESET line, so the 5.2 code runs only in the tests (13.3). Restarting the daemon (`systemctl restart pi8080d`, or Ctrl-C and run it again) is the power cycle: fresh devices, a fresh 8080 at PC 0000 with the overlay set and RAM 00. A program that hangs (`JMP $`) or halts ends that way.
+- The 8080 boots when the daemon starts, so the banner is usually discarded because no client is connected yet (`DEVICE_SPECS.md` 4), as on the board. Press Enter for a prompt.
+
+### 16.4 ROM image, running it, the unit
+
+- `--sim FILE`: FILE is a ROM image of exactly 4096 bytes, run at F000 (`ARCHITECTURE.md` 2: `rom/monitor.bin`), read once at startup. Any other size, or a read error, is an `Err` before anything else starts: `--sim FILE: N bytes, not 4096`, or the OS error (exit 1).
+- The other flags (10) mean the same as on the board. `--sim` runs on Linux and macOS; without it the daemon is Linux only (2).
+- On the Mac, from the repo: `cargo run --bin pi8080d -- --sim rom/monitor.bin --storage /tmp/pi8080d`, then `socat -,rawer,escape=0x1d TCP:localhost:8080`. Use a storage directory of its own: the emulator's `storage/` works too, but not while the emulator runs.
+- On a Pi or any Linux box:
+  1. Install the binary and the unit as in 11. On a box with no `gpio` group, `groupadd --system gpio` first: the unit names it, and systemd refuses to start a unit whose group does not exist.
+  2. Copy the ROM image to `/usr/local/share/pi8080d/monitor.bin`.
+  3. Install `scripts/pi8080d-sim.conf` as `/etc/systemd/system/pi8080d.service.d/sim.conf`.
+  4. `systemctl daemon-reload`, then `systemctl restart pi8080d`.
+
+  ```ini
+  # pi8080d --sim (docs/PI_DAEMON.md 16.4): the simulated board instead of GPIO.
+  # Install as /etc/systemd/system/pi8080d.service.d/sim.conf; delete it to go back to the board.
+  [Service]
+  ExecStart=
+  ExecStart=/usr/local/bin/pi8080d --storage /var/lib/pi8080d --sim /usr/local/share/pi8080d/monitor.bin
+  CPUAffinity=
+  ```
+
+  `CPUAffinity=` clears the pin to core 3, so the two busy threads do not share one core. `User`, `Group`, `StateDirectory`, `Restart` and `StartLimitIntervalSec` stay as they are. The `/boot/firmware` settings in 11 are not needed. To go back to the board, delete the drop-in and reload.
+
+### 16.5 Tests
+
+- `every_transcript_through_the_daemon` (13.2) is the `--sim` wiring with the CPU on the test thread, and uses the same `SimBoard` and `Bridge`.
+- `sim_mode_plays_transcripts_over_tcp` (`tests/monitor_tests.rs`, Unix) runs the built binary (`CARGO_BIN_EXE_pi8080d`) four times, for the transcripts `hex_math`, `storage` and `assemble` and one RAM-image run, with `--sim rom/monitor.bin --listen 127.0.0.1:0 --storage TMP --trace TMP/trace.txt`. For each:
+  1. read the bound address from the startup line on stderr, check its `board simulated` suffix, and connect;
+  2. type `H 0 0` and skip the output up to its answer and prompt (the client may connect mid-banner or after the banner was discarded, 16.3);
+  3. play the transcript: type each step, read exactly the expected bytes plus the `> ` prompt, and compare as the harness does. The RAM-image run instead pastes `rom/monitor_ram.hex` a line at a time, types `G D000` and `F CFFF D000 00`, and expects what the same steps print on the local path (the ` RAM` banner, `Address out of range`; `ARCHITECTURE.md` 2.1);
+  4. send SIGTERM, then assert exit status 0, a trace whose first line is `OUT 00 0D` (the banner's first byte; FE is outside the window) and an `IN 01` line in it.
+
+  If the console closes, a read times out or the exit status is not 0, the test kills the daemon and fails with everything it wrote to stderr (a board violation panics the daemon).
+
+  This covers the flags, the RAM-build load workflow, the ROM image, the startup order, the 8080 thread, the TCP console, storage, the mailbox, the trace and the stop path.
+- Nothing in 14 closes under `--sim`. It shows that the deployment works, not that the board does.

@@ -38,6 +38,7 @@ Ready.<CR><LF>
 ```
 
 - `<version>` is `0.6` today (`MSG_BANNER` in `rom/monitor.asm`; Phase 7). A phase that changes the command set bumps it in the same commit.
+- The RAM test build (`ARCHITECTURE.md` 2.1) prints `8080 Monitor v<version> RAM` on that line; nothing else in the banner differs. A test MAY check the ` RAM` marker, but still MUST NOT match the version, date or time.
 - `<date>` and `<time>` are the assembler's `DATE` and `TIME` at build time.
 - Tests MUST NOT match on the version, date or time. A banner check matches only `8080 Monitor v`.
 - **Input across reset.** RESET empties the console input FIFO (`DEVICE_SPECS.md`, Rules Common to All Ports), so the monitor never sees bytes typed before a reset. Bytes that arrive after the reset are ordinary input and are processed after the banner. The ROM has no input-drain loop.
@@ -158,6 +159,8 @@ These are the exact strings. Each is printed with a trailing `<CR><LF>`.
 
 Notation: `[x]` is optional. Numeric forms follow 4.2. "No output" means that only the next prompt follows.
 
+These are the ROM's commands. The RAM test build (`ARCHITECTURE.md` 2.1) differs only where 2.1 says: its banner, its HEX guard top, and an F/M/L guard on its own image.
+
 ### 6.1 C: Compare
 
 `C start end dest`
@@ -211,7 +214,7 @@ Notation: `[x]` is optional. Numeric forms follow 4.2. "No output" means that on
 
 - Two digits do not advance on their own. Only `<CR>` stores and advances, so a CRLF terminal advances exactly once per Enter.
 - One digit is a complete value: `5 <CR>` stores 05.
-- E does not read the byte back to verify it. Storing to a ROM address (F000-FFFF) has no effect.
+- E does not read the byte back to verify it. Storing to a ROM address (F000-FFFF) has no effect (JP-WE open, `ARCHITECTURE.md` 6.10).
 - Error: `Invalid address` for an invalid `addr`.
 
 Example: `E 0200`, then `1` `2` `<CR>` `3` `4` `<CR>` `.`, stores 0200=12 and 0201=34 and leaves LAST_EXAM_ADDR = 0202.
@@ -381,7 +384,7 @@ Assembles one instruction per line into memory, starting at `addr`. The assemble
 - **Only `.` ends A.** An empty line, a line of only spaces, and every failure prompt again. Pasted source therefore never falls through to the command dispatcher, where an instruction would run as a command (`XCHG` as `X CHG`, which mounts a file). A file sent with `<CR><LF>` line ends gives an empty line after every line, which only prompts again. With a dead or Phase 6 Pi service every line prints `Service error`; type `.` to leave.
 - A success prints nothing more. The next prompt's address shows how many bytes were written.
 - **Syntax:** one instruction in the ASM grammar (`DEVICE_SPECS.md` 8, ASM).
-- **No guard**, as E: writes to F000-FFFF have no effect, but the address still advances. Writing to the workspace (0080-00FF) or the stack page (EF00-EFFF) has undefined results, as F.
+- **No guard**, as E: writes to F000-FFFF have no effect (JP-WE open, `ARCHITECTURE.md` 6.10), but the address still advances. Writing to the workspace (0080-00FF) or the stack page (EF00-EFFF) has undefined results, as F.
 - A keeps no state. When it ends, the address is lost; `A addr` starts again anywhere. A changes neither LAST_DUMP_ADDR nor LAST_EXAM_ADDR.
 - Tokens after `addr` are ignored (4.1).
 - Lines may be pasted. Nothing paces the sender (section 2). Each line costs one mailbox round trip, about 3,800 cycles for `MVI A,0D` (1.9 ms at 2.048 MHz, before READY wait states).
@@ -419,7 +422,7 @@ Disassembles `count` instructions starting at `addr`. The disassembler runs on t
 - U only reads memory. It reads three bytes for every instruction, whatever its length. Memory reads have no side effects on this machine. F000-FFFF reads as the ROM. U over the stack page shows U's own stack use, as C does (6.1).
 - U keeps no state and changes neither LAST_DUMP_ADDR nor LAST_EXAM_ADDR. Tokens after `count` are ignored (4.1).
 - U wraps: `U FFFF 2` lists FFFF, then the address after it modulo 10000h.
-- U uses ports 10h-13h. One line costs about 9,500 cycles (4.6 ms at 2.048 MHz, before READY wait states), so the default 8 lines take about 37 ms.
+- U uses ports 10h-13h. One line costs about 4,450 cycles for `NOP` to 5,600 for `LXI SP,EFFE` (2.2-2.7 ms at 2.048 MHz, before READY wait states), so the default 8 lines take about 18-22 ms; the whole `U addr` command, with its command line and setup, takes about 20-25 ms (measured 41,967 and 51,037 cycles).
 - **Round trip:** U's text field (everything after the bytes field), typed at an A prompt, assembles to the bytes U showed, except the R2 aliases (`DEVICE_SPECS.md` 8, Round-trip properties).
 
 Example, after the 6.16 example:
@@ -512,7 +515,7 @@ The loader validates the whole record before it writes any byte. The first check
 | 5 | TT = 00 or 01. Types 02-05 and every other type fail | `Bad record type` |
 | 6 | Type 00 with LL > 0 only: AAAA ≥ 0100h **and** AAAA + LL ≤ EF00h, with the sum computed without wrap (a carry out of bit 15 fails the check) | `Address out of range` |
 
-Because of step 6, a record that is accepted writes only inside 0100-EEFF.
+Because of step 6, a record that is accepted writes only inside 0100-EEFF. The RAM test build lowers the top to D000 (`ARCHITECTURE.md` 2.1).
 
 ### 7.3 Actions on a valid record
 

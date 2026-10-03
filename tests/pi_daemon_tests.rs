@@ -1,17 +1,15 @@
 // pi_daemon_tests.rs - pi8080d fault, RESET, startup, stop and console tests (PI_DAEMON
 // 13.3). The daemon (`pi::setup_pins` and `pi::serve`) runs on its own thread against the
-// simulated board (tests/sim); the test thread plays the 8080 with begin/wait and the
+// simulated board (`pi::sim`); the test thread plays the 8080 with begin/wait and the
 // RESET line, and the console client over TCP. No CPU. The board checks every handshake
 // obligation (13.1) on every access, so each test also checks those.
 //
 // "Pulse RESET" is reset(true), 2 ms, reset(false). "After a pass" means edge_calls() has
 // risen by 2 since the access completed (a console pass makes exactly one reset_edge call).
 
-mod sim;
-
 use intel8080_emu::io::devices::mailbox;
+use intel8080_emu::pi::sim::{Access, Done, Knobs, SimBoard};
 use intel8080_emu::pi::{self, ACK, GPFSEL2, GPIO_PUP_PDN_CNTRL_REG1, GPLEV0, LATCH};
-use sim::{Access, Done, Knobs, SimBoard};
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;

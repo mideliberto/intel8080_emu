@@ -9,6 +9,8 @@
 ;   0100-EEFF  user area
 ;   EF00-EFFF  monitor stack (SP starts at F000)
 ;   F000-FFFF  this ROM (also at 0000 through the overlay until OUT FE)
+; The RAM test build (asl -D RAMBUILD, ARCHITECTURE 2.1) runs the same code at
+; D000 and owns D000-EEFF too: the user area is 0100-CFFF.
 ;
 ; Ports: 00-02 console, 08-0C storage, 0D-0F mount, 10-13 mailbox, FE overlay off.
 ;
@@ -49,6 +51,19 @@ MAILBOX_STATUS      EQU     12H         ; Read: 00 idle, 01 busy, 02 avail, 03 d
 MAILBOX_RESPONSE    EQU     13H         ; Read: pop a response byte
 
 STACK_TOP       EQU     0F000H      ; Stack grows down from ROM
+STACK_PAGE      EQU     0EF00H      ; Monitor stack page EF00-EFFF
+
+; Build variants (ARCHITECTURE 2.1). `asl` alone builds the ROM. `asl -D RAMBUILD`
+; builds the RAM test image: the same code at CODE_BASE, the HEX guard's top at
+; the image, F/M/L refusing the image (IMG_GUARD), and " RAM" after the banner
+; version. The ROM build assembles none of the RAMBUILD code.
+        IFDEF   RAMBUILD
+CODE_BASE       EQU     0D000H      ; RAM test image: G D000. Page-aligned.
+USER_END        EQU     CODE_BASE   ; first address above the user area
+        ELSE
+CODE_BASE       EQU     0F000H      ; the ROM
+USER_END        EQU     STACK_PAGE  ; first address above the user area
+        ENDIF
 
 CR              EQU     0DH
 LF              EQU     0AH
@@ -76,7 +91,7 @@ STOR_ADDR:      DS      3           ; storage address (lo, mid, hi)
 
 LINE_LENGTH     EQU     80          ; LINE_BUFFER size
 
-        ORG     0F000H
+        ORG     CODE_BASE
 
 ; ============================================
 ; COLD START (ARCHITECTURE 3.2)
@@ -898,6 +913,9 @@ CMD_FILL:
         POP     H                   ; HL = start
         PUSH    PSW
         CALL    RANGE               ; BC = count
+        IFDEF   RAMBUILD
+        CALL    IMG_GUARD
+        ENDIF
         POP     PSW
         MOV     E,A
 CF_LOOP:
@@ -985,6 +1003,11 @@ CMD_MOVE:
         JZ      ERR_RANGE           ; Count 0
         POP     D                   ; DE = dest
         POP     H                   ; HL = source
+        IFDEF   RAMBUILD
+        XCHG
+        CALL    IMG_GUARD           ; on dest
+        XCHG
+        ENDIF
 
         MOV     A,L                 ; CY = source < dest
         SUB     E
@@ -1201,7 +1224,8 @@ CMD_HELP:
 ; writes nothing. Pass 2 re-reads the header, runs steps 5-6, then acts
 ; (7.3). The first failing step prints its message (error tail -> WARM), so
 ; a rejected record writes nothing. No state survives the record: each line
-; stands alone (7). Writes only inside 0100-EEFF, so never into LINE_BUFFER.
+; stands alone (7). Writes only inside 0100-(USER_END-1): 0100-EEFF in the ROM,
+; 0100-CFFF in the RAM build. Never into LINE_BUFFER.
 HEX_RECORD:
         PUSH    H                   ; pass 2 starts again at LL
 
@@ -1260,7 +1284,7 @@ HR_PAIRS:
         ORA     A
         JZ      WARM
 
-        ; Step 6: AAAA >= 0100h and AAAA + LL <= EF00h, the sum without wrap.
+        ; Step 6: AAAA >= 0100h and AAAA + LL <= USER_END, the sum without wrap.
         MOV     A,D
         ORA     A                   ; AAAA < 0100: high byte 00
         JZ      ERR_ADDR_RANGE
@@ -1269,10 +1293,10 @@ HR_PAIRS:
         MOV     L,C
         DAD     D                   ; HL = AAAA + LL, CY = carry out of bit 15
         JC      ERR_ADDR_RANGE
-        MOV     A,L                 ; CY = HL < EF01h, i.e. HL <= EF00h
-        SUI     01H
+        MOV     A,L                 ; CY = HL < USER_END+1, i.e. HL <= USER_END
+        SUI     (USER_END+1) & 0FFH
         MOV     A,H
-        SBI     0EFH
+        SBI     (USER_END+1) >> 8
         JNC     ERR_ADDR_RANGE
         POP     H
 
@@ -1288,6 +1312,36 @@ HR_WRITE:
 HR_EOF:
         LXI     H,MSG_LOADED
         JMP     PRINT_WARM
+
+        IFDEF   RAMBUILD
+; IMG_GUARD - RAM test build only (ARCHITECTURE 2.1): F, M and L refuse a
+; destination that touches the running image, CODE_BASE-(STACK_PAGE-1).
+; Input: HL = first address, BC = count (0 means 65536); the range wraps past FFFF
+; Exits to ERR_ADDR_RANGE (no return) if any byte of it lies in the image.
+; Trashes: A, flags
+IMG_GUARD:
+        MOV     A,H                 ; HL inside the image: (H - base page) < pages
+        SUI     CODE_BASE >> 8
+        CPI     (STACK_PAGE - CODE_BASE) >> 8
+        JC      ERR_ADDR_RANGE
+        MOV     A,B                 ; 65536 bytes reach everything
+        ORA     C
+        JZ      ERR_ADDR_RANGE
+        PUSH    D
+        XRA     A                   ; DE = CODE_BASE - HL, the distance to the image
+        SUB     L
+        MOV     E,A
+        MVI     A,CODE_BASE >> 8
+        SBB     H
+        MOV     D,A
+        MOV     A,E                 ; CY = DE < BC: the range reaches CODE_BASE
+        SUB     C
+        MOV     A,D
+        SBB     B
+        POP     D
+        JC      ERR_ADDR_RANGE
+        RET
+        ENDIF
 
 ; ============================================
 ; STORAGE COMMANDS
@@ -1368,6 +1422,11 @@ CMD_LOAD:
         ORA     C
         JZ      ERR_RANGE           ; Count 0
 CL_COUNTED:
+        IFDEF   RAMBUILD
+        POP     H                   ; HL = memory address
+        PUSH    H
+        CALL    IMG_GUARD           ; before any port is written
+        ENDIF
         LDA     STOR_ADDR
         OUT     STORAGE_ADDR_LO
         LDA     STOR_ADDR+1
@@ -1446,7 +1505,11 @@ CW_LOOP:
 
 MSG_BANNER:
         DB      CR,LF
-        DB      "8080 Monitor v0.6",CR,LF
+        DB      "8080 Monitor v0.6"
+        IFDEF   RAMBUILD
+        DB      " RAM"
+        ENDIF
+        DB      CR,LF
         DB      'Built: ', DATE, ' ', TIME, CR, LF
         DB      "Ready.",CR,LF
         DB      0
@@ -1523,6 +1586,7 @@ STR_DIS:
         DB      "DIS ",0
 
 ; ROM_END - first byte after the ROM contents. make size: ROM_END - F000.
+; The RAM build ends far below the stack page: D000 + 4096 + its few extra bytes.
 ROM_END:
 
         END     COLD_START

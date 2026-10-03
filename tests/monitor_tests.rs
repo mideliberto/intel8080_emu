@@ -11,7 +11,7 @@
 //
 // Two paths, one rule (PI_DAEMON 13.2): Local maps build_bus on the CPU's IoBus and talks
 // to the Console directly; Daemon maps a Bridge on 00-6F that performs each access as a
-// REQ/ACK handshake on the simulated board (tests/sim) against pi::serve on its own
+// REQ/ACK handshake on the simulated board (pi::sim) against pi::serve on its own
 // thread, and talks to the console over TCP. every_transcript_through_the_daemon plays
 // every transcript both ways.
 //
@@ -27,8 +27,6 @@
 // output line that starts with "> " as \x3E\x20, one that starts with '#' as \x23,
 // and an empty output line as a trailing \r\n on the line before it.
 // Transcripts only display memory they wrote first: on hardware RAM is random.
-
-mod sim;
 
 use std::cell::RefCell;
 use std::io::{Read, Write};
@@ -46,8 +44,8 @@ use intel8080_emu::io::devices::console::Console;
 use intel8080_emu::io::devices::mailbox::{self, Mailbox};
 use intel8080_emu::io::{IoBus, IoDevice};
 use intel8080_emu::pi;
+use intel8080_emu::pi::sim::{Bridge, Knobs, SimBoard};
 use intel8080_emu::Intel8080;
-use sim::{Access, Done, Knobs, SimBoard};
 
 /// HLT. A NOP-like byte (00, or A5 = ANA L) would slide execution into F000 and
 /// boot the ROM even with the overlay missing. RST 0 would jump back to 0000.
@@ -228,34 +226,10 @@ impl Mon {
 
     /// Play tests/transcripts/<name>.txt. Every step must match exactly.
     fn play(&mut self, name: &str) {
-        let path = format!("tests/transcripts/{}.txt", name);
-        let text = std::fs::read_to_string(&path).unwrap();
-        let mut steps: Vec<(usize, Vec<u8>, Vec<Option<u8>>)> = Vec::new();
-        for (i, line) in text.lines().enumerate() {
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            if line == ">" || line.starts_with("> ") {
-                let line = typed(line.get(2..).unwrap_or(""));
-                let echo = line.iter().copied().chain(*b"\r\n").map(Some).collect();
-                steps.push((i + 1, [&line[..], b"\r"].concat(), echo));
-            } else if let Some(line) = line.strip_prefix("< ") {
-                steps.push((i + 1, typed(line), Vec::new()));
-            } else {
-                let step = steps.last_mut().unwrap_or_else(|| panic!("{}:{}: output before input", path, i + 1));
-                step.2.extend(unescape(line));
-                step.2.extend([Some(b'\r'), Some(b'\n')]);
-            }
-        }
-        for (line, input, expected) in steps {
-            let got = self.step(&input).unwrap_or_else(|e| panic!("{}:{}: {}", path, line, e));
-            // A digit where the transcript has \d shows as \d, so the two strings compare.
-            let want: String = expected.iter().map(|e| e.map_or("\\d".to_string(), |b| show(&[b]))).collect();
-            let seen: String = got.iter().enumerate().map(|(i, &b)| match expected.get(i) {
-                Some(None) if b.is_ascii_digit() => "\\d".to_string(),
-                _ => show(&[b]),
-            }).collect();
-            assert_eq!(seen, want, "{}:{}", path, line);
+        for (line, input, expected) in transcript(name) {
+            let at = format!("tests/transcripts/{}.txt:{}", name, line);
+            let got = self.step(&input).unwrap_or_else(|e| panic!("{}: {}", at, e));
+            check(&at, &got, &expected);
         }
     }
 
@@ -271,6 +245,42 @@ impl Mon {
     fn mem(&mut self, addr: u16, n: usize) -> Vec<u8> {
         (0..n).map(|i| self.cpu.read_byte(addr.wrapping_add(i as u16))).collect()
     }
+}
+
+/// tests/transcripts/<name>.txt as steps: (line number, the bytes typed, the expected
+/// output up to the prompt, which is not included; None is `\d`).
+fn transcript(name: &str) -> Vec<(usize, Vec<u8>, Vec<Option<u8>>)> {
+    let path = format!("tests/transcripts/{}.txt", name);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut steps: Vec<(usize, Vec<u8>, Vec<Option<u8>>)> = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line == ">" || line.starts_with("> ") {
+            let line = typed(line.get(2..).unwrap_or(""));
+            let echo = line.iter().copied().chain(*b"\r\n").map(Some).collect();
+            steps.push((i + 1, [&line[..], b"\r"].concat(), echo));
+        } else if let Some(line) = line.strip_prefix("< ") {
+            steps.push((i + 1, typed(line), Vec::new()));
+        } else {
+            let step = steps.last_mut().unwrap_or_else(|| panic!("{}:{}: output before input", path, i + 1));
+            step.2.extend(unescape(line));
+            step.2.extend([Some(b'\r'), Some(b'\n')]);
+        }
+    }
+    steps
+}
+
+/// Fails unless `got` is `expected`. A digit where the transcript has \d shows as \d, so
+/// the two strings compare.
+fn check(at: &str, got: &[u8], expected: &[Option<u8>]) {
+    let want: String = expected.iter().map(|e| e.map_or("\\d".to_string(), |b| show(&[b]))).collect();
+    let seen: String = got.iter().enumerate().map(|(i, &b)| match expected.get(i) {
+        Some(None) if b.is_ascii_digit() => "\\d".to_string(),
+        _ => show(&[b]),
+    }).collect();
+    assert_eq!(seen, want, "{}", at);
 }
 
 /// A ROM label's address, from rom/monitor.sym (built and committed with monitor.bin).
@@ -339,25 +349,6 @@ fn boot_fails_without_overlay() {
 
 // ---------- Transcripts ----------
 
-/// The Pi window on the CPU's IoBus for the daemon path: each access is a REQ/ACK
-/// handshake on the simulated board, served by pi::serve on the daemon thread.
-struct Bridge(SimBoard);
-
-impl IoDevice for Bridge {
-    fn read(&mut self, port: u8) -> u8 {
-        self.0.begin(port, Access::In);
-        match self.0.wait() {
-            Done::In(v) => v,
-            d => panic!("IN {:02X}: {:?}", port, d),
-        }
-    }
-
-    fn write(&mut self, port: u8, value: u8) {
-        self.0.begin(port, Access::Out(value));
-        assert_eq!(self.0.wait(), Done::Out, "OUT {:02X} {:02X}", port, value);
-    }
-}
-
 #[test]
 fn every_transcript_through_the_daemon() {
     // PI_DAEMON 13.2: every transcript, each from a fresh power-on, with ports 00-6F served
@@ -415,6 +406,178 @@ fn every_transcript_through_the_daemon() {
         if let Some(i) = (0..want.len().max(got.len())).find(|&i| want.get(i) != got.get(i)) {
             panic!("{}: trace line {} is {:?}, the CPU's port sequence has {:?}", name, i + 1, got.get(i), want.get(i));
         }
+    }
+}
+
+// ---------- pi8080d --sim (PI_DAEMON 16.5) ----------
+
+/// A pi8080d process, killed if the test fails before it exits.
+#[cfg(unix)]
+struct Daemon(std::process::Child);
+
+#[cfg(unix)]
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Kills the daemon, then fails with `msg` and everything it wrote to stderr: a board
+/// violation panics the daemon, and the client sees only a closed console.
+#[cfg(unix)]
+fn daemon_failed(daemon: Daemon, log: std::thread::JoinHandle<String>, msg: String) -> ! {
+    drop(daemon);
+    panic!("{}\npi8080d stderr:\n{}", msg, log.join().unwrap_or_default());
+}
+
+#[cfg(unix)]
+#[test]
+fn sim_mode_plays_transcripts_over_tcp() {
+    // The built binary with --sim and the shipped ROM, a fresh process per run, the test a
+    // TCP console client as on the board (HARDWARE_BUILD 3 step 6). The 8080 boots as the
+    // daemon starts, so the client may connect mid-banner or after it was discarded
+    // (PI_DAEMON 16.3): it types H 0 0 and skips everything up to that command's prompt.
+    // The last run is the RAM-image workflow (ARCHITECTURE 2.1): paste rom/monitor_ram.hex,
+    // G D000, one guarded F; its expected output is the same steps on the local path.
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    for name in ["hex_math", "storage", "assemble", "ram image"] {
+        let steps: Vec<(String, Vec<u8>, Vec<Option<u8>>)> = if name == "ram image" {
+            let (lines, _) = ram_image();
+            let mut m = boot();
+            let mut inputs: Vec<(String, Vec<u8>)> = lines.iter().enumerate()
+                .map(|(i, l)| (format!("rom/monitor_ram.hex:{}", i + 1), format!("{}\r", l).into_bytes()))
+                .collect();
+            inputs.push(("G D000".to_string(), b"G D000\r".to_vec()));
+            inputs.push(("F CFFF D000 00".to_string(), b"F CFFF D000 00\r".to_vec()));
+            inputs.into_iter().map(|(at, input)| {
+                let out = m.step(&input).unwrap_or_else(|e| panic!("{} on the local path: {}", at, e));
+                (at, input, out.into_iter().map(Some).collect())
+            }).collect()
+        } else {
+            transcript(name).into_iter()
+                .map(|(line, input, expected)| (format!("tests/transcripts/{}.txt:{}", name, line), input, expected))
+                .collect()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let trace = dir.path().join("trace.txt");
+        let mut child = Command::new(env!("CARGO_BIN_EXE_pi8080d"))
+            .args(["--sim", "rom/monitor.bin", "--listen", "127.0.0.1:0", "--storage"])
+            .arg(dir.path().join("storage"))
+            .arg("--trace")
+            .arg(&trace)
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        // Drained to the end: the daemon logs to stderr, and a closed pipe would fail it.
+        let mut stderr = BufReader::new(child.stderr.take().unwrap());
+        let daemon = Daemon(child);
+        let mut line = String::new();
+        stderr.read_line(&mut line).unwrap();
+        let log = std::thread::spawn(move || {
+            let mut rest = String::new();
+            let _ = stderr.read_to_string(&mut rest);
+            rest
+        });
+        let addr = line.strip_prefix("pi8080d: console on ").and_then(|l| l.split(',').next())
+            .unwrap_or_else(|| panic!("startup line: {:?}", line));
+        assert!(line.trim_end().ends_with("board simulated, ROM rom/monitor.bin"), "{:?}", line);
+        let mut client = TcpStream::connect(addr).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        client.write_all(b"H 0 0\r").unwrap();
+        let mut seen = Vec::new();
+        while !seen.ends_with(b"H 0 0\r\n0000 0000\r\n> ") {
+            let mut buf = [0u8; 256];
+            match client.read(&mut buf) {
+                Ok(n) if n > 0 => seen.extend_from_slice(&buf[..n]),
+                r => daemon_failed(daemon, log, format!("{}: console {:?} after {:?}", name, r, show(&seen))),
+            }
+        }
+        for (at, input, expected) in steps {
+            let at = format!("{} over pi8080d --sim", at);
+            client.write_all(&input).unwrap();
+            let mut got = vec![0; expected.len() + 2];
+            if let Err(e) = client.read_exact(&mut got) {
+                daemon_failed(daemon, log, format!("{}: {}", at, e));
+            }
+            assert_eq!(show(&got[expected.len()..]), "> ", "{}: no prompt", at);
+            check(&at, &got[..expected.len()], &expected);
+        }
+        // SAFETY: kill(2) on our own child's pid.
+        assert_eq!(unsafe { libc::kill(daemon.0.id() as libc::pid_t, libc::SIGTERM) }, 0);
+        let mut daemon = daemon;
+        let status = daemon.0.wait().unwrap();
+        if !status.success() {
+            daemon_failed(daemon, log, format!("{}: {}", name, status));
+        }
+        let trace = std::fs::read_to_string(&trace).unwrap();
+        assert_eq!(trace.lines().next(), Some("OUT 00 0D"), "{}: the banner's first byte", name);
+        assert!(trace.lines().any(|l| l.starts_with("IN 01 ")), "{}: no console input in the trace", name);
+    }
+}
+
+// ---------- RAM test build (ARCHITECTURE 2.1) ----------
+
+const RAM_BASE: u16 = 0xD000;
+
+/// rom/monitor_ram.hex: its lines, and the bytes its data records write from D000. Checks
+/// the shape ARCHITECTURE 2.1 gives it: 16-byte records, contiguous from D000, one EOF last.
+fn ram_image() -> (Vec<String>, Vec<u8>) {
+    let text = std::fs::read_to_string("rom/monitor_ram.hex").unwrap();
+    let lines: Vec<String> = text.lines().map(String::from).collect();
+    let mut image = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        let b: Vec<u8> = (1..l.len()).step_by(2).map(|j| u8::from_str_radix(&l[j..j + 2], 16).unwrap()).collect();
+        let (len, addr, kind) = (b[0] as usize, u16::from_be_bytes([b[1], b[2]]), b[3]);
+        if i + 1 == lines.len() {
+            assert_eq!(kind, 1, "the last record is not EOF: {}", l);
+            break;
+        }
+        assert!(kind == 0 && len <= 16 && addr == RAM_BASE + image.len() as u16, "record {}: {}", i + 1, l);
+        image.extend_from_slice(&b[4..4 + len]);
+    }
+    (lines, image)
+}
+
+/// The `Built: MM/DD/YYYY` bytes of an image.
+fn built_date(image: &[u8]) -> &[u8] {
+    let at = image.windows(7).position(|w| w == b"Built: ").expect("no Built: in the image");
+    &image[at..at + 17]
+}
+
+#[test]
+fn ram_build_runs_the_transcripts() {
+    // ARCHITECTURE 2.1: the resident ROM loads the RAM image through its HEX loader, G D000
+    // starts it, a transcript runs on it, the image is intact afterwards, and G F000 returns
+    // to the ROM. `hex` and `search` write D000-EEFF by design; ram/guard covers the RAM
+    // build's guards.
+    let (lines, image) = ram_image();
+    let rom = std::fs::read("rom/monitor.bin").unwrap();
+    // Both come from one `make`: a hex left from an earlier day is stale. One from the same
+    // day is not caught.
+    assert_eq!(show(built_date(&image)), show(built_date(&rom)), "rom/monitor_ram.hex is stale: cd rom && make");
+    let paste: Vec<u8> = lines.iter().flat_map(|l| [l.as_bytes(), b"\r"].concat()).collect();
+    let loaded = lines.iter().map(|l| format!("{}\r\n", l)).collect::<Vec<_>>().join("> ") + "Loaded\r\n";
+    let mut names: Vec<String> = std::fs::read_dir("tests/transcripts").unwrap()
+        .filter_map(|e| e.unwrap().file_name().into_string().ok()?.strip_suffix(".txt").map(String::from))
+        .filter(|n| n != "hex" && n != "search")
+        .collect();
+    names.sort();
+    assert!(names.len() >= 16, "{:?}", names);
+    names.push("ram/guard".to_string());
+    for name in names {
+        let mut m = boot();
+        assert_eq!(show(&m.step(&paste).unwrap()), show(loaded.as_bytes()), "{}: loading the RAM image", name);
+        assert!(m.mem(RAM_BASE, image.len()) == image, "{}: the loaded image differs from the file", name);
+        let banner = m.run("G D000");
+        let first = banner.split("\\r\\n").nth(1).unwrap_or("");
+        assert!(banner.starts_with("\\r\\n8080 Monitor v") && first.ends_with(" RAM"), "{}: {}", name, banner);
+        m.play(&name);
+        assert!(m.mem(RAM_BASE, image.len()) == image, "{} wrote the running RAM image", name);
+        let banner = m.run("G F000");
+        let first = banner.split("\\r\\n").nth(1).unwrap_or("");
+        assert!(banner.starts_with("\\r\\n8080 Monitor v") && !first.ends_with(" RAM"), "{}: {}", name, banner);
     }
 }
 

@@ -3,18 +3,21 @@
 
 ASL = asl
 P2BIN = p2bin
+P2HEX = p2hex
 
 # Source files
 ROM_SRC = monitor.asm
 
-# Output files (monitor.bin and monitor.sym are committed)
+# Output files (monitor.bin, monitor.sym and monitor_ram.hex are committed)
 ROM_BIN = monitor.bin
 ROM_SYM = monitor.sym
 ROM_P = monitor.p
+RAM_HEX = monitor_ram.hex
+RAM_P = monitor_ram.p
 
 .PHONY: all clean size disasm
 
-all: $(ROM_BIN) $(ROM_SYM)
+all: $(ROM_BIN) $(ROM_SYM) $(RAM_HEX)
 
 # Assemble to .p file (and .lst, and .noi with the labels)
 $(ROM_P): $(ROM_SRC)
@@ -29,8 +32,16 @@ $(ROM_SYM): $(ROM_P)
 $(ROM_BIN): $(ROM_P)
 	$(P2BIN) $(ROM_P) $(ROM_BIN) -r '$$F000-$$FFFF'
 
+# RAM test build (ARCHITECTURE 2.1): the same source with RAMBUILD defined, at D000,
+# as Intel HEX with 16-byte records for the resident monitor's HEX loader.
+$(RAM_P): $(ROM_SRC)
+	$(ASL) -cpu 8080 -D RAMBUILD -o $(RAM_P) $(ROM_SRC)
+
+$(RAM_HEX): $(RAM_P)
+	$(P2HEX) $(RAM_P) $(RAM_HEX) -F Intel -l 16
+
 clean:
-	rm -f *.p *.bin *.lst *.noi *.sym
+	rm -f *.p *.bin *.lst *.noi *.sym $(RAM_HEX)
 
 # Show disassembly (requires objdump or similar)
 disasm: $(ROM_BIN)

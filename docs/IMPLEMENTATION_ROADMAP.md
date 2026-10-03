@@ -153,6 +153,8 @@ No timer in v1. The Pi keeps wall-clock time via NTP. A periodic interrupt sourc
 **Success criteria:**
 - [x] `cargo test` on any OS: every transcript through the daemon on the simulated board, its trace equal to the emulator's port sequence (PI_DAEMON 13.2), and the 13.3 fault, RESET, startup, stop and console tests.
 - [x] The aarch64 musl `cargo check` and `cargo clippy` gate passes (PI_DAEMON 2).
+- [x] `pi8080d --sim` (PI_DAEMON 16, 2026-10-03): the whole Pi stack on the simulated board with the CPU model, so the daemon, unit, console, storage, clock and trace run on a Pi before the board exists; the built binary plays transcripts over TCP in `cargo test`.
+- [x] RAM test build (ARCHITECTURE 2.1, 2026-10-03): `rom/monitor_ram.hex` at D000, loaded through the resident HEX loader and run with `G D000`, so ROM changes run on the board without a burn.
 - [ ] On the bench: the PI_DAEMON 14 checks, at bring-up steps 5-8 (`HARDWARE_BUILD.md` 3).
 
 ---

@@ -152,7 +152,7 @@ All voltage ratings are referenced to VBB. The manual gives no power-up sequenci
 
 **What this means for the builder:**
 - The data inputs need **VIH >= 3.3 V**, above a TTL VOH. The 8228's CPU-side outputs (VOH >= 3.6 V) and the 8224's READY and RESET outputs (VOH >= 3.6 V) are specified to meet it. Anything else that drives an 8080A input (INT, HOLD, or data without an 8228) must also reach 3.3 V.
-- The outputs are weak: 1.9 mA sink and 150 uA source. Budgets for this build are in 13.5.
+- The outputs are weak: 1.9 mA sink and 150 uA source. Budgets for this build are in 13.4, item 7.
 
 ### 3.3 A.C. Characteristics (standard 8080A)
 

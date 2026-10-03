@@ -29,7 +29,7 @@ The rule behind every section: **the ROM sees only what real parts provide.** If
 | 0080-00FF | Monitor workspace. Layout in 1.1. Initialized at cold boot only. A program that writes here can break monitor commands until the next reset. |
 | 0100-EEFF | User programs and data. The monitor reads and writes this range only when a command tells it to. |
 | EF00-EFFF | Monitor stack. Cold boot and WARM (3.2) both set SP to 0xF000, so the first push writes 0xEFFF and 0xEFFE. |
-| F000-FFFF | ROM. Reads return ROM bytes. Writes have no effect the 8080 can observe. |
+| F000-FFFF | ROM. Reads return ROM bytes. With JP-WE open (the default, 6.10), writes have no effect the 8080 can observe. |
 
 **Monitor-owned ranges.** 0000-00FF and EF00-FFFF belong to the monitor. The HEX loader rejects any record that would write into either range (EOF and zero-length records are accepted at any address) (`MONITOR_SPEC.md`, Intel HEX Loader). The other monitor commands do not guard these ranges.
 
@@ -64,7 +64,42 @@ The I/O stubs run from RAM as self-modifying code. Real hardware runs it the sam
 - **No WARM vector.** WARM (3.2) has no fixed address. A program reaches it only through the `G` return contract (`MONITOR_SPEC.md`); anything else that wants the monitor back jumps to F000, a cold start (banner, workspace reset). The CP/M exerciser shim (`tests/exerciser.rs`) does that at 0000. (Decided 2026-10-03.)
 - **No public entry points.** User programs MUST NOT call ROM routines by address. Programs do their own I/O through the ports in `DEVICE_SPECS.md`. ROM routine contracts are in `MONITOR_SPEC.md` (ROM Routine Contracts); they describe the code, not an ABI.
 - **Budget:** 4096 bytes. Used bytes = `ROM_END - 0F000H`, where `ROM_END` is a label after the last assembled byte. `make size` prints that number. The padded image size is not a measurement.
-- **Layout** (not normative): boot at F000, then WARM and MAIN_LOOP, the shared error exits, console I/O and print routines, input and parse routines, the commands, the storage commands, then the strings and ROM_END.
+- **RAM test build:** the same source assembled at D000 as `rom/monitor_ram.hex`, so a ROM change can run on the board without burning an EEPROM (2.1).
+- **Layout** (not normative): boot first (COLD_START), then WARM and MAIN_LOOP, the shared error exits, console I/O and print routines, input and parse routines, the commands, the storage commands, then the strings and ROM_END.
+
+### 2.1 RAM Test Build
+
+Decided 2026-10-03 (Mike, COLLABORATION_LOG Key Decisions). A ROM change can run on the board before an EEPROM is burned: the resident monitor's HEX loader (`MONITOR_SPEC.md` 7) loads the same source assembled for RAM, and `G` starts it. It is a development image, not a second ROM: the shipped ROM's memory map and command set do not change. Assembled without `RAMBUILD`, `monitor.bin` is byte-identical to the build before this section existed, apart from `DATE` and `TIME`, and `monitor.sym` is identical.
+
+| Item | RAM test build |
+|---|---|
+| Source | `rom/monitor.asm` with `RAMBUILD` defined (`asl -D RAMBUILD`). Four things differ, each under `IFDEF RAMBUILD`: the base (`CODE_BASE`), the top of the HEX guard (`USER_END`), the F/M/L image guard (`IMG_GUARD`) and the banner marker. The shipped source changes only by naming the base and the guard top. |
+| Image | `rom/monitor_ram.hex`, committed with `monitor.bin` and `monitor.sym`, so `cargo test` needs no assembler. Intel HEX type 00 records of 16 data bytes (43 characters; the last may be shorter), contiguous from D000, then one type 01 record, which the loader accepts at any address (`MONITOR_SPEC.md` 7.3). Only assembled bytes, no padding. Every record is inside the loader's limits (`MONITOR_SPEC.md` 7.2). |
+| Base and entry | D000. The entry is COLD_START, the first byte: `G D000`. |
+| Size | The ROM's used bytes plus the RAM-only code (47 bytes). The ROM is at most 4096 bytes, so the image always ends far below the stack page. |
+| Memory | While the RAM monitor runs, D000-EEFF (the image range) is monitor-owned too, and the user area is 0100-CFFF. The workspace (0080-00FF) and the stack page (EF00-EFFF) are shared with the resident monitor and unchanged: one monitor runs at a time, and each cold start initializes them (1.1, 3.2). `LXI SP` discards the WARM address that `G` pushed. |
+| HEX guard | Records must lie inside 0100-CFFF: `MONITOR_SPEC.md` 7.2 step 6 with D000 in place of EF00. The same code, one constant. |
+| F, M, L | A destination that touches D000-EEFF, wrapping past FFFF for M and L, prints `Address out of range` and writes nothing. L checks before it writes a port. RAM build only: the ROM's F, M and L do not guard (`MONITOR_SPEC.md` 6.4, 6.8, 6.9). E, A and programs still write anywhere; a write into the image has undefined results, as in the workspace and the stack page (1). |
+| Overlay write at boot | Kept: the same boot code, `OUT 0FEH` included. The resident cold start has already cleared the overlay, so it changes nothing (4). 3.2 requirement 1 (the `OUT 0FEH` and what follows run from F000-FFFF) governs the reset path only; the RAM build is entered by `G`, with the overlay already clear. |
+| Banner | `8080 Monitor v<version> RAM` (`MONITOR_SPEC.md` 1.1). |
+| F000-FFFF | The resident ROM, untouched. `G F000` or RESET returns to it. |
+| Debugger symbols | None: `monitor.sym` names the ROM build. |
+
+**Build.** `cd rom && make` builds all three files (rules in `rom/Makefile`).
+
+**Load and run,** on the board or on `pi8080d --sim` (`PI_DAEMON.md` 16), with the resident monitor at its prompt and the `PI_DAEMON.md` 11 tunnel up:
+
+```
+{ cat rom/monitor_ram.hex; echo 'G D000'; } | nc localhost 8080
+```
+
+Each record echoes and prompts, the EOF record prints `Loaded`, and the first banner line ends ` RAM`. Any other message means a record was rejected: send the file again. Then quit `nc` and connect the interactive client (a new client replaces the old, `PI_DAEMON.md` 7.1). A load is about 3.9M cycles (about 1.9 s at 2.048 MHz, before READY wait states).
+- To load a new image, return to the resident monitor first (`G F000` or RESET): the RAM monitor's guard rejects its own range, so every record prints `Address out of range`.
+- RAM keeps its contents across RESET (3.1), so `G D000` restarts the RAM monitor if nothing wrote D000-EEFF.
+
+**What it does not test:** the reset path into the ROM (the fetch from the 0000 mirror, `OUT 0FEH` clearing the overlay) and anything that depends on the image sitting at F000. Those need the burned EEPROM (`HARDWARE_BUILD.md` 3).
+
+**Test:** `ram_build_runs_the_transcripts` (`tests/monitor_tests.rs`) checks the file's shape and that its `Built:` date equals `monitor.bin`'s: a file left from an earlier day fails, one from the same day is not caught. Then, for every `tests/transcripts/*.txt` except `hex` and `search`, which write D000-EEFF by design, and for `tests/transcripts/ram/guard.txt` (the moved HEX guard and the F/M/L guard, at both edges of the image; its subdirectory keeps it out of every other harness): power on with the shipped ROM, paste the file and expect every record echoed and `Loaded`, `G D000` and check for the ` RAM` banner, play the transcript, check that the image is unchanged, `G F000` and check for a banner without ` RAM`.
 
 ---
 
@@ -124,10 +159,10 @@ Requirements:
 
 | Condition | Read 0000-0FFF | Write 0000-0FFF | Read F000-FFFF | Write F000-FFFF |
 |-----------|----------------|-----------------|----------------|-----------------|
-| Overlay set (after reset) | ROM byte at the same offset | RAM (write-through) | ROM | no visible effect |
-| Overlay clear | RAM | RAM | ROM | no visible effect |
+| Overlay set (after reset) | ROM byte at the same offset | RAM (write-through) | ROM | no visible effect (JP-WE open, 6.10) |
+| Overlay clear | RAM | RAM | ROM | no visible effect (JP-WE open, 6.10) |
 
-- The ROM is selected on MEMR only (decode in 6.2). Writes always go to RAM, or have no visible effect at F000-FFFF.
+- The ROM is selected on MEMR only (decode in 6.2). Writes always go to RAM, or have no visible effect at F000-FFFF. The exception is JP-WE fitted (6.10, never in normal use): a write to F000-FFFF then also programs the EEPROM. The overlay never routes a write to the EEPROM.
 - Test: with the overlay set, write 0x55 to 0x0100. A read of 0x0100 returns ROM byte 0xF100. After `OUT 0FEH`, a read of 0x0100 returns 0x55.
 - Only RESET sets the flip-flop. Any `OUT 0FEH`, whatever the value in A, clears it. There is no soft reset. The circuit is in 6.5; port semantics are in `DEVICE_SPECS.md` (System Control).
 - **Emulator:** a CPU with no ROM loaded treats all 64 KB as RAM, and the overlay has no effect.
@@ -233,7 +268,7 @@ The emulator CPU has one interrupt input, `interrupt(rst)`, callable from the ho
 
 ## 6. Hardware Interface
 
-The circuits the hardware build must contain. The software-visible behavior of every port is in `DEVICE_SPECS.md`. The hardware build itself is Someday; this section is the contract it must meet. Timing in this section was checked in the 2026-10 hardware-alignment pass against the MCS-80 User's Manual 98-153D (Oct 1977: 8080A p.6-3..6-5, 8224 p.6-21..6-25, 8228 p.6-32..6-36) and the TI/Nexperia 74HCT and 74LVC datasheets. Figures are datasheet worst case at tCY = 488.28 ns, with t = 0 at phi1 rising in T1, unless marked (est). Items marked **[bench]** can only be closed by measurement on the built board. Pins, levels and cycle timing of the 8080A, 8224 and 8228: `reference/8080_HARDWARE.md` (98-153B, Sep 1975 edition; its page numbers differ from 98-153D).
+The circuits the hardware build must contain. The software-visible behavior of every port is in `DEVICE_SPECS.md`. The hardware build itself is Someday; this section is the contract it must meet. Timing in this section was checked in the 2026-10 hardware-alignment pass against the MCS-80 User's Manual 98-153D (Oct 1977: 8080A p.6-3..6-5, 8224 p.6-21..6-25, 8228 p.6-32..6-36) and the TI/Nexperia 74HCT and 74LVC datasheets. Figures are datasheet worst case at tCY = 488.28 ns, with t = 0 at phi1 rising in T1, unless marked (est). Items marked **[bench]** can only be closed by measurement on the built board. Pins, levels and cycle timing of the 8080A, 8224 and 8228: `reference/8080_HARDWARE.md` (98-153B, Sep 1975 edition; its page numbers differ from 98-153D), cited as "reference N". The ROM write path (6.10) is checked against the AT28C64B datasheet, Atmel 0270L-PEEPR-2/09 (https://ww1.microchip.com/downloads/en/DeviceDoc/doc0270.pdf), cited as "AT28C64B DS" with its section numbers. Gate drive and delays in 6.10-6.11 are from TI SCLS063G (SN74HCT08) and SCLS171F (SN74HCT138), worst case at VCC 4.5 V, -40 to 85 °C.
 
 ### 6.1 Clock and CPU Support
 
@@ -251,12 +286,13 @@ ROM_SEL = A15..A12 = 1111  OR  ( OVL AND A15..A12 = 0000 )   ; address only
 ROM_OE  = MEMR AND ROM_SEL
 RAM_OE  = MEMR AND NOT ROM_SEL
 RAM_WE  = MEMW
+ROM_WE  = MEMW AND A15..A12 = 1111 AND JP_WE      ; JP_WE = jumper JP-WE fitted (6.10). No OVL term.
 ```
 
 - OVL changes only during an I/O write (OUT FE) or RESET, never while MEMR is active.
-- RAM covers all of 0000-FFFF. RAM_WE has no address term, so a write to F000-FFFF lands in the RAM under the ROM and is never read back: reads of F000-FFFF always select ROM (section 4).
+- RAM covers all of 0000-FFFF. RAM_WE has no address term, so a write to F000-FFFF lands in the RAM under the ROM and is never read back: reads of F000-FFFF always select ROM (section 4). With JP-WE open (the default) the write goes nowhere else. With JP-WE fitted it also programs the EEPROM (6.10).
 - RAM is static. It MUST keep its contents with no CPU activity for unlimited time (READY waits, RESET held), so DRAM that needs CPU-driven refresh is excluded.
-- **Pins.** Tie ROM /CE low and ROM /WE to VCC, so the 8080 can never write the ROM. ROM_OE drives only ROM /OE. An 8 KB ROM part has A12 tied low. RAM /CE comes from address bits only. RAM_OE drives RAM /OE and RAM_WE drives RAM /WE. No signal gated by MEMR may drive a /CE.
+- **Pins.** Tie ROM /CE low. ROM /WE has a pull-up and reaches the write-enable gate only through JP-WE (6.10), so with JP-WE open the 8080 can never write the ROM. ROM_OE drives only ROM /OE. An 8 KB ROM part has A12 tied low. RAM /CE comes from address bits only. RAM_OE drives RAM /OE and RAM_WE drives RAM /WE. No signal gated by MEMR may drive a /CE.
 - **Read timing** (no memory wait states). Address is valid by 329 ns. MEMR arrives by 787 ns (DBIN 757 + 8228 tRR 30). Data must be on the system bus by 905 ns: tDS2 is 150 ns before phi2 of T3, less 8228 tRD 30. That gives 118 ns from MEMR to data and 576 ns from address to data. Memory /OE access plus the MEMR gate MUST fit in 118 ns. Timing a /CE access from MEMR misses the deadline (AT28C64B tCE 150).
 - **Logic levels.** The 8228 drives the system data bus and MEMR/MEMW/I/OR/I/OW at TTL levels (VOH 2.4 V min at -1 mA, VOL 0.45 V). Every input on those nets MUST accept VIH <= 2.4 V: 74HCT/ACT, ATF22V10C, AT28C64B, 74LVC at 3.3 V, AS6C62256. Parts with CMOS thresholds MUST NOT be on those nets: 74HC, and AS6C1008/AS6C4008 (VIH 0.7 VCC). 8080A inputs need VIH 3.3 V. They are driven only by the 8224 (READY, RESET), the 8228 CPU-side D0-D7, and HCT outputs.
 - **Bus loading.** Every load on the 8080A address pins and CPU-side data pins is CMOS, because 8080A IOL is 1.9 mA. There are no address or data buffers beyond the 8228. The status taps (D4, D6) are on the CPU side of the 8228.
@@ -351,6 +387,7 @@ One 74HCT74 half; the other half is the WAIT flip-flop (6.4). /PRE = NOT RESET: 
 - **HOLD** (pin 13) to GND. 8080A HLDA (pin 21) goes to 8228 HLDA (pin 2). There is no DMA.
 - **8228 BUSEN** (pin 22) to GND. A floating bipolar input reads high and tri-states the 8228.
 - Any driver of an 8080A input MUST be a CMOS/HCT output. 74LS is not allowed there.
+- An 8080A output MAY drive only CMOS inputs, the 8224/8228 and an analyzer probe (6.12). It MUST NOT drive an LED or a TTL input: it sources 150 uA at VOH 3.7 V and sinks 1.9 mA at VOL 0.45 V (reference 3.2). The status LEDs (6.11) therefore hang on 74HCT08 buffers.
 
 ### 6.8 What Is Local and What Is the Pi
 
@@ -361,6 +398,9 @@ One 74HCT74 half; the other half is the WAIT flip-flop (6.4). /PRE = NOT RESET: 
 | Overlay glue (6.5) | Service Mailbox |
 | Window decode, WAIT flip-flop and REQ gate, IN latch, level translation (6.4) | Every other port in 0x00-0x6F |
 | Reset circuit (6.6) | |
+| ROM write-enable gate and jumper JP-WE (6.10) | |
+| Status LEDs (6.11) | |
+| Logic-analyzer headers (6.12) | |
 
 The console transport between the terminal and the Pi (UART with RTS/CTS, USB gadget serial, or TCP) is Pi configuration and is invisible to the 8080. Console behavior, including input flow control toward the terminal: `DEVICE_SPECS.md` (Console).
 
@@ -370,7 +410,7 @@ The console transport between the terminal and the Pi (UART with RTS/CTS, USB ga
 
   | Rail (all +/-5%) | Load |
   |------------------|------|
-  | +5 V | 8080A 80 mA, 8224 115 mA, 8228 190 mA, plus memory and glue: about 0.8 A total (est) |
+  | +5 V | 8080A 80 mA, 8224 115 mA, 8228 190 mA, plus memory, glue and the status LEDs (<= 15 mA, 6.11): about 0.8 A total (est) |
   | +12 V | 8080A 70 mA, 8224 12 mA, 8228 INTA strap 5 mA: 87 mA total |
   | -5 V | 8080A 1 mA |
 
@@ -379,6 +419,112 @@ The console transport between the terminal and the Pi (UART with RTS/CTS, USB ga
 - If -5 V comes from a charge pump fed by +5 V, VBB tracks VCC. In that case +5 V MUST be held at 4.85-5.15 V at the board. How the rails are generated is decision POWER (`HARDWARE_BUILD.md`, Decisions).
 - Decoupling: 0.1 uF per IC per rail, plus 10 uF bulk per rail.
 - The Pi has its own supply (6.4, Power and boot independence).
+
+### 6.10 ROM Write Enable (JP-WE)
+
+Decided 2026-10-03 (Mike). The circuit that lets the 8080 reprogram its own ROM. The routine that would do it (a monitor `burn` command) is Someday (`TODO.md`). This section fixes the circuit, its default and the rules that routine must follow.
+
+**Circuit.** One 74HCT138 decodes the ROM range during MEMW. Jumper JP-WE connects its output to the EEPROM:
+
+| 74HCT138 pin | Connection |
+|--------------|------------|
+| 1 (A) | A12 (8080A pin 37) |
+| 2 (B) | A13 (8080A pin 38) |
+| 3 (C) | A14 (8080A pin 39) |
+| 6 (G1) | A15 (8080A pin 36) |
+| 4 (/G2A) | 8228 /MEMW (pin 26) |
+| 5 (/G2B) | GND |
+| 7 (/Y7) | JP-WE pin 1, and LA-C (6.12) |
+| 9-15 (/Y6-/Y0) | unconnected |
+
+JP-WE pin 2 is AT28C64B /WE (pin 27), which has a 10 kohm pull-up to +5 V.
+
+- /Y7 is low only while A15-A12 = 1111 and /MEMW is low (SCLS171F Table 7-1). With JP-WE fitted, ROM /WE follows /Y7: that is ROM_WE in 6.2. /Y7 then also drives the pull-up, 0.5 mA, inside the 4 mA at which HCT output levels are specified.
+- The MEMW edges reach /WE through one enable path, at most 42 ns (SCLS171F 5.5). Address changes cannot glitch /WE: the address is stable from 688 ns before /WR falls until at least 118 ns after it rises (tAW, tWA, reference 3.5), and /MEMW is inactive outside that window.
+
+**Default: open.** With JP-WE open, the pull-up holds ROM /WE high whatever the logic does, with the 138 missing, unpowered or faulty included. That is the state the old tie to VCC gave, and WE high inhibits every write (AT28C64B DS 4.6.1 (c)). The board is built, and runs in normal use, with JP-WE open: the shunt is parked on one pin. /Y7 still pulses on every write to F000-FFFF, so the decode can be checked with no risk to the ROM (`HARDWARE_BUILD.md` 3, step 3).
+
+**Range.** F000-FFFF only. There is no OVL term, so with the overlay set a write to 0000-0FFF still goes only to RAM (section 4). A12 is tied low at the chip, so a write to F000+n programs EEPROM cell n (0000-0FFF), and the upper 4 KB of the 8 KB part is never written. RAM_WE has no address term, so the same write also lands in the RAM under the ROM (6.2), which nothing reads.
+
+**Write timing.** All figures are worst case at tCY 488.28 ns. Limits are from AT28C64B DS 14 and 16; 8080A, 8224 and 8228 figures are from the reference sections named. JP-WE adds no delay.
+
+| AT28C64B requirement | This board |
+|----------------------|------------|
+| tWP: /WE low >= 100 ns | /WR is low from tDC after phi1 rising in T3 to tDC after phi1 rising in the next state. Memory writes insert no T_W. tDC is 0-120 ns, so /WR is low for at least 368 ns (reference 3.3, 4.3). 8228 tWR is 5-45 ns on each edge (reference 12.4), so /MEMW is low for >= 328 ns. The 138 enable path is <= 42 ns with no stated minimum, so /WE is low for >= 286 ns. |
+| tAS 0 ns, tAH 50 ns (address to /WE falling) | address stable >= 688 ns before /WR falls (tAW) and >= 118 ns after /WR rises (tWA) (reference 3.5) |
+| tDS: data >= 50 ns before /WE rises | data on D0-D7 >= 169 ns before /WR falls (tDW, reference 3.5). It reaches DB within 8228 tWD 40, so it is on DB >= 129 ns before /WR falls, and >= 415 ns before /WE rises. |
+| tDH: data >= 0 ns after /WE rises | DB holds >= 123 ns after /WR rises (tWD 118, reference 3.5 and 13.3, plus 8228 tWD min 5, reference 12.6; derived: the 8228 keeps its direction from the latched status until the next /STSTB). /WE rises <= 87 ns after /WR (8228 tWR 45 + 138 42), so the hold margin is >= 36 ns. |
+| tOES, tOEH: /OE high 0 ns before and after | the 8228 issues no MEMR in a write cycle (reference 12.3), so ROM_OE is inactive and ROM /OE is high |
+| tWPH: /WE high >= 50 ns between writes | two writes are at least one machine cycle (>= 3 states) apart |
+
+The 15 ns /WE noise filter (typ, AT28C64B DS 4.6.1 (d)) is not relied on.
+
+**Rules for any code that writes the ROM.** Normative now, so that the Someday routine is built to them:
+1. **JP-WE is open in normal use.** Fit it only for a burn and remove it afterwards. While it is fitted, any write to F000-FFFF reprograms the monitor: a user program, the E, A, F, L and M commands (they do not guard F000-FFFF, `MONITOR_SPEC.md` 6), and a stack that wraps from SP = 0000 into FFFF.
+2. **Run from RAM with the overlay clear.** After each byte or page write, every read of the EEPROM is a polling read, not data, for up to tWC = 10 ms (AT28C64B DS 4.2, 4.4, 4.5, 16). Code fetched from F000-FFFF, or from the 0000 mirror while the overlay is set, would be garbage during that time.
+3. **Detect the end of a write by polling, never by a delay.** Read the last address written until bit 7 returns the true data (DATA polling, AT28C64B DS 4.4), or until bit 6 stops toggling (AT28C64B DS 4.5). The ROM has no timing-dependent code (3.2, requirement 6).
+4. **Page writes.** A page is 1-64 bytes in one 64-byte page: chip A6-A12 must be the same for every byte, which with A12 tied low means one 64-byte-aligned block of F000-FFFF. Each byte must follow the previous one within tBLC = 150 us, or the chip closes the page and ignores the rest (AT28C64B DS 4.3, 16). The routine therefore buffers the data in RAM first and makes no Pi-window access inside a page load: a Pi-window access can wait under READY without bound (6.4, rule 4).
+5. **Software data protection stays disabled.** The part ships with SDP disabled (AT28C64B DS 4.6.2), and the chip MUST be programmed with SDP left off. The SDP enable and disable sequences write to chip address 1555 (AT28C64B DS 19, 20), which needs A12 = 1. A12 is tied low, so the 8080 can neither set nor clear SDP. A chip with SDP set rejects every in-circuit write, and each rejected write still starts a tWC polling period (AT28C64B DS 4.6.2).
+6. **Power transitions.** The chip blocks writes below VCC 3.8 V (typ) and for 5 ms (typ) after VCC reaches it (AT28C64B DS 4.6.1 (a), (b)). The reset supervisor holds RESET below about 4.6 V (6.6). Neither replaces rule 1.
+
+**Emulator.** It models JP-WE open: a write to F000-FFFF never changes the ROM image (section 4). A fitted jumper (write cycle, polling reads) is modeled together with the burn routine (Someday).
+
+### 6.11 Status LEDs
+
+Decided 2026-10-03 (Mike). Four LEDs, each driven by a 74HCT08 output, never by an 8080A pin (6.7).
+
+| LED | Lit while | Driver |
+|-----|-----------|--------|
+| WAIT | 8080A WAIT (pin 24) is high: a wait state (T_W) or the halt state (TWH) (reference 5, 9) | U08a, buffer |
+| HALT | the CPU is halted: HALT = WAIT AND /Q AND /I/OR AND /I/OW | U08b, three gates |
+| INTE | 8080A INTE (pin 16) is high: interrupts enabled (reference 7) | U08a, buffer |
+| HLDA | 8080A HLDA (pin 21) is high (reference 8) | U08a, buffer |
+
+- U08a is the existing 74HCT08. Gate 1 is REQ (6.4). Its three spare gates become buffers, with the second input tied to +5 V, so each LED adds one HCT input to its 8080A pin (Ci <= 10 pF, SCLS063G 4.4).
+- U08b is a second 74HCT08: H1 = WAIT_B AND /Q, where WAIT_B is the WAIT buffer output and /Q is the WAIT flip-flop output that drives RDYIN (6.4); H2 = /I/OR AND /I/OW; HALT = H1 AND H2. Gate 4 has both inputs tied to GND.
+- HLDA is always dark in v1, because HOLD is tied low (6.7). If it lights, HOLD is miswired.
+
+**Why HALT is this term.** The 8080A has no HALT pin, and the board has no status latch (6.4, Direction). WAIT is high both in the halt state and in every wait state (reference 5, 9). On this board only Pi-window accesses wait: memory, ports FE/FF and ports 70-FD insert none (6.2, 6.3, 6.5). A Pi-window wait is always covered by one of two terms:
+- From T1 until the ACK, the WAIT flip-flop is set, so /Q is low.
+- From the ACK until WAIT falls in T3 (0.4-0.9 us, 6.4 rule 3), /I/OR (on IN) or /I/OW (on OUT) is active.
+
+In the halt state neither term applies. The flip-flop is clear, because its set needs INP or OUT status and the halt state has no SYNC (6.4 rule 1, reference 9, 11.3). The 8228 issues no strobe for the halt-acknowledge status 8A (reference 12.3). WAIT AND /Q alone would also be true for the 0.4-0.9 us after every ACK, which glows visibly under console traffic.
+
+HALT is therefore high in TWH, and otherwise for at most a few tens of ns at the end of some IN cycles: WAIT_B can fall as late as 150 ns into T3 (tDC 120 + HCT08 tpd 30, SCLS063G 4.5), and /I/OR can rise as early as 133 ns into T3 (tD3 108.5 + tDF 25, reference 3.3, 3.5, 4.3). Pi-window accesses are microseconds apart, so the LED cannot show this pulse. An analyzer on LA-C can (6.12), and it is not a fault.
+
+**Reading them.**
+
+| WAIT | HALT | INTE | Meaning |
+|------|------|------|---------|
+| off | off | any | running, not in a wait |
+| dim or flickering | off | any | running with Pi-window traffic (the monitor prompt polls `IN 02`) |
+| steady | off | any | stalled in a Pi-window access with no Pi service: daemon stopped or Pi off (6.4 rule 4) |
+| steady | steady | off | halted with interrupts disabled: only RESET exits (reference 9) |
+| steady | steady | on | halted, waiting for an interrupt (no source in v1, 6.7) |
+| off | on | any | impossible (HALT includes WAIT): wiring fault |
+
+The monitor never executes HLT or EI (3.2, requirement 4), so HALT and INTE light only for user programs.
+
+**Drive and resistor.** Each LED is wired from a 74HCT08 output through 1.0 kohm to the anode, with the cathode to GND, so it is lit when the output is high.
+- 74HCT08 VOH is >= 3.84 V at -4 mA (SCLS063G 4.4). VOH cannot exceed VCC, at most 5.25 V (6.9).
+- Use a low-current LED with Vf 1.6-2.2 V at 2 mA: red, orange, yellow or GaP green. InGaN blue, white and true-green parts (Vf about 3 V) are too dim at this drive.
+- LED current I = (VOH - Vf) / 1.0 kohm ranges from 1.6 mA (3.84 V, Vf 2.2 V) to 3.7 mA (5.25 V, Vf 1.6 V). That stays within the 4 mA at which VOH is specified, and far below the 25 mA per-output and 50 mA VCC/GND absolute maximums (SCLS063G 4.1). The three LEDs on U08a total <= 11 mA.
+
+### 6.12 Logic-Analyzer Headers
+
+Decided 2026-10-03 (Mike). Three 2x10 0.1-inch headers carry the bus to an external logic analyzer:
+- LA-A: address.
+- LA-B: CPU-side data and the CPU timing signals.
+- LA-C: system strobes, the WAIT and overlay flip-flops, the Pi handshake, the ROM write decode and HALT.
+
+Each header has 16 signals on pins 1-16 in channel order and GND on pins 17-20. Pin order, the analyzer and sigrok decoding: `HARDWARE_BUILD.md` 3.1.
+
+1. **Logic levels only.** phi1 and phi2 (8224 pins 11, 10) swing to >= 9.4 V (reference 11.6) and MUST NOT be on a header. The clock reference is the 8224 phi2 (TTL) output (pin 6). 8228 /INTA (pin 23) sits on the +12 V RST 7 strap (6.7) and MUST NOT be on a header. ACK and LATCH are 3.3 V levels (6.4). Every other signal is a 5 V level.
+2. **Direct taps, except CPU-side D0-D7,** which go through 1 kohm series resistors at the tap (one isolated 8-resistor array). On reads the 8228 drives the CPU side. Its VOH (>= 3.6 V) is characterized only at -10 uA, and its tRD of 30 ns, which is part of the 118 ns memory read budget (6.2), only at 25 pF (reference 12.6, 12.7). D4 and D6 already carry more than that before any probe: the 8080A pin (COUT <= 20 pF on a bidirectional pin, reference 3.2), the GAL tap (CIN <= 8 pF, ATF22V10C) and 5-10 pF of trace, 33-38 pF (est). That is a pre-existing risk (`HARDWARE_BUILD.md` 6); the resistor reduces what the probe adds to it, and bring-up step 3 must pass with the analyzer attached. The cost is about 33 ns of extra edge delay at the analyzer (2.2 x 1 kohm x 15 pF, est), which the sampling rules in `HARDWARE_BUILD.md` 3.1 allow for.
+3. **Analyzer load.** The board is designed for an analyzer that adds, per channel, at most 15 pF including its lead and at most 10 uA at any level from 0 to 5.25 V, powered or not. An analyzer outside that MUST NOT be attached: one that clamps its inputs to its own rail, or is attached unpowered, pulls the direct taps down and, through the 1 kohm, D0-D7 below the 8080A's VIH of 3.3 V. Within it:
+   - **DC load.** <= 10 uA, inside the 8080A's 150 uA source (reference 3.2).
+   - **Capacitance.** The 8080A address and data pins are specified into 100 pF, and SYNC, DBIN, /WR, WAIT and HLDA into 50 pF. Above that, add 0.6 ns per pF (reference 3.3, note 4c). With the analyzer attached the load is (est, <= 10 pF per CMOS input from SCLS063G 4.4, SCLS171F 5.4, AT28C64B DS 13 and ATF22V10C, plus 5-10 pF of trace): address pins <= about 75 pF (A15 is the heaviest, with the GAL, RAM /CE, 74HCT14, 74HCT138 and the probe); control pins <= about 45 pF (WAIT is the heaviest, with two 74HCT08 inputs and the probe).
+4. **The board MUST meet all of section 6 with the analyzer attached.** Bring-up runs with it attached (`HARDWARE_BUILD.md` 3). A board that passes only without the analyzer fails.
 
 ---
 
@@ -501,4 +647,4 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 - **Phase 7 (done 2026-10-03):** mailbox `ASM` and `DIS`, and the `A` and `U` commands (`DEVICE_SPECS.md` 8, `MONITOR_SPEC.md` 6.16-6.17). No memory-map or circuit change.
 - **Phases 8-9:** more mailbox commands (`GET`, `ASK`). No architecture change.
 - **Phase 10:** what is left after the debugger (7.4): the monitor's `R` command, which needs the `G` return contract to capture registers.
-- **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6).
+- **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6); a monitor routine that reprograms the ROM through JP-WE (6.10 rules), with its emulator model.

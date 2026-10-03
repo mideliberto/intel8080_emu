@@ -1,0 +1,55 @@
+# RAM test build only (ARCHITECTURE 2.1): played after rom/monitor_ram.hex is loaded through
+# the resident monitor and started with G D000. The running image is D000-EEFF: the HEX
+# loader's top is D000, and F, M and L refuse a destination that touches the image.
+# Never played against the ROM (every_transcript_through_the_daemon skips this directory).
+
+# HEX: a record may end at D000, not pass it.
+> F CFF0 CFFF 00
+> :10CFF0001111111111111111111111111111111121
+> :01CFFF00AA87
+> D CFF0 CFF0
+CFF0: 11 11 11 11 11 11 11 11  11 11 11 11 11 11 11 AA  ................
+> :01D00000AA85
+Address out of range
+> :02CFFF00AABBCB
+Address out of range
+# The ROM's own top edge (EEFF) is inside the image here.
+> :01EEFF00AA68
+Address out of range
+
+# F: up to CFFF, not D000, not EEFF. A refused F writes nothing.
+> F CFF0 CFFF 22
+> F CFFF D000 00
+Address out of range
+> F EEFF EEFF 00
+Address out of range
+> D CFF0 CFF0
+CFF0: 22 22 22 22 22 22 22 22  22 22 22 22 22 22 22 22  """"""""""""""""
+
+# M: the destination, wrapping past FFFF, may not reach D000.
+> M CFF0 CFFF 1
+> M CFF0 CFFF 2
+Address out of range
+> M CFF0 EEFF 1
+Address out of range
+> M 0100 FFFF D002
+Address out of range
+
+# The image ends at EEFF: F and M take a destination at EF00, the stack page's floor
+# (SP starts at F000; nothing pushes that deep).
+> F EF00 EF0F 5A
+> M CFF0 EF08 8
+> D EF00 EF00
+EF00: 5A 5A 5A 5A 5A 5A 5A 5A  22 22 22 22 22 22 22 22  ZZZZZZZZ""""""""
+
+# L: the destination, before any port is written.
+> X GUARD.BIN
+Mounted
+> L 0 CFF0 10
+Loaded
+> L 0 CFF1 10
+Address out of range
+> L 0 FFFF D002
+Address out of range
+> D CFF0 CFF0
+CFF0: FF FF FF FF FF FF FF FF  FF FF FF FF FF FF FF FF  ................

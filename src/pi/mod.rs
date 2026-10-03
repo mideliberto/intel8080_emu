@@ -1,8 +1,8 @@
 // pi/mod.rs - pi8080d, the Pi daemon (docs/PI_DAEMON.md): the emulator's port map behind
 // GPIO instead of behind the CPU model. Portable: the bus loop, RESET handling, the TCP
-// console and the trace run in `cargo test` on any OS against the simulated board
-// (tests/sim). Only the register mapping, the RESET line and adjtimex are Linux code
-// (linux.rs).
+// console and the trace run in `cargo test` on any OS, and under `pi8080d --sim`, against
+// the simulated board (sim.rs). Only the register mapping, the RESET line and adjtimex
+// are Linux code (linux.rs).
 
 use crate::debugger::Trace;
 use crate::io::devices::console::Console;
@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
 pub mod linux;
+pub mod sim;
 
 /// The Pi's view of the board: the BCM2711 GPIO register block and the RESET edge latch.
 pub trait Gpio {
