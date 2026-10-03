@@ -85,7 +85,11 @@ The I/O stubs run from RAM as self-modifying code. Real hardware runs it the sam
 
 There is no software reset.
 
-**Emulator:** `reset()` (`cpu.rs:1101-1111`) produces this CPU state; it zeroes A-L, sets flags to 0x02 and SP to 0xF000, which are permitted choices. `Intel8080::new()` leaves the overlay clear (`cpu.rs:46`), so `reset()` MUST be called before running the ROM. Emulator RAM is 00 at power-on (`memory.rs:12`). Devices are created in their power-on state at process start, which is the emulator's only RESET. Any future host-side reset (Phase 10) MUST reset the devices as well as the CPU.
+**Emulator:**
+- `reset()` models the RESET pin and nothing else. It sets PC=0, INTE=0, halted=false, overlay=1, clears any pending interrupt, and leaves A-L, flags, SP and RAM alone.
+- `Intel8080::new()` builds the struct and calls `reset()`, so there is one home for power-on state.
+- Registers, SP and RAM start at values the ROM can't get lucky with. Test harnesses fill RAM with a non-zero junk byte before boot, so a ROM that relies on zeroed RAM or a preset SP fails its tests. (Decided 2026-10-02.)
+- Today `reset()` zeroes A-L and sets SP=F000 (`cpu.rs:1101-1111`), `new()` leaves the overlay clear (`cpu.rs:46`), and RAM is 00 (`memory.rs:12`). Emulator change pending, TODO.md. Devices are created in their power-on state at process start, which is the emulator's only RESET. Any future host-side reset (Phase 10) MUST reset the devices as well as the CPU.
 
 ### 3.2 Boot Sequence
 

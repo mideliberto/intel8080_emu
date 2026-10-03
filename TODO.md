@@ -10,6 +10,7 @@
 - [x] Rebuild stale `rom/monitor.bin` (it predated `X -` unmount)
 - [x] Close open decisions; solidify spec into 3 normative docs (2026-10-02)
 - [ ] Code review: emulator + ROM against the new specs
+- [ ] Spec the debugger (ARCHITECTURE Host-Side Conveniences), then build it before Phase 5: core + watchpoints + I/O break/trace + trace ring + ROM symbols; line prompt + script mode
 - [ ] Hardware-alignment pass: verify ARCHITECTURE hardware section (WAIT-set timing vs 8080A/8224/8228 datasheets, GPIO count, IN latch)
 
 ## Next (Phase 5 - Intel HEX Loader), build order
@@ -31,8 +32,12 @@ Emulator:
 - [ ] Host input pump + Ctrl-C quit in the emulator run loop (today input is read only inside IN 02, `console.rs:43-53`); host key map per ARCHITECTURE (`console.rs:81-84`)
 - [ ] Console output 8-bit transparent: `console.rs:68` prints `value as char`, so bytes 80-FF go out as 2 UTF-8 bytes
 - [ ] `IoBus::map_port` panics on 0xFE/0xFF (CPU-owned ports) instead of silently never being called
+- [ ] Power-on: `reset()` = RESET pin only (PC, INTE, halted, overlay, pending interrupt); `new()` calls `reset()`; no zeroed registers or preset SP; the harness fills RAM with junk (ARCHITECTURE 3.1)
+- [ ] Merge Storage + StorageMount into one device serving 08-0F (drop the `Rc<RefCell<Storage>>`)
+- [ ] One Console (input VecDeque + output buffer, no crossterm); host polling, key map and Ctrl-C/E in main.rs; delete `test_console.rs`
+- [ ] `scripts/fetch_exercisers.sh` (pinned SHA-256) + `#[ignore]` `tests/exerciser.rs` CP/M shim. Goal: 8080EXM all PASS
 - [ ] Port 0xFE: any write disables overlay; drop 0xFF cold reset (`src/cpu.rs:758-769`). Overlay writes go through to RAM (`src/cpu.rs:212`)
-- [ ] Storage: every IN/OUT 0B advances the address (mounted or not; `storage.rs:72-96`); any host I/O error unmounts; flush/unmount fsync; host file > 16 MB fails mount with 01; storage dir created at startup (else mount -> 01); not-mounted status 82
+- [ ] Storage: every IN/OUT 0B advances the address (mounted or not; `storage.rs:72-96`); any host I/O error unmounts; flush/unmount fsync; host file > 16 MB fails mount with 01. Already true, needs tests only: power-on 0C=82, storage dir created at startup (`main.rs:35`)
 - [ ] Mount: names > 12 chars -> 02 (`storage_mount.rs:95` truncates); failed mount unmounts previous; every OUT 0E (any value) clears the name buffer; uppercase before validate/open; 0F reads 01 at power-on
 ROM:
 - [ ] G pushes WARM (`WARM: LXI SP,STACK_TOP` before MAIN_LOOP) before PCHL (`rom/monitor.asm:876-885`)
@@ -48,7 +53,7 @@ ROM:
 Every item was reproduced by a scratch test or confirmed by tracing the asm.
 
 ### CPU (`src/cpu.rs`)
-- [ ] AC inverted on SUB/SBB/CMP/SUI/SBI/CPI (:349, :356, :374, :613, :643, :650). Repro: `MVI A,10h; MVI B,01h; SUB B` sets AC=1, expected 0. `tests/cpu_tests.rs:317` and `:2853` assert the wrong value.
+- [ ] AC inverted on SUB/SBB/CMP/SUI/SBI/CPI (:349, :356, :374, :613, :643, :750). Repro: `MVI A,10h; MVI B,01h; SUB B` sets AC=1, expected 0. `tests/cpu_tests.rs:317` and `:2853` assert the wrong value.
 - [ ] DCR AC inverted (:422). Repro: `MVI B,10h; DCR B` sets AC=1, expected 0. `tests/cpu_tests.rs:421` asserts the wrong value.
 - [ ] ANA/ANI always clear AC (:362, :622 via `update_flags_logical` :272). Repro: `MVI A,08h; MVI B,00h; ANA B` gives AC=0, expected 1 (8080: AC = bit 3 of A|operand).
 - [ ] DAA always clears AC (:712). Repro: `MVI A,0Ah; DAA` gives A=10h (correct) and AC=0, expected 1.
@@ -77,12 +82,57 @@ Every item was reproduced by a scratch test or confirmed by tracing the asm.
 - [ ] E: LF counts as "advance", and CR after a 2-digit value skips a byte (:1171, :1195-1198). Repro: `E 0200`, then `12` CR `34` CR `.` writes 0200=12, 0202=34.
 - [ ] READ_LINE stores DEL (0x7F) as a character (:299-302). Real terminals send DEL for backspace. Repro: `D 020<DEL>0 0200` prints "Invalid address".
 - [ ] M with an overlapping dest > src corrupts (:953). Repro: `M 0200 0201 0F` smears 0200. Documented as "forward copy" only.
-- [ ] `make size` always reports 4096 because p2bin pads (`rom/Makefile:37-39`).
+- [ ] `make size` always reports 4096 because p2bin pads (`rom/Makefile:34-36`).
 
 ### Test gaps
 - [ ] Vacuous: `test_search_finds_pattern` (`tests/monitor_tests.rs:85`) matches the echoed `F 0500` line; `test_io_read_status` (:107) matches "02" in the banner date; `test_compare_identical` (:95) only counts prompts.
 - [ ] No monitor test maps storage, so L/W/X in the ROM are untested. This is how the stale bin slipped through.
 - [ ] Untested: interrupts (RST entry, EI delay, HLT wake, DI blocking); cycle counts beyond LXI/MOV; the overlay at CPU level; the E command; error paths; range edges (end < start, FFFF wrap).
+
+## Code Review (2026-10-02)
+Method: a 16-agent review workflow (CPU first, then ROM and devices) with every finding adversarially verified; real `cargo-mutants`; the four standard 8080 exercisers run under a CP/M shim. Only new findings are listed here; the items above still stand.
+
+### Evidence
+- **Exercisers:** TST8080 and 8080PRE pass, with cycle totals matching the reference exactly. CPUTEST fails on `DCR B` AC (flags 46h, expected 56h). 8080EXM fails 11 of 24 groups (aluop nn, aluop reg, daa/cma/stc/cmc, inr/dcr on all 8 targets); every failure is the tracked AC family.
+- **cargo-mutants** (CPU + devices): 649 of 932 caught (70.5%). Survivors cluster in perform_alu and the immediate ALU ops (98), dead debug code (32), registers.rs metadata (50) and storage (14).
+- **Hand mutation, CPU tests only:** 26% (35% with the monitor tests). **ROM:** 10.6% (7/66), and a strict-transcript harness kills 60/66.
+- **Exhaustive conformance** (all ALU ops x A x v x CY, INR/DCR, DAA, all 256 opcodes for cycles and length, address wrap): the only CPU violations are the ones already tracked. Cycle counts and wrap are correct.
+
+### Tests that don't test (fix before any code change)
+- [ ] Zeroed RAM is a NOP slide into F000. Removing the overlay or emptying `reset()` passes every test (`cpu.rs:1109`, `memory.rs:12`). Fill RAM with junk (76 or A5) and SP with junk in the monitor harness boot. Add a CPU-level overlay test: read 0100 = rom[100]; write 55; OUT FE nonzero; read 0100 = 55; IN FF bit 0 is 1 then 0.
+- [ ] Monitor harness: replace the fixed `run_cycles` budget with "run to the Nth prompt, exact transcript between prompts, budget exhausted = failure", plus memory and port effects at both range edges (`tests/monitor_tests.rs:10-30`).
+- [ ] RST tests are vacuous on the vector (`cpu_tests.rs:842-1035`). Mutant `n*8 -> n*7` survives. Assert PC, SP and the pushed address.
+- [ ] Conditional CALL/RET taken paths are untested (`cpu_tests.rs:797-830`). `test_rp_not_taken`/`test_rpo_not_taken` actually take the return, because MVI doesn't set flags (`:1549-1594`). Several Ccc tests target the wrong address (`:1414, :1429, :1443, :1458`). Replace with a table: 8 conditions x {Jcc, Ccc, Rcc} x {taken, not}, with flags set explicitly.
+- [ ] No-assert or off-topic tests: `test_in_instruction`/`test_out_instruction` (`:1769-1792`), `test_mov_all_to_m` (`:2235`), `daa_preserves_flags`, `all_arithmetic_preserve_bit1`. Duplicates: `:1167 = :1912`, among others.
+- [ ] Monitor tests: `test_dump_rom` (`:42-50`) passes with wrong line length and format, and its "31" check tests ROM layout. `test_move_command`/`test_hex_math` ignore boundaries and format. C, S and I can each be undispatched with the suite green.
+- [ ] Storage mount tests never check which file opened: ignoring `base_path` passes and writes NEW.BIN/TEST.BIN into the crate root (`storage_mount.rs:60` vs tests `:128-164`). Device protocols: 16 of 18 port-level mutants survive. Write port-level tests with no private-field access.
+- [ ] `tests/common/mod.rs` is dead, a byte-identical copy of `cpu_tests.rs:1-33`.
+- [ ] Wanted: a table-driven reference-model flag test, a 256-opcode cycle/length table test, and an exerciser test (see Open Decisions). The scratch prototypes exist and run in under 1 s.
+
+### CPU (`src/cpu.rs`)
+- [ ] Untested and mutant-proven: DAD never clearing CY (`:455`), ADC/ACI AC carry-in (`:343, :740`), the CY boundaries on ADC/ADI/SBB/SUI/SBI/DAD, S after logical ops (`:276`), and ORI (`test_ori` uses F0|0F, where OR = XOR).
+- [ ] Interrupt acknowledge is a hand-written CALL 0038 fused with the vector's first instruction in one step (`:290-303, :826-830`). Spec: acknowledge executes `RST n` as its own 11-cycle step. Use `perform_rst`.
+- [ ] Pattern: the ALU is implemented twice. 8 immediate functions (`:601-647, :736-754`) duplicate `perform_alu` (`:328-385`), which is why the AC bug has 6 copies. Use one `alu(op, v)` for 10AAASSS and 11AAA110. Also: three SZP flag helpers that are the same code, dead DAA carry re-set, and the push/pop sequence copied 8 times. A scratch refactor came out at +71/-455 lines with tests green.
+- [ ] Dead code: `disassemble_at` (decodes 19 of 256 opcodes), `trace`, `debug_state` (`:958-1080`); about 85% of `registers.rs` (`FLAG_BIT_3`/`FLAG_BIT_5` are constants equal to 0); the `Memory` trait with one impl forcing `&mut self` reads (`memory.rs`). Stale edit-marker comments.
+
+### ROM (`rom/monitor.asm`)
+- [ ] S: an invalid pattern token ends the pattern instead of erroring (`:1057-1061`). `S 0200 0210 AA ZZ` searches for AA. Strict parsing alone doesn't fix it.
+- [ ] E ignores DEL (`:1173-1177`); spec 6.3 says DEL deletes a digit like BS. Fix with READ_LINE's DEL.
+- [ ] ROM size guard `IF $ > 0FFFFH` (`:1515-1517`) rejects an exactly-4096-byte ROM, and asl already errors past FFFF. Delete it.
+- [ ] Dead CONST routine (`:194-202`); single-use PRINT_BANNER wrapper.
+- [ ] Byte budget, all prototyped with golden transcripts identical:
+  - 23 copies of a 9-byte error tail plus POP-cleanup chains. With WARM, use one tail per message and delete every cleanup POP.
+  - 19 redundant `CALL SKIP_SPACES` (57 bytes).
+  - READ_HEX_ADDR24 duplicates READ_HEX_WORD (89 bytes); use one C:D:E parser returning the digit count.
+  - TO_HEX_DIGIT 42 -> 19 bytes.
+  - The D default paths are duplicated (21 bytes), the 'AAAA:' prefix is copied 4 times (18), and the I/O stub init is 30 bytes of MVI/STA.
+- [ ] Contracts: READ_HEX_WORD returns the same flags for "absent" and "junk". Adopt Z=absent / C=invalid (7 peek sites collapse; fixes G, L/W count and S). One RANGE helper (4 uses: C, D, F, S) fixes all four tracked range bugs for -3 net bytes and deletes both `CPI 0F0H` heuristics.
+
+### Devices
+- [ ] Console and TestConsole duplicate the protocol. The shipped Console has zero coverage and pulls crossterm into the device layer the Pi reuses (see Open Decisions).
+- [ ] StorageMount holds `Rc<RefCell<Storage>>`: it is !Send and splits one Pi device across two structs (see Open Decisions).
+- [ ] The W flush (OUT 0C <- 02) can't be observed by any test.
+- [ ] IN 02 costs about 1.2 ms of wall time (a 1 ms poll), so console output is throttled to about 850 chars/s. Fixed by the bare-OUT CONOUT plus `poll(Duration::ZERO)` every N steps in the host pump.
 
 ## Blocked
 - [ ] R command - needs register capture on return (Phase 10)

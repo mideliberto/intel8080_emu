@@ -63,6 +63,22 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-02: Emulator Shape Follows the Hardware
+**Decision:**
+- `reset()` models only the RESET pin: PC, INTE, halt, overlay and the pending interrupt. `new()` calls `reset()`. Test harnesses fill RAM with junk.
+- Storage and StorageMount merge into one device serving 08-0F.
+- Console becomes one device (input queue plus output buffer, no crossterm). Host polling, the key map and the hotkeys move to main.rs, and TestConsole is deleted.
+- The 8080 exercisers are fetched by a pinned-hash script and run as an ignored test; the binaries are not committed (GPL and unknown licenses).
+
+**Problem:** Zeroed RAM plus a friendly `reset()` let the monitor boot through a 61,440-NOP sled with the overlay broken, and it hid a missing `LXI SP` and missing workspace init. Every test still passed. The device layer the Pi is meant to reuse imported crossterm and wasn't Send.
+**Evidence:** The code review's mutation testing (cargo-mutants 70.5%; ROM 10.6%) and the exercisers (8080EXM fails 11/24, all in the AC family).
+
+### 2026-10-02: Debugger Pulled Forward, Before Phase 5
+**Decision:** Build a host-side debugger before Phase 5. Core: break, step, continue, registers, memory, disassemble. It also has memory watchpoints, I/O port breaks and a port trace, an instruction trace ring buffer, and ROM symbols from the asl listing. Interface: Ctrl-E opens a `dbg>` line prompt, and the same parser takes a script, so tests can drive the debugger. Host-only; the 8080 never sees it. Pi-assisted hardware stepping is evaluated in the hardware-alignment pass.
+**Mike's input:** "We should also implement a robust, useful, pragmatic debugger."
+**Rationale:** Phase 5 is ROM assembly. The bug classes this review keeps finding (workspace and stack clobbers, port-protocol ordering, wandering PCs) are each one watchpoint, I/O break or trace away. The debugger is tooling for the current phase, not a feature.
+**Mantra check:** Phase 10 shrinks to whatever is left. No TUI, no new dependencies.
+
 ### 2026-10-02: Spec Solidified Into Three Normative Docs
 **Decision:** ARCHITECTURE.md covers memory, boot, overlay, the CPU contract, the hardware interface and host-side conveniences. DEVICE_SPECS.md covers every port protocol. The new MONITOR_SPEC.md covers commands, line input, messages and the HEX loader. QUICK_REFERENCE and README are cheat sheets that link to these. DESIGN_DECISIONS, VISION_UPDATED, CODE_TEMPLATES, CLAUDE_8080_SYSTEM_PROMPT and PROJECT_OVERVIEW moved to docs/archive/. MONITOR_IMPLEMENTATION_STATUS was deleted, replaced by MONITOR_SPEC.
 **Rationale:** One fact, one home. Archived docs restated facts that had become wrong ("RST 7 as breakpoint", a polling CONOUT template, the old memory map).
@@ -442,6 +458,13 @@ None. All closed 2026-10-02. The spec is the three normative docs: `docs/ARCHITE
 ---
 
 ## Recent Sessions
+
+### 2026-10-02 (part 3): Code Review, Exercisers, Debugger Pulled Forward
+- A 16-agent review (CPU, then ROM and devices), with every finding adversarially verified. Ran `cargo-mutants` for real and the four 8080 exercisers under a CP/M shim.
+- What bit us: the tests barely test. CPU tests alone score 26% on hand mutation, the ROM tests 10.6%. Zeroed RAM makes the emulator boot even with the overlay or reset broken. Several conditional-branch tests pass whichever way the branch goes, and `test_rp_not_taken` actually takes the return.
+- The CPU is otherwise sound. TST8080 and 8080PRE pass with exact reference cycle totals, and exhaustive flag, cycle and wrap tables match the spec except for the tracked AC/PSW/alias/interrupt items. 8080EXM fails 11/24 groups, all AC.
+- Decided: build the debugger before Phase 5; reset() models the pin only; merge the storage devices; one Console with host I/O in main.rs; exercisers fetched rather than committed.
+- Findings and the order of work are in TODO.md under "Code Review (2026-10-02)". No code changed.
 
 ### 2026-10-02 (part 2): Decisions Closed, Spec Solidified
 - Closed all 5 open decisions and the 33 questions the spec workflow raised. The big ones: the Pi FIFO console, the Pi seeing RESET with RESET meaning power-on state, the INT pin kept with the timer deferred, storage errors unmounting and L/W reporting them, strict arguments, and host-side quit and debugger.
