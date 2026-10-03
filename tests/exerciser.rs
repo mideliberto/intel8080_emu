@@ -11,6 +11,7 @@
 // The test stops when PC reaches 0000.
 
 use intel8080_emu::io::build_bus;
+use intel8080_emu::io::devices::mailbox;
 use intel8080_emu::Intel8080;
 
 const BDOS: u16 = 0xEE00;  // CP/M programs put their stack below the BDOS entry (word at 0006)
@@ -49,7 +50,7 @@ fn run(name: &str, max_cycles: u64) -> Option<String> {
     };
     let mut cpu = Intel8080::new();
     let dir = tempfile::tempdir().unwrap();
-    let (bus, con) = build_bus(dir.path());
+    let (bus, con) = build_bus(dir.path(), mailbox::local_time);
     *cpu.io_bus_mut() = bus;
     for (addr, bytes) in SHIM {
         cpu.load_program(bytes, addr);

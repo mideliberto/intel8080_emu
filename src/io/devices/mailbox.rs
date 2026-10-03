@@ -122,7 +122,8 @@ fn dis(args: &[u8]) -> Option<Vec<u8>> {
 /// localtime_r fails; the host has no "clock not set".
 pub fn local_time() -> Option<(u16, u8, u8, u8, u8, u8)> {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-    let secs = libc::time_t::try_from(secs).ok()?;
+    // time_t by inference: libc deprecates naming it on musl (the Pi daemon's target).
+    let secs = secs.try_into().ok()?;
     // SAFETY: tm is plain data; localtime_r writes only to it and returns null on failure.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     if unsafe { libc::localtime_r(&secs, &mut tm) }.is_null() {

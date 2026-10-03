@@ -523,15 +523,17 @@ Console I/O debugging session:
 **Devices:**
 - Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), Service Mailbox (0x10-0x13, `TIME`, `ASM`, `DIS`; the clock is a plain fn passed to `Mailbox::new`; `ASM`/`DIS` read the one opcode table in `src/disasm.rs`, which the debugger shares), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
+**Pi daemon `pi8080d` (code, 2026-10-03; PI_DAEMON.md):** `src/pi/mod.rs` (the `Gpio` seam, `setup_pins`, `serve`: the bus loop, RESET handling, TCP console, trace), `src/pi/linux.rs` (`GpioMem`, the RESET line by raw v2 ioctl, `ntp_local_time`), `src/pi_main.rs`. Every transcript passes through it on the simulated board (`tests/sim/`). The static aarch64 musl binary cross-builds on the Mac with `rust-lld`. Reviewed and fixed 2026-10-03; the simulator gaps left are listed in `TODO.md`. Not yet run on a Pi (PI_DAEMON 14)
+
 **Testing (verified 2026-10-03):**
-- 13 host + 130 CPU + 37 device + 34 mailbox + 41 monitor + 16 debugger + 8 terminal = 279, all passing (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
+- 13 host + 130 CPU + 37 device + 34 mailbox + 42 monitor + 18 Pi daemon + 16 debugger + 8 terminal = 298, all passing (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 
 ### In Progress
 
 - **Phase 6:** done 2026-10-03 (Service Mailbox, `TIME`, T, v0.5).
 - **Phase 7:** done 2026-10-03 (mailbox `ASM`/`DIS`, A, U, v0.6).
-- **Pi daemon:** specified 2026-10-03 (`docs/PI_DAEMON.md`); code not started (`TODO.md`, Current).
+- **Pi daemon:** specified and built 2026-10-03 (`docs/PI_DAEMON.md`); the bench checks (PI_DAEMON 14) wait for the board.
 - **Review findings:** 2026-10-02 review found CPU flag bugs, ROM range and parse bugs, and vacuous tests. All fixed by 2026-10-03 (steps A-E); `TODO.md` keeps the repros.
 
 ### Open Decisions
@@ -552,6 +554,21 @@ One open: the MONITOR_SPEC 6.17 U cost figure (about 9,500 cycles a line) vs abo
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Pi Daemon Review Fixes
+- `Rig::finish` strips ` ; xN` only from IN/OUT lines. Trace collapsed two adjacent RESETs into `RESET ; x2`, so the reset-count asserts could not tell one reset from two; deleting the post-release `reset_edge()` (5.2 step 5) now fails 6 tests instead of none.
+- The 500 ns blanking is testable after all: the "simulator overhead" that hid it was the test thread parked in `wait()`, woken on every ACK edge. `back_to_back_requests_never_wait_for_req_low` now polls `SimBoard::completed()` until the daemon drains the queue, then waits; with the spin removed it fails about 19 runs in 20 (timing, not deterministic). PI_DAEMON 13.3 row updated.
+- The first entry's "no spec change" was false: 13.1/13.3 test procedures had been revised. Reworded here and in TODO. No behavior or protocol change.
+- `GpioMem::request_reset` records each gpiochip it could not open or query, with the OS error, in the final `no gpiochip labelled` message (PI_DAEMON 3.3: path and OS error).
+- Pending-output discard on a new client and at RESET stays untested (a non-reading client would have to fill loopback buffers); listed in TODO with the other simulator gaps. Nits: board violation messages print the `done` count, not the queue; the stuck-D stop test checks the file after `finish()`.
+- What bit us: a single-thread timing check is only as good as the absence of other threads touching the same lock. Three drain rounds did not beat one (29/30 vs 19/20), so it stays one.
+
+### 2026-10-03: Pi Daemon `pi8080d`
+- Built to PI_DAEMON.md; its 13.1/13.3 test procedures were revised (no behavior or protocol change, see the review-fix entry): `build_bus(storage_dir, clock)` with every caller passing `mailbox::local_time`; `debugger::Trace` shared (`pub(crate)`); `src/pi/mod.rs` (the `Gpio` trait, `setup_pins`, `serve`: steps 1-8, the abort rule, the 1 ms edge gate, RESET with drop-then-`build_bus`, stop, the TCP console pass, the trace); `src/pi/linux.rs` (`GpioMem`, the `pinctrl-bcm2711` v2 line request with const layout asserts, `ntp_local_time`); `src/pi_main.rs`; `scripts/pi8080d.service`; `.cargo/config.toml`.
+- Tests 279 -> 298: SimBoard (`tests/sim/mod.rs`) with every 13.1 protocol check; `every_transcript_through_the_daemon` (all 18 transcripts through the REQ/ACK/LATCH handshake and the TCP console; the daemon trace equals the CPU's port sequence line for line; 122,215 accesses in about 2.4 s debug); the 18 tests of 13.3; `#[ignore]` `w_command_cycles` (198,053 cycles, 4,228 Pi accesses). The local harness now uses the shared at-prompt rule. Release exercisers 4/4, clippy clean on the host and on aarch64 musl.
+- Cross-build: `cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d` links with `rust-lld` to a static aarch64 ELF (about 760 KiB). For the musl gate, `local_time` infers `time_t` instead of naming it (libc deprecates the name on musl).
+- Mutants (cargo-mutants, `src/pi/mod.rs`): 113 of 145 killed (1 by timeout), 1 unviable, 31 survivors: 11 equivalent (`|` vs `^` on disjoint or cleared bits, CLR-then-SET, timing boundaries, the 16 KiB send chunk) and 20 the simulator can't see: socket and accept error paths, the read-back loops (the board's ACK and LATCH read high on the first read), the D mismatch log, the stop and RESET clears of lines already low, the 500 ns blanking and input only into an empty FIFO (TCP backpressure is timing). Flow control is a bench item (PI_DAEMON 12.2, 14); the blanking claim was wrong, see the review-fix entry.
+- What bit us: std's `Mutex` is unfair, so the daemon's polling loop starved the test thread (the 100 KiB input test took 16 s; a yield in the board's idle reads made it 2 s). The pause hook first parked on the step 8 read-back, which already shows the next request, so the RESET tests passed through the edge latch and never exercised the abort rule's REQ-low read; mutants found it. A daemon thread slow to start found a RESET pulse only through the latch, after serving the next access; the rig now waits for the first console pass.
 
 ### 2026-10-03: Phase 7 Review Fixes
 - Review found no Rust or ROM bug; four small test/doc gaps, all applied. The fifth item (U's `MVI B,0` is an equivalent mutant) is left as is: 2 bytes for not leaning on the CU_BYTE loop's exit state.

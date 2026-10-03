@@ -1,6 +1,6 @@
 # Pi Daemon
 
-Normative: the fourth normative spec, with `ARCHITECTURE.md`, `DEVICE_SPECS.md` and `MONITOR_SPEC.md` (decided 2026-10-03, COLLABORATION_LOG Key Decisions; binding). The one home for the software that runs on the Raspberry Pi behind the 8080's I/O ports: `pi8080d`. Not implemented yet: everything below is pending (`TODO.md`, Current).
+Normative: the fourth normative spec, with `ARCHITECTURE.md`, `DEVICE_SPECS.md` and `MONITOR_SPEC.md` (decided 2026-10-03, COLLABORATION_LOG Key Decisions; binding). The one home for the software that runs on the Raspberry Pi behind the 8080's I/O ports: `pi8080d`. Implemented 2026-10-03 (`src/pi/`, `src/pi_main.rs`, `tests/sim/`, `tests/pi_daemon_tests.rs`); what only the built board can show is section 14.
 
 **Scope (one fact, one home):**
 - `ARCHITECTURE.md` 6.4 owns the circuit, the 20-GPIO pin map, the IN/OUT handshake and the power and boot rules. `ARCHITECTURE.md` 6.6 owns RESET. `ARCHITECTURE.md` 7.3 owns the port-trace line format and 7.4 the trace diff recipe. This file says how the daemon meets them and cites them; it does not restate them.
@@ -34,6 +34,8 @@ One crate, a second binary (`HARDWARE_BUILD.md` 5, Code). No new dependencies: `
 | `tests/sim/mod.rs` | The simulated board (13.1). Test code only, not in the library. | every target |
 | `tests/pi_daemon_tests.rs` | Fault, RESET, startup, stop and console tests (13.3). | every target |
 | `tests/monitor_tests.rs` | Gains the daemon path for the transcripts (13.2) and the ignored `w_command_cycles` helper (12.2). | every target |
+| `scripts/pi8080d.service` | The systemd unit (11). | (installed on the Pi) |
+| `.cargo/config.toml` | `rust-lld` as the linker for the musl target (below). | (build host) |
 
 `Cargo.toml` gains `default-run`, so plain `cargo run` still runs the emulator:
 
@@ -73,7 +75,7 @@ cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d
 scp target/aarch64-unknown-linux-musl/release/pi8080d pi:/usr/local/bin/
 ```
 
-No Docker, no zig, no Pi toolchain. Not yet verified end to end (`TODO.md`, Current). If `rust-lld` does not link it, the fallback is to build natively on the Pi (`cargo build --release --bin pi8080d`), which needs no config. `build.rs` runs on the build host either way.
+No Docker, no zig, no Pi toolchain. Verified 2026-10-03 on macOS (rustc 1.89): it links a static aarch64 ELF of about 760 KiB. Running it on the Pi is a section 14 check. If `rust-lld` ever does not link it, the fallback is to build natively on the Pi (`cargo build --release --bin pi8080d`), which needs no config. `build.rs` runs on the build host either way.
 
 ---
 
@@ -234,7 +236,7 @@ The one race `ARCHITECTURE.md` 6.6 accepts remains: descheduled between step 5 a
 ## 6. Devices
 
 - Exactly `build_bus`, the function `main.rs` and every harness use (`DEVICE_SPECS.md` 10). No device is wrapped, subclassed or re-mapped. Device code is reused unchanged.
-- The daemon passes its own TIME clock (8): `build_bus(storage_dir, clock)`, with `main.rs` and the harnesses passing `mailbox::local_time` and the daemon `ntp_local_time` (decided 2026-10-03; the signature change is pending, `TODO.md`).
+- The daemon passes its own TIME clock (8): `build_bus(storage_dir, clock)`, with `main.rs` and the harnesses passing `mailbox::local_time` and the daemon `ntp_local_time` (decided 2026-10-03).
 - Storage directory: `--storage` (10), created by `Storage::new` if missing.
 - Device reset = drop and `build_bus` again (5.2). Daemon restart = fresh devices, and the 8080 is not told (`DEVICE_SPECS.md` 2.9).
 
@@ -329,7 +331,7 @@ Command-line flags only. No config file.
 - **Scheduling:** normal priority (`SCHED_OTHER`), no `SCHED_FIFO`. A busy-looping real-time task is throttled by the kernel's RT limit (50 ms of every second by default) and starves the per-CPU kernel threads; isolation, not priority, keeps the core to itself.
 - **User:** a system user `pi8080` in group `gpio`. Raspberry Pi OS gives `/dev/gpiomem` and `/dev/gpiochip*` to `root:gpio` mode 0660 through udev, so the daemon needs no root and no capabilities.
 - **Time zone:** set at install (8).
-- **Unit** `/etc/systemd/system/pi8080d.service`:
+- **Unit** `/etc/systemd/system/pi8080d.service` (the repo copy is `scripts/pi8080d.service`):
 
 ```ini
 [Unit]
@@ -395,7 +397,9 @@ Everything here runs in `cargo test` on any OS. The simulated board stands in fo
 - **Gap:** the next queued access does not set Q until `gap` (default 1 us) after the previous ACK edge, as the 8080 can't issue the next access sooner. With `gap` = 0 and `req_fall` = 0 the ACK edge loads the next queued access in the same `write`, so GPLEV0 never shows REQ low between queued accesses.
 - **IN latch:** captures the D output latch on a LATCH rising edge.
 - **RESET:** `reset(on)` sets the level, clears Q, aborts the access in flight and queues an edge event stamped with the current `Instant`. `release_event_delay` (default 0) delays delivery of the falling-edge event, not its stamp, as the kernel does. `reset_edge()` implements the 3.1 contract (true only for delivered events stamped at or after its previous call) and counts its calls (`edge_calls()`).
-- **Pause hook:** `pause_next_request()` makes the daemon's next GPLEV0 read that shows a new request compute its value and then park on the `Condvar` (releasing the `Mutex`, so `reset` and `begin` can run) until `resume()`. `wait_paused()` blocks the test thread until the daemon is parked (panics after 10 s). Every pause test calls it before touching RESET, so it covers "the daemon has sampled the request and not yet ACKed it", which stands for a slow device call (an fsync) or a descheduled thread.
+- **Test helpers:** `pulse_reset()` (13.3), `stick_d(Some((bit, level)))` and `stick_d(None)`, `peek(off)` (a register without a daemon read's side effects), `writes()`, `edge_calls()` and `wait_edge_calls(n)`, and `check()` (fails with a recorded violation). Knobs are a `Knobs` struct: GPFSEL0-2 and the output latch at power-on (by default ALT functions on BCM 0-3 and 14-15, and every latch bit high, so a write that changes another pin or turns ACK or LATCH into an output before driving it low is caught), `req_fall`, `gap`, `release_event_delay`, `ack_stuck_high`.
+- **Unfair lock:** a GPLEV0 read that shows REQ low yields the thread after releasing the `Mutex`. std's `Mutex` is not fair, and the daemon polls in a tight loop; without the yield the test thread waited tens of microseconds per access for the lock (the 100 KiB input test took 16 s instead of 2).
+- **Pause hook:** `pause_next_request()` makes the daemon's next GPLEV0 read that shows a new request (REQ high from Q, after a read has shown ACK low: the read that ends step 8 can already show the next request, and the daemon does not sample from it) compute its value and then park on the `Condvar` (releasing the `Mutex`, so `reset` and `begin` can run) until `resume()`. `wait_paused()` blocks the test thread until the daemon is parked (panics after 10 s). Every pause test calls it before touching RESET, so it covers "the daemon has sampled the request and not yet ACKed it", which stands for a slow device call (an fsync) or a descheduled thread.
 
 **Protocol checks.** On the first violation the board records it, calls `notify_all`, drops its guard and then panics the daemon thread. `wait()`, `wait_paused()` and the test's final check look for a recorded violation first and fail with its message, never with a timeout. Each check is one obligation:
 
@@ -426,25 +430,25 @@ Intel8080 --IN/OUT 00-6F--> Bridge (IoDevice) --begin/wait--> SimBoard <--Gpio--
 - The daemon thread runs `setup_pins` and `pi::serve` on the `SimBoard` with a temporary storage directory, `mailbox::local_time`, a listener on `127.0.0.1:0`, a trace file and its own stop flag. The test connects its client **before** starting the daemon, so the banner is never discarded for want of a client.
 - Same files, same parser, same `play`. `Mon.con: Rc<RefCell<Console>>` becomes `Mon.side: Side`, with `enum Side { Local(Rc<RefCell<Console>>), Daemon(TcpStream) }`. The only per-mode difference is where input goes (`push_input` or the socket) and where output is read (`take_output`, or the socket until it has as many bytes as the 8080 sent with `OUT 00`). Both modes use one at-prompt rule, read from `Mon.ports`: the 8080 has done at least as many `IN 01` since the step began as bytes were typed, its `OUT 00` bytes since the step began end with `> `, and it stays quiet for 2,000 cycles. The local harness switches to this rule too, so there are not two.
 - After the last step: set the stop flag, join the daemon thread, then assert the daemon's trace file equals `Mon.ports` restricted to 00-6F and collapsed by the `ARCHITECTURE.md` 7.3 repeat rule, line for line, `; xN` counts included. With no RESET in the run the two sequences are the same accesses, so they must match exactly.
-- Cost: the 16 transcripts make about 77,000 port accesses (measured 2026-10-03), each two cross-thread handoffs. Budget: under 10 s in a debug `cargo test`, measured when the test lands. If it is slower, run fewer transcripts through the daemon rather than add machinery.
+- Cost: measured 2026-10-03, the 18 transcripts make 122,215 Pi-window accesses, each two cross-thread handoffs, in about 2.4 s in a debug `cargo test` (about 20 us an access), inside the 10 s budget. If it grows past the budget, run fewer transcripts through the daemon rather than add machinery.
 
 This proves, for every behavior the transcripts cover: one access per instruction, nothing lost, merged or repeated (`DEVICE_SPECS.md` 3.1), the handshake order, the shared devices, the TCP console both ways, and the trace format.
 
 ### 13.3 Fault, startup, stop and console tests (`tests/pi_daemon_tests.rs`)
 
-Driven from the test thread with `begin`/`wait` directly, no CPU. Each test gives `serve` its own stop flag, and sets it and joins the daemon thread before reading the trace file. "Pulse RESET" is `reset(true)`, sleep 2 ms, `reset(false)`, so a pause plus a pulse always exceeds the 1 ms gate. Nothing waits on wall time for a console pass: "after a pass" means `edge_calls()` has risen by 2 since the access completed (7.3 makes exactly one call per pass, and no access is in flight).
+Driven from the test thread with `begin`/`wait` directly, no CPU. Each test gives `serve` its own stop flag, and sets it and joins the daemon thread before reading the trace file. Starting the daemon returns after its first console pass, so a RESET the test makes next finds the daemon running (a thread slow to start would otherwise find the edge only after later accesses; seen once under `cargo mutants`). "Pulse RESET" is `reset(true)`, sleep 2 ms, `reset(false)`, so a pause plus a pulse always exceeds the 1 ms gate. Nothing waits on wall time for a console pass: "after a pass" means `edge_calls()` has risen by 2 since the access completed (7.3 makes exactly one call per pass, and no access is in flight).
 
 | Test | Script | Asserts |
 |------|--------|---------|
-| `reset_pulse_mid_in_is_never_acked_and_resets_devices` | Mount `A.BIN`; type `xyz` and wait for `IN 02` = 03; `pause_next_request`; `begin(IN 0C)`; `wait_paused`; pulse RESET; `resume` | The access ends aborted, with no ACK. Then `IN 0C` bit 0 = 0, `IN 0F` = 01, `IN 02` = 02, `IN 01` = 00, `IN 12` = 00. One `RESET` trace line; the paused access has none |
+| `reset_pulse_mid_in_is_never_acked_and_resets_devices` | Mount `A.BIN`; type `xyz` and wait for `IN 02` = 03; `pause_next_request`; `begin(IN 0C)`; `wait_paused`; pulse RESET; `resume`; begin nothing until the daemon's next `reset_edge()` call (its RESET handling), so only the abort rule's REQ-low read can catch the pulse | The access ends aborted, with no ACK. Then `IN 0C` bit 0 = 0, `IN 0F` = 01, `IN 02` = 02, `IN 01` = 00, `IN 12` = 00. One `RESET` trace line; the paused access has none |
 | `reset_pulse_mid_out_is_never_acked_and_resets_devices` | Same, paused on `OUT 0B` | No ACK; storage unmounted; the client still connected |
 | `reset_and_reboot_during_a_slow_access` | Mount; pause on `OUT 0B`; `wait_paused`; pulse RESET; `begin(OUT 00 'B')`; `resume` | `OUT 0B` aborted; `OUT 00` completes; the client receives `B`; storage unmounted (edge path, 5.2 table row 4) |
 | `reset_pulse_during_in_readback_does_not_hang` | A D bit forced stuck; `begin(IN 02)`; after 5 ms pulse RESET; release the stuck bit; `begin(IN 0F)` | The IN ends aborted; `IN 0F` = 01 |
 | `reset_held_blocks_service_until_release` | Pause on `OUT 00`; `wait_paused`; RESET on; `resume`; wait 20 ms; RESET off; `begin(IN 0F)` | No ACK while held; after release `IN 0F` = 01 |
-| `reset_while_idle_resets_devices` | Type `ab`, wait for `IN 02` = 03, pulse RESET with no access | `IN 02` = 02 afterwards |
+| `reset_while_idle_resets_devices` | Type `ab`, wait for `IN 02` = 03, type `cd` (left in the socket: the FIFO holds input), pulse RESET with no access | `IN 02` = 02 afterwards, and still after a pass (the socket's bytes were discarded) |
 | `a_late_release_event_does_not_reset_twice` | `release_event_delay` = 5 ms; pulse RESET; `OUT 00` `a` at once; wait 10 ms; `OUT 00` `b` | The client receives `ab`; exactly one `RESET` trace line |
 | `a_request_pending_at_start_is_served` | `begin(OUT 00 'Q')`, then start the daemon | The access completes; the client receives `Q` |
-| `back_to_back_requests_never_wait_for_req_low` | `gap` = 0, `req_fall` = 0; queue 1,000 accesses at once | All complete (a daemon that waits for REQ low hangs and the 10 s timeout fails it) |
+| `back_to_back_requests_never_wait_for_req_low` | `gap` = 0, `req_fall` = 0, no trace file; queue 1,000 accesses at once and let the daemon drain them before the first `wait()` (poll the completion count, so no test thread is woken on each ACK edge) | All complete, and the board's 500 ns ACK-high check holds (a daemon that waits for REQ low hangs and the 10 s timeout fails it) |
 | `startup_releases_d_and_drives_ack_and_latch_low` | Board starts with D0-D7 as outputs and ACK and LATCH as outputs latched high | When `setup_pins` returns, D0-D7 are inputs and ACK and LATCH read low; the 13.1 checks pass through a first access |
 | `a_pin_in_an_alt_function_refuses_to_start` | GPFSEL0 has pin 7 in ALT0 | `setup_pins` returns an error naming BCM 7; no register written |
 | `ack_stuck_high_refuses_to_start` | ACK forced high | `setup_pins` returns the `BCM 16 (ACK) reads high` error |

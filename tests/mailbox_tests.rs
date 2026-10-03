@@ -8,7 +8,7 @@
 // named.
 //
 // API used (only `rig_with_clock` names the device):
-//   - build_bus(dir) maps one Service Mailbox device at 10, 11, 12, 13, using the host clock.
+//   - build_bus(dir, mailbox::local_time) maps one Service Mailbox device at 10, 11, 12, 13, using the host clock.
 //   - intel8080_emu::io::devices::mailbox::Mailbox implements IoDevice.
 //   - Mailbox::new(clock), clock a plain fn returning Some((year, month, day, hour, minute,
 //     second)) of local time, or None for "not set" (TIME gives 83). A plain fn can't
@@ -24,7 +24,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use intel8080_emu::io::build_bus;
-use intel8080_emu::io::devices::mailbox::Mailbox;
+use intel8080_emu::io::devices::mailbox::{self, Mailbox};
 use intel8080_emu::io::IoBus;
 
 type Time = (u16, u8, u8, u8, u8, u8);
@@ -65,7 +65,7 @@ struct Rig {
 
 fn rig() -> Rig {
     let dir = tempfile::tempdir().unwrap();
-    let (bus, _con) = build_bus(dir.path());
+    let (bus, _con) = build_bus(dir.path(), mailbox::local_time);
     Rig { _dir: dir, bus }
 }
 
@@ -921,7 +921,7 @@ fn reset_is_rebuilding_the_bus() {
     // which is the same rebuild).
     let dir = tempfile::tempdir().unwrap();
     for leave in ["avail", "done", "error", "half", "overflow"] {
-        let (mut bus, _con) = build_bus(dir.path());
+        let (mut bus, _con) = build_bus(dir.path(), mailbox::local_time);
         for b in b"TIME" {
             bus.write(CMD, *b);
         }
@@ -949,7 +949,7 @@ fn reset_is_rebuilding_the_bus() {
             }
         }
         // RESET: build_bus again.
-        let (bus, _con) = build_bus(dir.path());
+        let (bus, _con) = build_bus(dir.path(), mailbox::local_time);
         let mut r = Rig { _dir: tempfile::tempdir().unwrap(), bus };
         assert_eq!(r.status(), IDLE, "after {}", leave);
         assert_eq!(r.inp(RESP), 0x00, "after {}: a response byte survived", leave);

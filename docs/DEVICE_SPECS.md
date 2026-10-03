@@ -404,7 +404,7 @@ Large results go to storage files, and the 8080 reads them through section 6. Ho
 - **Year above 9999:** the clock reports "not set", so `TIME` gives 83.
 - **Not set:** `TIME` gives 83.
 - **Emulator:** the host's local time (`localtime_r`). It reports "not set" when the host time is before 1970, does not fit the host's `time_t`, gives a year above 9999, or `localtime_r` fails. The host has no other notion of "clock not set".
-- **Pi:** the Pi runs 64-bit Raspberry Pi OS, so `time_t` is 64-bit and does not wrap in 2038. The clock is set when the kernel reports NTP-synchronized: `adjtimex()` does not return `TIME_ERROR`. Otherwise it reports "not set" and `TIME` gives 83. An RTC alone does not count. With no NTP update for about 9 h the kernel marks the clock unsynchronized, and `TIME` gives 83 until the next sync. Local time follows the Pi's configured time zone (TZ), set at install (`PI_DAEMON.md` 11). The daemon's clock: `PI_DAEMON.md` 8 (pending, `TODO.md`).
+- **Pi:** the Pi runs 64-bit Raspberry Pi OS, so `time_t` is 64-bit and does not wrap in 2038. The clock is set when the kernel reports NTP-synchronized: `adjtimex()` does not return `TIME_ERROR`. Otherwise it reports "not set" and `TIME` gives 83. An RTC alone does not count. With no NTP update for about 9 h the kernel marks the clock unsynchronized, and `TIME` gives 83 until the next sync. Local time follows the Pi's configured time zone (TZ), set at install (`PI_DAEMON.md` 11). The daemon's clock: `PI_DAEMON.md` 8 (`ntp_local_time`, `src/pi/linux.rs`).
 
 ### ASM and DIS: the shared table
 
@@ -550,7 +550,7 @@ Superseded on 2026-10-02 (see COLLABORATION_LOG Key Decisions):
 
 | Device | Emulator | Hardware |
 |--------|----------|----------|
-| Port map 00-6F | `build_bus` (`src/io/mod.rs`), used by `main.rs` and every test harness. It takes the TIME clock as a parameter, `build_bus(storage_dir, clock)`, and the emulator's callers pass `mailbox::local_time` (pending, `TODO.md`) | Pi daemon: the same function, with its own clock (`PI_DAEMON.md` 6, 8) |
+| Port map 00-6F | `build_bus` (`src/io/mod.rs`), used by `main.rs` and every test harness. It takes the TIME clock as a parameter, `build_bus(storage_dir, clock)`, and the emulator's callers pass `mailbox::local_time` | Pi daemon (`src/pi/`): the same function, with its own clock, `ntp_local_time` (`PI_DAEMON.md` 6, 8) |
 | Console 00-02 | `src/io/devices/console.rs` (input FIFO and output buffer, no terminal code); the terminal side is `src/main.rs` | Pi: the same Rust code, with the terminal connected to the Pi over TCP (`PI_DAEMON.md` 7) |
 | Storage 08-0C, Mount 0D-0F | `src/io/devices/storage.rs`, one device (std::fs) | Pi: the same Rust code, files on its SD card |
 | Service Mailbox 10-13 | `src/io/devices/mailbox.rs`. `TIME` reads a clock passed to `Mailbox::new` (a plain fn returning the date and time fields, or None for "not set"). The device formats the 19 bytes, so the emulator and the Pi daemon share the formatter. `build_bus` passes the host's local time (`mailbox::local_time`, `localtime_r` through the `libc` crate); tests pass a fixed or a failing one. `ASM` and `DIS` call `src/disasm.rs`: `assemble` reads the opcode table backwards, and `line` formats the DIS line, which the debugger reuses | Pi: the same Rust code and formatter behind GPIO, with a clock that reports "not set" (83) unless the kernel is NTP-synchronized (section 8, TIME clock; `PI_DAEMON.md` 8). `ASM` and `DIS` are the same code |

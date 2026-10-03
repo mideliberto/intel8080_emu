@@ -4,9 +4,16 @@
 // registers, flags and SP are set to junk after it, so the ROM can't lean on zeroed
 // RAM, registers or a preset SP.
 //
-// A step types its input, then runs until the input is consumed, the output ends
-// with the "> " prompt and nothing more is printed. The output must match the
-// transcript exactly. An exhausted cycle budget or a HLT is a failure.
+// A step types its input, then runs until the input is consumed (as many IN 01 as bytes
+// typed), the OUT 00 bytes since the step began end with the "> " prompt, and nothing more
+// is printed for 2,000 cycles. The output must match the transcript exactly. An
+// exhausted cycle budget or a HLT is a failure.
+//
+// Two paths, one rule (PI_DAEMON 13.2): Local maps build_bus on the CPU's IoBus and talks
+// to the Console directly; Daemon maps a Bridge on 00-6F that performs each access as a
+// REQ/ACK handshake on the simulated board (tests/sim) against pi::serve on its own
+// thread, and talks to the console over TCP. every_transcript_through_the_daemon plays
+// every transcript both ways.
 //
 // Transcripts live in tests/transcripts/*.txt, so the same files can drive the
 // hardware over the Pi TCP console. Format, one item per line:
@@ -21,17 +28,26 @@
 // and an empty output line as a trailing \r\n on the line before it.
 // Transcripts only display memory they wrote first: on hardware RAM is random.
 
+mod sim;
+
 use std::cell::RefCell;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::Arc;
+use std::time::Duration;
 
 use intel8080_emu::cpu::Transfer;
 use intel8080_emu::debugger::Debugger;
 use intel8080_emu::io::build_bus;
 use intel8080_emu::io::devices::console::Console;
-use intel8080_emu::io::devices::mailbox::Mailbox;
-use intel8080_emu::io::IoDevice;
+use intel8080_emu::io::devices::mailbox::{self, Mailbox};
+use intel8080_emu::io::{IoBus, IoDevice};
+use intel8080_emu::pi;
 use intel8080_emu::Intel8080;
+use sim::{Access, Done, Knobs, SimBoard};
 
 /// HLT. A NOP-like byte (00, or A5 = ANA L) would slide execution into F000 and
 /// boot the ROM even with the overlay missing. RST 0 would jump back to 0000.
@@ -42,9 +58,15 @@ const JUNK_SP: u16 = 0x0000;
 /// Cycles per step. `C 0000 FFFF` is the slowest command and needs about 10M.
 const BUDGET: u64 = 30_000_000;
 
+/// Where the console is: the Console itself, or the daemon's TCP client.
+enum Side {
+    Local(Rc<RefCell<Console>>),
+    Daemon(TcpStream),
+}
+
 struct Mon {
     cpu: Intel8080,
-    con: Rc<RefCell<Console>>,
+    side: Side,
     dir: tempfile::TempDir,
     /// Every IN and OUT since power-on, in order.
     ports: Vec<Transfer>,
@@ -53,10 +75,15 @@ struct Mon {
 /// Power on with junk RAM and the port map main.rs uses (build_bus); returns the
 /// monitor and what boot printed up to the first prompt.
 fn power_on(overlay: bool) -> (Mon, Result<Vec<u8>, String>) {
+    let dir = tempfile::tempdir().unwrap();
+    let (bus, con) = build_bus(dir.path(), mailbox::local_time);
+    start(bus, Side::Local(con), dir, overlay)
+}
+
+/// Power on with `bus` as the port map.
+fn start(bus: IoBus, side: Side, dir: tempfile::TempDir, overlay: bool) -> (Mon, Result<Vec<u8>, String>) {
     let mut cpu = Intel8080::new();
     cpu.load_program(&vec![JUNK; 0xF000], 0x0000);
-    let dir = tempfile::tempdir().unwrap();
-    let (bus, con) = build_bus(dir.path());
     *cpu.io_bus_mut() = bus;
     cpu.load_rom_from_file(Path::new("rom/monitor.bin")).unwrap();
     cpu.reset();
@@ -66,13 +93,17 @@ fn power_on(overlay: bool) -> (Mon, Result<Vec<u8>, String>) {
     if !overlay {
         cpu.rom_overlay_enabled = false;
     }
-    let mut m = Mon { cpu, con, dir, ports: Vec::new() };
+    let mut m = Mon { cpu, side, dir, ports: Vec::new() };
     let banner = m.step(b"");
     (m, banner)
 }
 
 fn boot() -> Mon {
-    let (m, banner) = power_on(true);
+    booted(power_on(true))
+}
+
+/// The monitor after a boot that printed the banner.
+fn booted((m, banner): (Mon, Result<Vec<u8>, String>)) -> Mon {
     let banner = banner.unwrap_or_else(|e| panic!("boot: {}", e));
     let b = show(&banner);
     assert!(b.starts_with("\\r\\n8080 Monitor v"), "{}", b);
@@ -125,11 +156,26 @@ fn typed(text: &str) -> Vec<u8> {
 }
 
 impl Mon {
+    /// The Console (local path only).
+    fn con(&self) -> &Rc<RefCell<Console>> {
+        match &self.side {
+            Side::Local(con) => con,
+            Side::Daemon(_) => panic!("no local console on the daemon path"),
+        }
+    }
+
     /// Type `input`, run to the next prompt, return what was printed (prompt stripped).
     fn step(&mut self, input: &[u8]) -> Result<Vec<u8>, String> {
-        self.con.borrow_mut().take_output();
-        self.con.borrow_mut().push_input(input);
+        match &mut self.side {
+            Side::Local(con) => {
+                con.borrow_mut().take_output();
+                con.borrow_mut().push_input(input);
+            }
+            Side::Daemon(client) => client.write_all(input).unwrap(),
+        }
         let start = self.cpu.cycles;
+        // Since the step began: IN 01 count, OUT 00 bytes.
+        let (mut read, mut out) = (0, Vec::new());
         let mut quiet_since = None;
         loop {
             if self.cpu.halted {
@@ -137,26 +183,39 @@ impl Mon {
             }
             if self.cpu.cycles - start > BUDGET {
                 return Err(format!("no prompt within {} cycles after {:?}, PC={:04X}, output {:?}",
-                    BUDGET, show(input), self.cpu.pc, show(self.con.borrow().output())));
+                    BUDGET, show(input), self.cpu.pc, show(&out)));
             }
             self.cpu.execute_one();
-            self.ports.extend(self.cpu.transfers().iter().filter(|t| matches!(t, Transfer::In(..) | Transfer::Out(..))));
-            let mut con = self.con.borrow_mut();
-            let at_prompt = con.read(0x02) & 0x01 == 0 && con.output().ends_with(b"> ");
-            let len = con.output().len();
-            drop(con);
+            for &t in self.cpu.transfers() {
+                match t {
+                    Transfer::In(0x01, _) => read += 1,
+                    Transfer::Out(0x00, b) => out.push(b),
+                    _ => {}
+                }
+                if matches!(t, Transfer::In(..) | Transfer::Out(..)) {
+                    self.ports.push(t);
+                }
+            }
+            let at_prompt = read >= input.len() && out.ends_with(b"> ");
             // At a prompt with no input left, it must stay quiet: a dump line can end in "> ".
             match quiet_since {
-                Some((cycles, n)) if n == len && at_prompt => {
+                Some((cycles, n)) if n == out.len() && at_prompt => {
                     if self.cpu.cycles - cycles > 2_000 {
                         break;
                     }
                 }
-                _ => quiet_since = if at_prompt { Some((self.cpu.cycles, len)) } else { None },
+                _ => quiet_since = if at_prompt { Some((self.cpu.cycles, out.len())) } else { None },
             }
         }
-        let out = self.con.borrow().output().to_vec();
-        Ok(out[..out.len() - 2].to_vec())
+        let got = match &mut self.side {
+            Side::Local(con) => con.borrow_mut().take_output(),
+            Side::Daemon(client) => {
+                let mut got = vec![0; out.len()];
+                client.read_exact(&mut got).map_err(|e| format!("console client after {:?}: {}", show(input), e))?;
+                got
+            }
+        };
+        Ok(got[..got.len() - 2].to_vec())
     }
 
     /// Type one command line; return its output with the echo stripped.
@@ -275,10 +334,89 @@ fn boot_fails_without_overlay() {
     let (m, banner) = power_on(false);
     let e = banner.expect_err("booted without the overlay");
     assert!(e.starts_with("HLT at PC=0001"), "{}", e);
-    assert!(m.con.borrow().output().is_empty());
+    assert!(m.con().borrow().output().is_empty());
 }
 
 // ---------- Transcripts ----------
+
+/// The Pi window on the CPU's IoBus for the daemon path: each access is a REQ/ACK
+/// handshake on the simulated board, served by pi::serve on the daemon thread.
+struct Bridge(SimBoard);
+
+impl IoDevice for Bridge {
+    fn read(&mut self, port: u8) -> u8 {
+        self.0.begin(port, Access::In);
+        match self.0.wait() {
+            Done::In(v) => v,
+            d => panic!("IN {:02X}: {:?}", port, d),
+        }
+    }
+
+    fn write(&mut self, port: u8, value: u8) {
+        self.0.begin(port, Access::Out(value));
+        assert_eq!(self.0.wait(), Done::Out, "OUT {:02X} {:02X}", port, value);
+    }
+}
+
+#[test]
+fn every_transcript_through_the_daemon() {
+    // PI_DAEMON 13.2: every transcript, each from a fresh power-on, with ports 00-6F served
+    // by the daemon on the simulated board and the console over TCP. Then the daemon's
+    // trace must equal the CPU's own port sequence for 00-6F, collapsed by the
+    // ARCHITECTURE 7.3 repeat rule, line for line.
+    let mut names: Vec<String> = std::fs::read_dir("tests/transcripts").unwrap()
+        .filter_map(|e| e.unwrap().file_name().into_string().ok()?.strip_suffix(".txt").map(String::from))
+        .collect();
+    names.sort();
+    assert!(names.len() >= 18, "{:?}", names);
+    for name in names {
+        let board = SimBoard::new(Knobs::default());
+        let dir = tempfile::tempdir().unwrap();
+        let logs = tempfile::tempdir().unwrap();
+        let trace = logs.path().join("trace.txt");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        // Connected before the daemon starts, so the banner is never discarded for want of a client.
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let daemon = {
+            let (board, storage, trace, stop) = (board.clone(), dir.path().to_path_buf(), trace.clone(), stop.clone());
+            std::thread::spawn(move || {
+                let fsel2 = pi::setup_pins(&board)?;
+                let trace = std::fs::File::create(trace).unwrap();
+                pi::serve(board, fsel2, &storage, mailbox::local_time, listener, Some(trace), &stop)
+            })
+        };
+        let mut bus = IoBus::new();
+        let bridge = Rc::new(RefCell::new(Bridge(board.clone())));
+        for port in 0x00..=0x6F {
+            bus.map_port(port, bridge.clone());
+        }
+        let mut m = booted(start(bus, Side::Daemon(client), dir, true));
+        m.play(&name);
+        stop.store(true, Relaxed);
+        let result = daemon.join();
+        board.check();
+        assert_eq!(result.expect("daemon thread panicked"), Ok(()), "{}", name);
+        let mut want: Vec<(String, usize)> = Vec::new();
+        for t in &m.ports {
+            let line = match *t {
+                Transfer::In(p @ 0x00..=0x6F, v) => format!("IN {:02X} {:02X}", p, v),
+                Transfer::Out(p @ 0x00..=0x6F, v) => format!("OUT {:02X} {:02X}", p, v),
+                _ => continue,
+            };
+            match want.last_mut() {
+                Some((last, n)) if *last == line => *n += 1,
+                _ => want.push((line, 1)),
+            }
+        }
+        let want: Vec<String> = want.into_iter().map(|(l, n)| if n > 1 { format!("{} ; x{}", l, n) } else { l }).collect();
+        let got: Vec<String> = std::fs::read_to_string(&trace).unwrap().lines().map(String::from).collect();
+        if let Some(i) = (0..want.len().max(got.len())).find(|&i| want.get(i) != got.get(i)) {
+            panic!("{}: trace line {} is {:?}, the CPU's port sequence has {:?}", name, i + 1, got.get(i), want.get(i));
+        }
+    }
+}
 
 #[test]
 fn dispatch() {
@@ -468,11 +606,24 @@ fn storage_error_when_the_file_goes_away_mid_transfer() {
     for (line, at) in [("L 0 0200 10", "CL_LOOP"), ("W 0200 0 10", "CW_LOOP")] {
         let mut m = boot();
         assert_eq!(m.run("X T.BIN"), "Mounted\\r\\n");
-        m.con.borrow_mut().push_input(format!("{}\r", line).as_bytes());
+        m.con().borrow_mut().push_input(format!("{}\r", line).as_bytes());
         m.run_to(sym(at));
         m.cpu.io_bus_mut().write(0x0E, 0x02);
         assert_eq!(show(&m.step(b"").unwrap()), "Storage error\\r\\n", "{}", line);
     }
+}
+
+#[test]
+#[ignore]
+fn w_command_cycles() {
+    // PI_DAEMON 12.2 method 2: the emulator side of the whole-command overhead measurement.
+    // Mean Pi overhead per access = (wall time at the TCP client - cycles x 488.28 ns) / accesses.
+    let mut m = boot();
+    assert_eq!(m.run("X CONF.BIN"), "Mounted\\r\\n");
+    let (cycles, n) = (m.cpu.cycles, m.ports.len());
+    assert_eq!(m.run("W F000 0 1000"), "Written\\r\\n");
+    let accesses = m.ports[n..].iter().filter(|t| matches!(t, Transfer::In(0x00..=0x6F, _) | Transfer::Out(0x00..=0x6F, _))).count();
+    println!("W F000 0 1000: {} cycles, {} Pi accesses", m.cpu.cycles - cycles, accesses);
 }
 
 // ---------- T: Time (MONITOR_SPEC 6.15, DEVICE_SPECS 8) ----------
@@ -817,7 +968,7 @@ fn go_entry_contract() {
         let mut m = boot();
         m.run(&format!("F {:04X} {:04X} 76", at, at));
         assert_eq!(m.run("C 0200 0100 0300"), "Invalid range\\r\\n");
-        m.con.borrow_mut().push_input(format!("{}\r", line).as_bytes());
+        m.con().borrow_mut().push_input(format!("{}\r", line).as_bytes());
         let start = m.cpu.cycles;
         while !m.cpu.halted && m.cpu.cycles - start < BUDGET {
             m.cpu.execute_one();
@@ -861,13 +1012,13 @@ fn argument_errors_write_no_port_and_no_memory_outside_the_workspace() {
         assert_eq!(dbg.command(&mut m.cpu, &cmd).1, "", "{}", cmd);
     }
     for line in lines {
-        m.con.borrow_mut().take_output();
-        m.con.borrow_mut().push_input(format!("{}\r", line).as_bytes());
+        m.con().borrow_mut().take_output();
+        m.con().borrow_mut().push_input(format!("{}\r", line).as_bytes());
         dbg.command(&mut m.cpu, "c");
         let stop = dbg.run(&mut m.cpu, 1_000_000).unwrap_or_else(|| panic!("{}: no stop, PC={:04X}", line, m.cpu.pc));
         assert_eq!(stop, format!("break {:04X} WARM", sym("WARM")), "{}\n{}", line, dbg.report(&m.cpu, &stop));
         // The stop at WARM comes before the prompt, so the next line's output starts with it.
-        let out = String::from_utf8(m.con.borrow_mut().take_output()).unwrap();
+        let out = String::from_utf8(m.con().borrow_mut().take_output()).unwrap();
         let msg = out.trim_start_matches("> ").strip_prefix(&format!("{}\r\n", line)).and_then(|o| o.strip_suffix("\r\n"));
         assert!(msg.is_some_and(|msg| errors.contains(&msg)), "{}: {:?}", line, out);
     }
@@ -918,8 +1069,8 @@ fn hex_records_are_validated_before_any_write() {
     let mut dbg = Debugger::new();
     dbg.load_symbols(&std::fs::read_to_string("rom/monitor.sym").unwrap()).unwrap();
     let mut until = |m: &mut Mon, line: &str| -> String {
-        m.con.borrow_mut().take_output();
-        m.con.borrow_mut().push_input(format!("{}\r", line).as_bytes());
+        m.con().borrow_mut().take_output();
+        m.con().borrow_mut().push_input(format!("{}\r", line).as_bytes());
         for cmd in ["bc", "b HEX_RECORD", "c"] {
             dbg.command(&mut m.cpu, cmd);
         }
@@ -934,7 +1085,7 @@ fn hex_records_are_validated_before_any_write() {
     for (line, msg) in quiet {
         let stop = until(&mut m, line);
         assert_eq!(stop, format!("break {:04X} WARM", sym("WARM")), "{}", line);
-        let out = String::from_utf8(m.con.borrow_mut().take_output()).unwrap();
+        let out = String::from_utf8(m.con().borrow_mut().take_output()).unwrap();
         let echo = &line[..line.len().min(79)];
         let want = if msg.is_empty() { String::new() } else { format!("{}\r\n", msg) };
         assert_eq!(out.trim_start_matches("> ").strip_prefix(&format!("{}\r\n", echo)), Some(want.as_str()), "{}", line);

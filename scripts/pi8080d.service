@@ -1,0 +1,17 @@
+# pi8080d systemd unit (docs/PI_DAEMON.md 11). Install as /etc/systemd/system/pi8080d.service,
+# with the binary at /usr/local/bin/pi8080d and a system user pi8080 in group gpio.
+[Unit]
+Description=8080 Pi daemon (bus service, console, storage)
+StartLimitIntervalSec=0
+
+[Service]
+User=pi8080
+Group=gpio
+ExecStart=/usr/local/bin/pi8080d --storage /var/lib/pi8080d
+StateDirectory=pi8080d
+CPUAffinity=3
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

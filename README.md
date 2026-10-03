@@ -16,11 +16,11 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Storage device (24-bit, 16MB) | ✅ |
 | Monitor ROM v0.6 (17 commands + Intel HEX loader) | ✅ |
 | Host-side debugger (breakpoints, watchpoints, I/O breaks, port trace, trace ring, ROM symbols) | ✅ |
-| 279 tests (13 host + 130 CPU + 37 device + 34 mailbox + 41 monitor + 16 debugger + 8 terminal), plus 4 exercisers (`#[ignore]`) | ✅ |
+| 298 tests (13 host + 130 CPU + 37 device + 34 mailbox + 42 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 4 exercisers (`#[ignore]`) | ✅ |
 | Intel HEX loader (Phase 5) | ✅ |
 | Service Mailbox (ports 10-13) and `TIME` / T (Phase 6) | ✅ |
 | Mailbox `ASM`/`DIS`, A and U (Phase 7) | ✅ |
-| Pi daemon `pi8080d`: specified ([PI_DAEMON](docs/PI_DAEMON.md)) | 🔲 Not started |
+| Pi daemon `pi8080d` ([PI_DAEMON](docs/PI_DAEMON.md)): every transcript passes through it on a simulated board; static aarch64 binary links | ✅ Code; 🔲 bench |
 | Mailbox: HTTP, Claude (Phases 8-9) | 🔲 Future |
 
 ## Monitor Commands
@@ -75,6 +75,16 @@ cargo test
 scripts/fetch_exercisers.sh
 cargo test --release --test exerciser -- --ignored --nocapture
 ```
+
+The Pi daemon `pi8080d` (Linux only; on any other OS it prints `pi8080d: Linux only`) cross-builds on the Mac as a static binary, with the linker Rust ships:
+
+```bash
+rustup target add aarch64-unknown-linux-musl     # once
+cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d
+scp target/aarch64-unknown-linux-musl/release/pi8080d pi:/usr/local/bin/
+```
+
+On the Pi: `pi8080d --storage DIR [--listen ADDR:PORT] [--trace FILE]`, or the unit `scripts/pi8080d.service`. The console is TCP, `127.0.0.1:8080` by default: `ssh -L 8080:localhost:8080 pi`, then `socat -,rawer,escape=0x1d TCP:localhost:8080`. Deployment: [docs/PI_DAEMON.md](docs/PI_DAEMON.md) 11.
 
 ## Running
 
@@ -144,11 +154,15 @@ S-100 style boot: RESET starts the CPU at 0x0000 with the ROM at 0xF000 mirrored
 ```
 src/
 ├── main.rs              # Host side: terminal, key map, run loop, debugger prompt
+├── pi_main.rs           # pi8080d: arguments, signals, startup order (Linux only)
 ├── lib.rs               # Library exports
 ├── cpu.rs               # 8080 CPU emulation
 ├── debugger.rs          # Debugger: commands, breaks, watchpoints, trace ring, port trace
 ├── disasm.rs            # Opcode table: disassembler, DIS line, single-line assembler
 ├── registers.rs         # Register enums, flags
+├── pi/
+│   ├── mod.rs           # Pi daemon: Gpio trait, pin setup, bus loop, RESET, TCP console
+│   └── linux.rs         # GpioMem (/dev/gpiomem, RESET line ioctls), NTP-gated clock
 └── io/
     ├── mod.rs           # build_bus: the port map (devices in power-on state)
     ├── bus.rs           # I/O port mapping
@@ -169,6 +183,7 @@ examples/
 
 scripts/
 ├── fetch_exercisers.sh  # Downloads the exercisers to tests/data/exercisers (pinned SHA-256)
+├── pi8080d.service      # systemd unit for the Pi daemon
 └── zip_source.sh
 
 storage/                 # Mounted storage files
@@ -191,7 +206,9 @@ tests/
 ├── device_tests.rs      # Console, storage and mount at port level
 ├── mailbox_tests.rs     # Service Mailbox at port level (DEVICE_SPECS 8), black-box from the spec
 ├── exerciser.rs         # TST8080, 8080PRE, CPUTEST, 8080EXM under a CP/M shim (#[ignore])
-├── monitor_tests.rs     # Strict transcript harness: junk RAM, exact output to each prompt
+├── monitor_tests.rs     # Strict transcript harness: junk RAM, exact output to each prompt; every transcript also through the Pi daemon
+├── pi_daemon_tests.rs   # Pi daemon: RESET, faults, startup, stop, TCP console on the simulated board
+├── sim/mod.rs           # SimBoard: the 8080 board at the GPIO register level, with protocol checks
 ├── terminal_tests.rs    # The real binary under a pty: raw mode, key map, Ctrl-C/Ctrl-E, HLT prompt (Unix)
 └── transcripts/         # Monitor transcripts (data; also meant for hardware over the Pi console)
 ```

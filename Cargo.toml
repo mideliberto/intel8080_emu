@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Intel 8080 Emulator with Monitor ROM"
 authors = ["Mike"]
+default-run = "intel8080"
 
 [dependencies]
 crossterm = "0.27"
@@ -22,3 +23,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "intel8080"
 path = "src/main.rs"
+
+[[bin]]
+name = "pi8080d"
+path = "src/pi_main.rs"

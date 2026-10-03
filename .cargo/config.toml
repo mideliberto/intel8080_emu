@@ -1,0 +1,4 @@
+# The Pi daemon is a static musl binary cross-built here with the linker Rust ships
+# (PI_DAEMON 2): cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"

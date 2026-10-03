@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use intel8080_emu::io::build_bus;
+use intel8080_emu::io::devices::mailbox;
 use intel8080_emu::io::devices::console::{Console, OUTPUT_CAP};
 use intel8080_emu::io::IoBus;
 
@@ -22,7 +23,7 @@ struct Rig {
 
 fn rig() -> Rig {
     let dir = tempfile::tempdir().unwrap();
-    let (bus, con) = build_bus(dir.path());
+    let (bus, con) = build_bus(dir.path(), mailbox::local_time);
     Rig { dir, bus, con }
 }
 
@@ -300,7 +301,7 @@ fn dropping_the_bus_keeps_unflushed_writes() {
 fn storage_dir_is_created_at_startup() {
     let dir = tempfile::tempdir().unwrap();
     let storage = dir.path().join("a/b");
-    let (_bus, _con) = build_bus(&storage);
+    let (_bus, _con) = build_bus(&storage, mailbox::local_time);
     assert!(storage.is_dir());
 }
 
@@ -308,7 +309,7 @@ fn storage_dir_is_created_at_startup() {
 fn every_mount_is_01_when_the_storage_dir_cannot_be_created() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("FILE"), b"").unwrap();
-    let (mut bus, _con) = build_bus(&dir.path().join("FILE/storage"));
+    let (mut bus, _con) = build_bus(&dir.path().join("FILE/storage"), mailbox::local_time);
     for _ in 0..2 {
         for &c in b"A.BIN" {
             bus.write(0x0D, c);

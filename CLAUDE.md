@@ -5,8 +5,8 @@
 **Mantra:** "A fool admires complexity, genius admires simplicity."
 
 ## Status
-- Phase 7 complete (mailbox `ASM`/`DIS`, A and U, the shared ROM mailbox client). Pi daemon `pi8080d` specified 2026-10-03 (`docs/PI_DAEMON.md`), code pending.
-- 279 tests passing (13 host + 130 CPU + 37 device + 34 mailbox + 41 monitor + 16 debugger + 8 terminal), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
+- Phase 7 complete (mailbox `ASM`/`DIS`, A and U, the shared ROM mailbox client). Pi daemon `pi8080d` (`docs/PI_DAEMON.md`) code done 2026-10-03: `src/pi/`, `src/pi_main.rs`; every transcript passes through it on the simulated board (`tests/sim/`); the static aarch64 musl binary links. Bench checks pending (PI_DAEMON 14).
+- 298 tests passing (13 host + 130 CPU + 37 device + 34 mailbox + 42 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
 - Monitor ROM v0.6, 17 commands plus the `:` HEX loader, matches MONITOR_SPEC. 2893 of 4096 bytes used (`cd rom && make size`), ~1.2KB headroom
 - Spec: four normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC since 2026-10-02; PI_DAEMON since 2026-10-03). Open decisions: one, the MONITOR_SPEC 6.17 U cycle figure vs the measurement (`TODO.md`).
 - Live task list: `TODO.md`

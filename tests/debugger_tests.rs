@@ -9,6 +9,7 @@ use std::rc::Rc;
 use intel8080_emu::debugger::{Debugger, Flow};
 use intel8080_emu::disasm::disassemble;
 use intel8080_emu::io::build_bus;
+use intel8080_emu::io::devices::mailbox;
 use intel8080_emu::io::devices::console::Console;
 use intel8080_emu::Intel8080;
 
@@ -26,7 +27,7 @@ struct Rig {
 fn ram(program: &[u8]) -> Rig {
     let dir = tempfile::tempdir().unwrap();
     let mut cpu = Intel8080::new();
-    let (bus, con) = build_bus(dir.path());
+    let (bus, con) = build_bus(dir.path(), mailbox::local_time);
     *cpu.io_bus_mut() = bus;
     cpu.load_program(program, 0x0100);
     cpu.sp = 0x2000;

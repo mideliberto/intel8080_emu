@@ -45,15 +45,20 @@ enum Cond {
     Io { port: u8, input: bool, output: bool },
 }
 
-/// The port trace file. A run of identical lines is held back and written once.
-struct Trace {
+/// The port trace file (ARCHITECTURE 7.3). A run of identical lines is held back and
+/// written once. The Pi daemon writes its trace with it too (PI_DAEMON 9).
+pub(crate) struct Trace {
     file: BufWriter<File>,
     line: String,
     count: u64,
 }
 
 impl Trace {
-    fn add(&mut self, line: String) {
+    pub(crate) fn new(file: File) -> Self {
+        Trace { file: BufWriter::new(file), line: String::new(), count: 0 }
+    }
+
+    pub(crate) fn add(&mut self, line: String) {
         if line == self.line {
             self.count += 1;
             return;
@@ -64,7 +69,7 @@ impl Trace {
     }
 
     /// Writes the held-back line, then flushes. A trace write error is ignored: it costs trace lines only.
-    fn write_pending(&mut self) {
+    pub(crate) fn write_pending(&mut self) {
         if self.count > 1 {
             let _ = writeln!(self.file, "{} ; x{}", self.line, self.count);
         } else if self.count == 1 {
@@ -298,7 +303,7 @@ impl Debugger {
             ("t", [f]) if f.eq_ignore_ascii_case("off") => self.trace = None,
             ("t", [f]) => {
                 let file = File::create(f).map_err(|e| format!("{}: {}", f, e))?;
-                self.trace = Some(Trace { file: BufWriter::new(file), line: String::new(), count: 0 });
+                self.trace = Some(Trace::new(file));
             }
             ("ring", [] | [_]) => {
                 let n = args.first().map(|n| number(n, 4)).transpose()?.map_or(RING, |n| n as usize);

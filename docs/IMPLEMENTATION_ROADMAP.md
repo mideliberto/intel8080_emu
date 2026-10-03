@@ -15,7 +15,7 @@
 | 9 | Claude Integration | 🔲 Future |
 | 10 | R command (debugger done early) | 🔲 Future |
 | 11 | Polish | 🔲 Future |
-| - | Pi daemon track (parallel) | 🔲 Specified 2026-10-03 |
+| - | Pi daemon track (parallel) | 🟡 Code done 2026-10-03, bench pending |
 
 ---
 
@@ -148,12 +148,12 @@ No timer in v1. The Pi keeps wall-clock time via NTP. A periodic interrupt sourc
 
 **Goal:** `pi8080d`, the software that runs the emulator's port map behind GPIO on the Pi 4B, so the same ROM runs on the real board.
 
-**Specified 2026-10-03:** `docs/PI_DAEMON.md`, the fourth normative spec (decisions: COLLABORATION_LOG Key Decisions, "Pi Daemon Specified"). Not started; the task list is in `TODO.md` (Current).
+**Specified 2026-10-03:** `docs/PI_DAEMON.md`, the fourth normative spec (decisions: COLLABORATION_LOG Key Decisions, "Pi Daemon Specified"). **Code done 2026-10-03** (`src/pi/`, `src/pi_main.rs`; the static musl binary links). What is left is the bench.
 
 **Success criteria:**
-- `cargo test` on any OS: every transcript through the daemon on the simulated board, its trace equal to the emulator's port sequence (PI_DAEMON 13.2), and the 13.3 fault, RESET, startup, stop and console tests.
-- The aarch64 musl `cargo check` and `cargo clippy` gate passes (PI_DAEMON 2).
-- On the bench: the PI_DAEMON 14 checks, at bring-up steps 5-8 (`HARDWARE_BUILD.md` 3).
+- [x] `cargo test` on any OS: every transcript through the daemon on the simulated board, its trace equal to the emulator's port sequence (PI_DAEMON 13.2), and the 13.3 fault, RESET, startup, stop and console tests.
+- [x] The aarch64 musl `cargo check` and `cargo clippy` gate passes (PI_DAEMON 2).
+- [ ] On the bench: the PI_DAEMON 14 checks, at bring-up steps 5-8 (`HARDWARE_BUILD.md` 3).
 
 ---
 
