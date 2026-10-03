@@ -34,7 +34,7 @@ The rule behind every section: **the ROM sees only what real parts provide.** If
 
 ### 1.1 Workspace Layout
 
-This table and the WORKSPACE equates in `rom/monitor.asm` MUST match. If they disagree, that is a defect and goes in `TODO.md`.
+This table and the workspace labels in `rom/monitor.asm` (`ORG 0080H` and one `DS` per row, free rows unlabeled) MUST match. `tests/debugger_tests.rs` checks the table against `rom/monitor.sym`. If they disagree, that is a defect and goes in `TODO.md`.
 
 | Address | Size | Name | Initialized at boot |
 |---------|------|------|---------------------|
@@ -60,6 +60,7 @@ The I/O stubs run from RAM as self-modifying code. Real hardware runs it the sam
 
 - **Source:** `rom/monitor.asm`. **Image:** `rom/monitor.bin`, exactly 4096 bytes, assembled at `ORG 0F000H`, unused bytes 0xFF.
 - **Fixed address:** only one. COLD_START is the first byte of the image (0xF000, which is also 0x0000 through the overlay). Every other routine address can move from build to build.
+- **No WARM vector.** WARM (3.2) has no fixed address. A program reaches it only through the `G` return contract (`MONITOR_SPEC.md`); anything else that wants the monitor back jumps to F000, a cold start (banner, workspace reset). The CP/M exerciser shim (`tests/exerciser.rs`) does that at 0000. (Decided 2026-10-03.)
 - **No public entry points.** User programs MUST NOT call ROM routines by address. Programs do their own I/O through the ports in `DEVICE_SPECS.md`. ROM routine contracts are in `MONITOR_SPEC.md` (ROM Routine Contracts); they describe the code, not an ABI.
 - **Budget:** 4096 bytes. Used bytes = `ROM_END - 0F000H`, where `ROM_END` is a label after the last assembled byte. `make size` prints that number. The padded image size is not a measurement.
 - **Layout** (not normative): boot at F000, then WARM and MAIN_LOOP, the shared error exits, console I/O and print routines, input and parse routines, the commands, the storage commands, then the strings and ROM_END.
@@ -410,12 +411,14 @@ On hardware the Pi passes every byte the terminal sends; the key map does not ex
 | Convenience | Contract |
 |-------------|----------|
 | **Host input pump** | The host run loop reads pending host keyboard input at least once every 10,000 executed steps and puts the mapped bytes (7.1) into the console input FIFO in arrival order. The key source is injectable, so tests can script it. Console output is drained to host stdout as often. When stdin is not a terminal, its bytes go to the FIFO unmapped and Ctrl-C is the shell's. Code: `run_loop` in `src/main.rs`. |
+| **Idle wait** | A pump first takes what is pending without waiting. When that is nothing and the console input FIFO is empty, it blocks for host input for up to 1 ms (a terminal poll, or a wait on the stdin reader), then takes what arrived. This cuts the host CPU an 8080 polling `IN 02` at the prompt burns (measured 2026-10-03, release: about 28% of a core, was about 100%). The 8080 cannot see it: it adds no cycles. Test: `a_pump_waits_only_when_it_brings_nothing_and_the_fifo_is_empty` in `src/main.rs`. |
+| **End of piped input** | When stdin is not a terminal, end of input changes nothing: the FIFO just stays empty. The run ends on a halt or Ctrl-C (the shell's), never at EOF, so output the 8080 has not printed yet is never cut off. |
 | **Ctrl-C quits** | When the pump reads Ctrl-C, nothing goes into the FIFO. The run loop returns a quit status, and `main.rs` restores the terminal mode and exits. This works whatever the 8080 is doing, including `JMP $`. Test: script Ctrl-C while the CPU runs `JMP $`; the run loop returns quit within 10,000 steps, and `IN 01` never returns 03. |
-| **Halt** | The run loop returns a halted status when the CPU halts (5.8); v1 has no interrupt source that could wake it. `main.rs` prints `HLT at PC=xxxx` to host stdout, where xxxx is PC (the address after the HLT), restores the terminal, and exits. |
-| **Debugger** | Every step goes through the debugger (7.4), which records the trace ring and checks breakpoints. When the pump reads Ctrl-E, the bytes before it go into the FIFO and the debugger prompt opens before the next step. A halt is not a debugger stop: it ends the run as above. |
+| **Halt** | v1 has no interrupt source that could wake a halted CPU (5.8). In an interactive run (stdin is a terminal and there is no `--script`), a halt opens the debugger prompt with the reason `halt` (7.4): the user can inspect, and `q` quits. Otherwise (piped stdin, or `--script`) the run loop returns a halted status, and `main.rs` prints `HLT at PC=xxxx` to host stdout, where xxxx is PC (the address after the HLT), restores the terminal, and exits. Code: `halt_prompts` in `src/main.rs`. |
+| **Debugger** | Every step goes through the debugger (7.4), which records the trace ring and checks breakpoints. When the pump reads Ctrl-E, the bytes before it go into the FIFO and the debugger prompt opens before the next step. |
 | **Host banner and exit lines** | "8080 Emulator", the build timestamp, and any exit message go to host stdout from `main.rs`, never from the CPU core or from a device the 8080 can see. |
 | **Test harness** | Allowed only on the host side: the real port map from `build_bus` with the `Console`'s host side (scripted input and captured output); test `IoDevice`s mapped with `map_port`, for example one that records every port access; `load_program` (writes that bypass the ROM and the overlay); a CPU with no ROM loaded; `interrupt(rst)` (5.7); direct access to the registers, memory, `cycles`, `halted` and `interrupts_enabled`; the debugger's command parser (7.4). |
-| **No throttle** | The emulator runs at host speed. `cycles` counts T-states only. |
+| **No throttle** | The emulator runs at host speed, apart from the idle wait above. `cycles` counts T-states only. |
 
 ### 7.3 Port Trace Format
 
@@ -429,8 +432,9 @@ RESET
 
 - `pp` is the port and `vv` the byte transferred, each two uppercase hex digits (`MONITOR_SPEC.md` numeric output convention).
 - Any line MAY end with ` ; annotation`, free text after the semicolon.
+- **Repeats:** a run of N > 1 identical consecutive lines MAY be collapsed into one line, `<line> ; xN`, with N in decimal. A single line carries no ` ; x1`. The emulator debugger and the Pi daemon both collapse repeats this way, so a polling loop is one line in either trace and the traces diff cleanly. (Decided 2026-10-03.)
 - Both the emulator debugger and the Pi daemon emit this format. Hardware traces are diffed against emulator traces for the same ROM and input.
-- Only the line format is fixed. Which events a given tool records is decided with that tool.
+- Only the line format and the repeat rule are fixed. Which events a given tool records is decided with that tool.
 
 ### 7.4 Debugger
 
@@ -444,6 +448,7 @@ Host-side only. The 8080 cannot observe it: it adds no cycles, no port, no memor
 | `--debug` | Starts stopped, before the first instruction. |
 | `--script FILE` | Starts stopped and reads commands from FILE, one per line, before the terminal. Each line is echoed as `dbg> line`. Blank lines and lines starting with `#` are skipped. |
 | A breakpoint, watchpoint or I/O break | Stops (below). |
+| A halt, in an interactive run (7.2) | Stops with the reason `halt`. The CPU stays halted: `s` prints the registers line, and `c` stops again at once. |
 
 At the prompt the terminal is in line mode: the prompt is `dbg> `, Ctrl-C is the shell's, and end of input (Ctrl-D) is `q`. `c` and `s` return to the 8080. Commands come from the script until it runs out, then from the terminal; when stdin is not a terminal, a stop after the script has run out quits.
 
@@ -469,21 +474,21 @@ At the prompt the terminal is in line mode: the prompt is `dbg> `, Ctrl-C is the
 | `?` | One-line command summary. |
 | `q` | Quit the emulator, like Ctrl-C (7.2). |
 
-A bad command or argument prints one line `? message` and changes nothing. That holds in a script too; the script goes on.
+A bad command or argument prints one line `? message` and changes nothing. At the terminal the prompt goes on. In a script it fails fast: after the `? message` line the emulator exits with status 2, so a broken script never runs on with the wrong breakpoints. (Decided 2026-10-03.)
 
 **Bus transfers.** Watchpoints, I/O breaks and the port trace see the data transfers of each step: memory reads and writes made by the instruction (stack accesses and the interrupt-acknowledge push included) and every `IN` and `OUT`, ports FE and FF included. Opcode and operand fetches are not data transfers (use `b`). A write to F000-FFFF is a transfer even though the ROM ignores it. Transfers come in the 8080's bus order: a push (`PUSH`, `CALL`, `RST`, the acknowledge) writes the high byte to SP-1 first, then the low byte to SP-2; `XTHL` reads SP and SP+1, then writes H to SP+1 and L to SP. Mechanism: `Intel8080::transfers()` lists the last step's transfers. On hardware, operand fetches are ordinary MEMR cycles too (only the opcode fetch sets M1), so leaving them out is the debugger's choice, not something the 8228 status byte separates; `b` covers them. Recording transfers changes no CPU state and no cycle count.
 
 **Output.** Hex is uppercase and zero-padded (`MONITOR_SPEC.md` numeric output convention).
 
-- **Location:** `AAAA`, or `AAAA NAME` / `AAAA NAME+n` with the nearest symbol at or below AAAA.
+- **Location:** `AAAA`, or `AAAA NAME` / `AAAA NAME+n` with the nearest symbol at or below AAAA in the same memory-map region (section 1), so a user-area address is never named after the workspace.
 - **Registers line:** `PC=F28B SP=F000 A=44 F=56 -ZAP- BC=0B0D DE=0000 HL=0081 INTE=0 OVL=0`, then ` HLT` when halted. The flag field is S Z A P C, a letter when set and `-` when clear. OVL is the overlay flip-flop (section 4).
 - **Instruction line:** `AAAA  B0 B1 B2  MNEMONIC` with the bytes field 8 wide. Intel mnemonics as in `docs/reference/Complete_Intel_8080_Instruction_Set_Reference.txt`, operands in hex (`MVI A,0D`, `LXI H,0080`, `IN 02`). An address operand (jumps, calls, `LDA`, `STA`, `LHLD`, `SHLD`) equal to a symbol prints as the name (`CALL SKIP_SPACES`); immediate data (`LXI`) always prints in hex. The undocumented aliases (5.4) print with a star: `NOP*`, `JMP*`, `RET*`, `CALL*`. Wherever an instruction line is listed (`u`, `s`, a stop report; not ring lines), an address that is a symbol is preceded by a `NAME:` line.
 - **Ring line:** the instruction line padded with spaces to 34 characters, one space, then the registers before it ran: `A=44 F=56 BC=0B0D DE=0000 HL=0081 SP=F000`.
-- **Stop report:** a reason line, then the last 8 ring lines (the last one is the instruction that caused a watchpoint or I/O stop), then the registers line, then the next instruction. The reason line always begins a line: when the console output before a stop does not end with LF, the host writes CR LF first. Reasons: `* break LOCATION`, `* watch read AAAA VV`, `* watch write AAAA VV`, `* io IN PP VV`, `* io OUT PP VV`, `* ctrl-e`, `* start`.
+- **Stop report:** a reason line, then the last 8 ring lines (the last one is the instruction that caused a watchpoint or I/O stop), then the registers line, then the next instruction. The reason line always begins a line: when the console output before a stop does not end with LF, the host writes CR LF first. Reasons: `* break LOCATION`, `* watch read AAAA VV`, `* watch write AAAA VV`, `* io IN PP VV`, `* io OUT PP VV`, `* ctrl-e`, `* start`, `* halt`.
 
-**Port trace.** One 7.3 line per `IN` or `OUT` transfer, ports FE and FF included. A run of identical consecutive lines is written once, with the annotation ` ; xN` (N in decimal) when N > 1, so a polling loop is one line. Pending lines are written at every stop and at `t off` and quit. The debugger writes no `RESET` line: it has no reset. Diffing against a Pi daemon trace (7.3): the Pi never sees ports 70-FF (`DEVICE_SPECS.md`), so drop the FE and FF lines, and compare lines without the ` ; xN` annotation, since poll counts depend on timing.
+**Port trace.** One 7.3 line per `IN` or `OUT` transfer, ports FE and FF included. Repeats are collapsed by the 7.3 rule (`IN 02 02 ; x12`). Pending lines are written at every stop and at `t off` and quit, so a run split by a stop is written as two lines. The debugger writes no `RESET` line: it has no reset. Diffing against a Pi daemon trace (7.3): the Pi never sees ports 70-FF (`DEVICE_SPECS.md`), so drop the FE and FF lines, strip the ` ; xN` annotation, since poll counts depend on timing, then merge adjacent identical lines, since a stop splits a run (`grep -Ev '^(IN|OUT) F[EF] ' | sed 's/ ; x[0-9]*$//' | uniq`).
 
-**Symbols.** `rom/monitor.sym` is built with `monitor.bin` by `cd rom && make` and committed with it: one `AAAA NAME` line per code label in `monitor.asm`, from asl's NoICE output. EQU constants are left out: they mix workspace addresses with ports and characters. The emulator loads it from next to `monitor.bin` when present; without it a `NAME` argument is an error and output has no names.
+**Symbols.** `rom/monitor.sym` is built with `monitor.bin` by `cd rom && make` and committed with it: one `AAAA NAME` line per label in `monitor.asm`, from asl's NoICE output: the code labels and the workspace labels (1.1), so `w STOR_ADDR` works. EQU constants are left out: they are ports, characters and sizes. The emulator loads it from next to `monitor.bin` when present; without it a `NAME` argument is an error and output has no names.
 
 **Not in v1:** reset, writing registers or memory, conditional breakpoints, expressions beyond `NAME+n`, a TUI.
 

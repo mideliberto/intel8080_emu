@@ -20,7 +20,7 @@ all: $(ROM_BIN) $(ROM_SYM)
 $(ROM_P): $(ROM_SRC)
 	$(ASL) -cpu 8080 -L -g NOICE $(ROM_SRC)
 
-# Debugger symbols (ARCHITECTURE 7.4): one 'AAAA NAME' line per code label.
+# Debugger symbols (ARCHITECTURE 7.4): one 'AAAA NAME' line per label (code and workspace).
 # asl writes 0x80, not 0x0080: pad with zeros, then keep the last 4 digits.
 $(ROM_SYM): $(ROM_P)
 	sed -n 's/^DEFINE \([A-Z0-9_]*\) 0x\([0-9a-f]*\)$$/000\2 \1/p' monitor.noi | sed 's/^0*\([0-9a-f]\{4\} \)/\1/' | tr a-f A-F | sort > $(ROM_SYM)

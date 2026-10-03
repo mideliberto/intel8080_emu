@@ -47,7 +47,7 @@ impl Rig {
     fn cmd(&mut self, line: &str) -> String {
         let (flow, out) = self.dbg.command(&mut self.cpu, line);
         match flow {
-            Flow::Stay => out,
+            Flow::Stay | Flow::Error => out,
             Flow::Resume => {
                 let reason = self.dbg.run(&mut self.cpu, BUDGET);
                 let reason = reason.unwrap_or_else(|| panic!("no stop after {:?}, PC={:04X}", line, self.cpu.pc));
@@ -230,9 +230,9 @@ fn bad_commands_change_nothing() {
         ("io 1 in x", "? usage: c | s [n] | r | m addr [len] | u [addr] [n] | b addr | w addr[-end] [r|w] | io port [in|out] | bl | bc [addr] | t file|off | ring [n] | sym addr | ? | q\n"),
         ("s 1 2", "? usage: c | s [n] | r | m addr [len] | u [addr] [n] | b addr | w addr[-end] [r|w] | io port [in|out] | bl | bc [addr] | t file|off | ring [n] | sym addr | ? | q\n"),
     ] {
-        assert_eq!(r.cmd(line), err, "{}", line);
+        assert_eq!(r.dbg.command(&mut r.cpu, line), (Flow::Error, err.to_string()), "{}", line);
     }
-    assert_eq!(r.cmd(""), "");
+    assert_eq!(r.dbg.command(&mut r.cpu, ""), (Flow::Stay, String::new()));
     assert_eq!(r.cmd("?"), "c | s [n] | r | m addr [len] | u [addr] [n] | b addr | w addr[-end] [r|w] | io port [in|out] | bl | bc [addr] | t file|off | ring [n] | sym addr | ? | q\n");
     for bad in ["F00 X", "F000", "F000 A B", "G000 A"] {
         assert_eq!(r.dbg.load_symbols(bad), Err(format!("bad symbol line: {}", bad)));
@@ -264,7 +264,54 @@ fn port_trace_collapses_repeats_and_sees_fe_ff() {
     assert_eq!(r.cmd("c").lines().next(), Some("* io IN FF 00"));
 }
 
+#[test]
+fn port_trace_repeat_rule() {
+    // ARCHITECTURE 7.3: a run of N > 1 identical lines is `<line> ; xN`, N in decimal;
+    // a single line has no annotation; a run ends at the first different line.
+    // MVI B,0C / L: IN 02 / DCR B / JNZ L / OUT 10 / IN 02 / IN 02 / HLT
+    let mut r = ram(&[0x06, 0x0C, 0xDB, 0x02, 0x05, 0xC2, 0x02, 0x01, 0xD3, 0x10, 0xDB, 0x02, 0xDB, 0x02, 0x76]);
+    let path = r.trace_path();
+    r.cmd(&format!("t {}", path));
+    r.cmd("b 010C");
+    r.cmd("c");
+    // A stop writes the held-back line.
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "IN 02 02 ; x12\nOUT 10 02\nIN 02 02\n");
+    r.cmd("s 2");
+    r.cmd("t off");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "IN 02 02 ; x12\nOUT 10 02\nIN 02 02\nIN 02 02\n");
+}
+
 // ---------- The real ROM ----------
+
+#[test]
+fn workspace_symbols_match_architecture_1_1() {
+    // rom/monitor.asm declares the workspace as labels (ORG 80h + DS), so monitor.sym has
+    // one line per named row of the table, at its address.
+    let doc = std::fs::read_to_string("docs/ARCHITECTURE.md").unwrap();
+    let table = doc.split("### 1.1 Workspace Layout").nth(1).unwrap().split("\n\n").nth(2).unwrap();
+    let mut want = Vec::new();
+    for row in table.lines().skip(2) {
+        let cols: Vec<&str> = row.split('|').map(str::trim).collect();
+        let name = cols[3].split(' ').next().unwrap();
+        if name != "free" {
+            want.push(format!("{} {}", &cols[1][..4], name));
+        }
+    }
+    assert_eq!(want.len(), 9, "{}", table);
+    let sym = std::fs::read_to_string("rom/monitor.sym").unwrap();
+    let got: Vec<&str> = sym.lines().filter(|l| l < &"0100").collect();
+    assert_eq!(got, want);
+    // Named in the debugger; a user-area address is never NAME+n of the workspace.
+    let mut r = rom();
+    assert_eq!(r.cmd("sym stor_addr+2"), "00E9 STOR_ADDR+2\n");
+    assert_eq!(r.cmd("sym 00FF"), "00FF STOR_ADDR+18\n");
+    assert_eq!(r.cmd("sym 0100"), "0100\n");
+    assert_eq!(r.cmd("sym EFFF"), "EFFF\n");
+    assert_eq!(r.cmd("sym 007F"), "007F\n");
+    r.cmd("b BOOT_CONTINUE");
+    r.cmd("c");
+    assert!(r.cmd("u BOOT_CONTINUE 5").contains("  SHLD LAST_DUMP_ADDR\n"));
+}
 
 #[test]
 fn break_at_a_rom_symbol() {
@@ -394,6 +441,25 @@ fn script_runs_echoed_skips_comments_and_quits_when_it_runs_out() {
     assert!(out.contains(&format!("\ndbg> r\nPC={:04X} ", cmd_dump)), "{}", out);
     assert!(!out.contains("comment") && !out.contains("dbg> \n"), "{}", out);
     assert!(!out.contains("HLT at"), "{}", out);
+}
+
+#[test]
+fn a_bad_script_line_exits_2() {
+    let (code, out) = emulator(&["--script", "s.dbg"], "r\nb NOPE\nr\n", b"");
+    assert_eq!(code, Some(2), "{}", out);
+    assert!(out.ends_with("\ndbg> b NOPE\n? unknown symbol: NOPE\n"), "{}", out);
+}
+
+#[test]
+fn a_piped_or_scripted_halt_exits() {
+    // G to a HLT at 0100. Not a terminal: the halt ends the run (ARCHITECTURE 7.2).
+    let input = b"F 0100 0100 76\rG 0100\r";
+    let (code, out) = emulator(&[], "", input);
+    assert_eq!(code, Some(0), "{}", out);
+    assert!(out.ends_with("\nHLT at PC=0101\n"), "{}", out);
+    let (code, out) = emulator(&["--script", "s.dbg"], "c\n", input);
+    assert_eq!(code, Some(0), "{}", out);
+    assert!(out.ends_with("\nHLT at PC=0101\n") && !out.contains("* halt"), "{}", out);
 }
 
 #[test]

@@ -116,7 +116,7 @@ Silent truncation is forbidden. `F 10200 1020F 1AA` is an error, not a fill of 0
 1. Arguments are parsed left to right. Within an argument, the digit-count check and (for byte forms) the value check are part of parsing it.
 2. The first argument that is missing or invalid prints its command's syntax message (Messages), and the command stops.
 3. The `Invalid range` checks (end < start, count 0) run only after every argument has parsed. Example: `F 0300 0200 ZZ` prints `Invalid hex value`.
-4. A command that reports an argument or syntax error (`Invalid address`, `Invalid hex value`, `Invalid port/value`, `Invalid range`) MUST NOT have written memory outside the workspace, and MUST NOT have written any I/O port. L and W read port 0Ch to check "mounted" before they parse (sections 6.8 and 6.12). That is a read, and it is allowed.
+4. A command that reports an argument or syntax error (`Invalid address`, `Invalid hex value`, `Invalid port/value`, `Invalid range`) MUST NOT have written memory outside the workspace and the stack page (EF00-EFFF), and MUST NOT have written any I/O port. L and W read port 0Ch to check "mounted" before they parse (sections 6.8 and 6.12). That is a read, and it is allowed.
 5. Device-reported errors (`Storage error`, `Invalid filename`, `Mount failed`) are printed after the port accesses that produced them. Rule 4 does not apply to them.
 
 ---
@@ -164,6 +164,7 @@ Notation: `[x]` is optional. Numeric forms follow 4.2. "No output" means that on
 - For each mismatch, in ascending order, prints `AAAA:XX BBBB:YY`: the first-range address and byte, then the second-range address and byte.
 - If the ranges are identical, there is no output.
 - `dest` addresses wrap past FFFF. `C 0000 FFFF dest` compares 65536 bytes.
+- C's own stack use changes bytes in the stack page (EF00-EFFF) while it runs. A compare whose ranges cover them reports those bytes, as S reports its own pattern copy (6.11).
 - Errors: `Invalid hex value` for a missing or invalid argument. `Invalid range` for end < start.
 
 ### 6.2 D: Dump

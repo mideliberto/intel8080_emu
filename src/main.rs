@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::io::{IsTerminal, Read, Write};
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -20,10 +20,16 @@ const BUILD_TIMESTAMP: &str = env!("BUILD_TIMESTAMP");
 /// Host input is read at least this often, in executed steps (ARCHITECTURE 7.2).
 const PUMP_STEPS: u64 = 10_000;
 
+/// How long a pump waits for host input when it brought nothing and the console
+/// input FIFO is empty (ARCHITECTURE 7.2), so an idle 8080 does not spin a host core.
+const IDLE_WAIT: Duration = Duration::from_millis(1);
+
 #[derive(Debug, PartialEq)]
 enum Exit {
     Halted,
     Quit,
+    /// A `--script` line was bad (ARCHITECTURE 7.4): exit status 2.
+    BadScript,
 }
 
 /// Host keys that never reach the console (ARCHITECTURE 7.1).
@@ -38,6 +44,7 @@ const USAGE: &str = "usage: intel8080 [--debug] [--script FILE]";
 fn main() {
     // ARCHITECTURE 7.4, Entry.
     let mut start_stopped = false;
+    let mut scripted = false;
     let mut script = Vec::new();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -53,6 +60,7 @@ fn main() {
                 let lines = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#'));
                 script.extend(lines.map(String::from));
                 start_stopped = true;
+                scripted = true;
             }
             _ => {
                 eprintln!("{}", USAGE);
@@ -84,22 +92,29 @@ fn main() {
             default_hook(info);
         }));
     }
+    let halt_stops = halt_prompts(terminal, scripted);
     let mut script = script.into_iter();
     let mut stop = |cpu: &mut Intel8080, dbg: &mut Debugger, reason: &str| {
         if terminal {
             let _ = disable_raw_mode();
         }
-        let resume = prompt(cpu, dbg, reason, &mut script, terminal);
-        if terminal && resume {
+        let flow = prompt(cpu, dbg, reason, &mut script, terminal);
+        if terminal && flow == Flow::Resume {
             let _ = enable_raw_mode();
         }
-        resume
+        flow
     };
-    let exit = if start_stopped && !stop(&mut cpu, &mut dbg, "start") {
+    let first = if start_stopped { stop(&mut cpu, &mut dbg, "start") } else { Flow::Resume };
+    let exit = if first == Flow::Error {
+        Exit::BadScript
+    } else if first != Flow::Resume {
         Exit::Quit
     } else if terminal {
-        let keys = || pump(std::iter::from_fn(host_key));
-        run_loop(&mut cpu, &console, &mut dbg, keys, &mut stop, &mut stdout)
+        let keys = |wait| {
+            let _ = event::poll(wait);
+            pump(std::iter::from_fn(host_key))
+        };
+        run_loop(&mut cpu, &console, &mut dbg, keys, &mut stop, halt_stops, &mut stdout)
     } else {
         // Not a terminal: stdin bytes go to the console unmapped. Ctrl-C is the shell's.
         let (tx, rx) = mpsc::channel();
@@ -112,8 +127,20 @@ fn main() {
                 }
             }
         });
-        let bytes = || (rx.try_iter().flatten().collect(), None);
-        run_loop(&mut cpu, &console, &mut dbg, bytes, &mut stop, &mut stdout)
+        let bytes = |wait| {
+            let mut bytes = match rx.recv_timeout(wait) {
+                Ok(bytes) => bytes,
+                Err(RecvTimeoutError::Timeout) => vec![],
+                // End of input: runs end on HLT or Ctrl-C (7.2), so wait like an idle terminal.
+                Err(RecvTimeoutError::Disconnected) => {
+                    std::thread::sleep(wait);
+                    vec![]
+                }
+            };
+            bytes.extend(rx.try_iter().flatten());
+            (bytes, None)
+        };
+        run_loop(&mut cpu, &console, &mut dbg, bytes, &mut stop, halt_stops, &mut stdout)
     };
     if terminal {
         let _ = disable_raw_mode();
@@ -123,73 +150,95 @@ fn main() {
     match exit {
         Exit::Halted => println!("\nHLT at PC={:04X}", cpu.pc),
         Exit::Quit => println!(),
+        Exit::BadScript => {
+            drop(dbg); // writes the pending port trace lines
+            std::process::exit(2);
+        }
     }
 }
 
+/// Whether a halt opens the debugger prompt (ARCHITECTURE 7.2): only in an interactive
+/// run. A piped or scripted run prints `HLT at PC=xxxx` and exits.
+fn halt_prompts(terminal: bool, scripted: bool) -> bool {
+    terminal && !scripted
+}
+
 /// The debugger prompt (ARCHITECTURE 7.4): prints the stop report, then runs commands
-/// from the script, then from the terminal. True: resume the 8080. False: quit.
+/// from the script, then from the terminal. Returns Resume (back to the 8080), Quit,
+/// or Error (a bad script line; a bad terminal line only prints its `? message`).
 fn prompt(
     cpu: &mut Intel8080,
     dbg: &mut Debugger,
     reason: &str,
     script: &mut impl Iterator<Item = String>,
     terminal: bool,
-) -> bool {
+) -> Flow {
     print!("{}", dbg.report(cpu, reason));
     loop {
-        let line = match script.next() {
+        let (line, scripted) = match script.next() {
             Some(line) => {
                 println!("dbg> {}", line);
-                line
+                (line, true)
             }
             None if terminal => {
                 print!("dbg> ");
                 let _ = std::io::stdout().flush();
                 let mut line = String::new();
                 match std::io::stdin().read_line(&mut line) {
-                    Ok(1..) => line,
-                    _ => return false, // end of input is q
+                    Ok(1..) => (line, false),
+                    _ => return Flow::Quit, // end of input is q
                 }
             }
-            None => return false,
+            None => return Flow::Quit,
         };
         let (flow, out) = dbg.command(cpu, &line);
         print!("{}", out);
         let _ = std::io::stdout().flush();
         match flow {
             Flow::Stay => {}
-            Flow::Resume => return true,
-            Flow::Quit => return false,
+            Flow::Error if !scripted => {}
+            flow => return flow,
         }
     }
 }
 
-/// Runs until the CPU halts, `input` signals quit, or `prompt` returns false.
-/// `input` returns the console bytes that arrived since its last call, and a host
-/// signal that came after them; it is called before the first step and then every
-/// PUMP_STEPS steps. Console output is drained to `out` as often. Every step goes
-/// through the debugger; a debugger stop or Ctrl-E calls `prompt` with the reason,
-/// after a CR LF if the console output so far does not end with LF.
+/// Runs until the CPU halts (unless `halt_stops`), `input` signals quit, or `prompt`
+/// returns anything but Resume. `input(wait)` waits up to `wait` for host input and
+/// returns the console bytes that arrived since its last call, and a host signal that
+/// came after them. Each pump calls it with no wait, then, when it brought nothing and
+/// the console input FIFO is empty, once more with IDLE_WAIT. A pump runs before the
+/// first step and then every PUMP_STEPS steps. Console output is drained to `out` as
+/// often. Every step goes through the debugger; a debugger stop, Ctrl-E, or a halt with
+/// `halt_stops` calls `prompt` with the reason, after a CR LF if the console output so
+/// far does not end with LF.
 fn run_loop(
     cpu: &mut Intel8080,
     console: &RefCell<Console>,
     dbg: &mut Debugger,
-    mut input: impl FnMut() -> (Vec<u8>, Option<Signal>),
-    mut prompt: impl FnMut(&mut Intel8080, &mut Debugger, &str) -> bool,
+    mut input: impl FnMut(Duration) -> (Vec<u8>, Option<Signal>),
+    mut prompt: impl FnMut(&mut Intel8080, &mut Debugger, &str) -> Flow,
+    halt_stops: bool,
     out: &mut impl Write,
 ) -> Exit {
     let mut last = b'\n';
     loop {
         last = drain(console, out).unwrap_or(last);
-        if cpu.halted {
-            return Exit::Halted;
-        }
-        let (bytes, signal) = input();
-        console.borrow_mut().push_input(&bytes);
-        let stop = match signal {
-            Some(Signal::Quit) => return Exit::Quit,
-            Some(Signal::Debug) => Some("ctrl-e".to_string()),
-            None => dbg.run(cpu, PUMP_STEPS),
+        let stop = if cpu.halted {
+            if !halt_stops {
+                return Exit::Halted;
+            }
+            Some("halt".to_string())
+        } else {
+            let (mut bytes, mut signal) = input(Duration::ZERO);
+            if bytes.is_empty() && signal.is_none() && !console.borrow().has_input() {
+                (bytes, signal) = input(IDLE_WAIT);
+            }
+            console.borrow_mut().push_input(&bytes);
+            match signal {
+                Some(Signal::Quit) => return Exit::Quit,
+                Some(Signal::Debug) => Some("ctrl-e".to_string()),
+                None => dbg.run(cpu, PUMP_STEPS),
+            }
         };
         if let Some(reason) = stop {
             last = drain(console, out).unwrap_or(last);
@@ -198,8 +247,10 @@ fn run_loop(
                 let _ = out.flush();
                 last = b'\n';
             }
-            if !prompt(cpu, dbg, &reason) {
-                return Exit::Quit;
+            match prompt(cpu, dbg, &reason) {
+                Flow::Resume => {}
+                Flow::Error => return Exit::BadScript,
+                Flow::Stay | Flow::Quit => return Exit::Quit,
             }
         }
     }
@@ -327,13 +378,14 @@ mod tests {
         (cpu, console, dir)
     }
 
-    /// Each call of the returned input source pumps the next batch of keys.
-    /// Plays `batches`, then empty pumps. Panics if the run loop is still going 100 pumps
-    /// later, so a regression fails the test instead of hanging it.
-    fn script(batches: Vec<Vec<KeyEvent>>) -> impl FnMut() -> (Vec<u8>, Option<Signal>) {
+    /// Each pump of the returned input source plays the next batch of keys on its no-wait
+    /// call; an idle wait brings nothing. Plays `batches`, then empty pumps. Panics if the
+    /// run loop is still going 100 pumps later, so a regression fails the test instead of
+    /// hanging it.
+    fn script(batches: Vec<Vec<KeyEvent>>) -> impl FnMut(Duration) -> (Vec<u8>, Option<Signal>) {
         let mut batches = batches.into_iter();
         let mut idle = 0;
-        move || match batches.next() {
+        move |wait| match if wait.is_zero() { batches.next() } else { Some(vec![]) } {
             Some(batch) => pump(batch.into_iter()),
             None => {
                 idle += 1;
@@ -343,10 +395,10 @@ mod tests {
         }
     }
 
-    /// Runs the loop with a fresh debugger and no stops expected.
-    fn run(cpu: &mut Intel8080, console: &RefCell<Console>, keys: impl FnMut() -> (Vec<u8>, Option<Signal>), out: &mut Vec<u8>) -> Exit {
-        let no_stop = |_: &mut Intel8080, _: &mut Debugger, reason: &str| -> bool { panic!("stop: {}", reason) };
-        run_loop(cpu, console, &mut Debugger::new(), keys, no_stop, out)
+    /// Runs the loop with a fresh debugger, halts exiting, and no stops expected.
+    fn run(cpu: &mut Intel8080, console: &RefCell<Console>, keys: impl FnMut(Duration) -> (Vec<u8>, Option<Signal>), out: &mut Vec<u8>) -> Exit {
+        let no_stop = |_: &mut Intel8080, _: &mut Debugger, reason: &str| -> Flow { panic!("stop: {}", reason) };
+        run_loop(cpu, console, &mut Debugger::new(), keys, no_stop, false, out)
     }
 
     #[test]
@@ -389,9 +441,9 @@ mod tests {
         let mut stops = Vec::new();
         let prompt = |cpu: &mut Intel8080, dbg: &mut Debugger, reason: &str| {
             stops.push((reason.to_string(), cpu.cycles, dbg.command(cpu, "r").1));
-            true
+            Flow::Resume
         };
-        let exit = run_loop(&mut cpu, &console, &mut Debugger::new(), keys, prompt, &mut Vec::new());
+        let exit = run_loop(&mut cpu, &console, &mut Debugger::new(), keys, prompt, false, &mut Vec::new());
         assert_eq!(exit, Exit::Quit);
         assert_eq!(stops.len(), 1);
         let (reason, cycles, regs) = &stops[0];
@@ -414,10 +466,10 @@ mod tests {
         let mut stops = 0;
         let prompt = |cpu: &mut Intel8080, dbg: &mut Debugger, _: &str| {
             stops += 1;
-            dbg.command(cpu, if stops < 2 { "c" } else { "q" }).0 == Flow::Resume
+            dbg.command(cpu, if stops < 2 { "c" } else { "q" }).0
         };
         let mut out = Vec::new();
-        assert_eq!(run_loop(&mut cpu, &console, &mut dbg, script(vec![]), prompt, &mut out), Exit::Quit);
+        assert_eq!(run_loop(&mut cpu, &console, &mut dbg, script(vec![]), prompt, false, &mut out), Exit::Quit);
         // First stop after "A": CR LF added. Second stop after LF: nothing added.
         assert_eq!(out, b"A\r\n\n");
     }
@@ -431,10 +483,85 @@ mod tests {
         let mut stops = Vec::new();
         let prompt = |cpu: &mut Intel8080, dbg: &mut Debugger, reason: &str| {
             stops.push((reason.to_string(), cpu.pc));
-            dbg.command(cpu, if stops.len() < 3 { "c" } else { "q" }).0 == Flow::Resume
+            dbg.command(cpu, if stops.len() < 3 { "c" } else { "q" }).0
         };
-        let exit = run_loop(&mut cpu, &console, &mut dbg, script(vec![]), prompt, &mut Vec::new());
+        let exit = run_loop(&mut cpu, &console, &mut dbg, script(vec![]), prompt, false, &mut Vec::new());
         assert_eq!(exit, Exit::Quit);
         assert_eq!(stops, vec![("break 0001".to_string(), 1); 3]);
+    }
+
+    #[test]
+    fn a_pump_waits_only_when_it_brings_nothing_and_the_fifo_is_empty() {
+        // IN 01 / JMP 0000: reads one byte per loop, so "ab" keeps the FIFO non-empty for a while.
+        let (mut cpu, console, _dir) = machine(&[0xDB, 0x01, 0xC3, 0x00, 0x00]);
+        let mut waits = Vec::new();
+        let mut batches = vec![vec![], vec![ch('a'), ch('b')], vec![], vec![ctrl('c')]].into_iter();
+        let keys = |wait: Duration| {
+            waits.push((wait, console.borrow().has_input()));
+            pump(batches.next().unwrap().into_iter())
+        };
+        assert_eq!(run(&mut cpu, &console, keys, &mut Vec::new()), Exit::Quit);
+        let zero = Duration::ZERO;
+        assert_eq!(
+            waits,
+            [
+                (zero, false),      // pump 1: nothing, FIFO empty...
+                (IDLE_WAIT, false), // ...so it waits, and "ab" arrives
+                (zero, false),      // pump 2: the 8080 read both bytes, nothing comes...
+                (IDLE_WAIT, false), // ...so it waits, and Ctrl-C arrives
+            ]
+        );
+
+        // Bytes still in the FIFO: no wait.
+        let (mut cpu, console, _dir) = machine(&[0xC3, 0x00, 0x00]);
+        console.borrow_mut().push_input(b"x");
+        let mut waits = Vec::new();
+        let mut batches = vec![vec![], vec![ctrl('c')]].into_iter();
+        let keys = |wait: Duration| {
+            waits.push(wait);
+            pump(batches.next().unwrap().into_iter())
+        };
+        assert_eq!(run(&mut cpu, &console, keys, &mut Vec::new()), Exit::Quit);
+        assert_eq!(waits, [Duration::ZERO, Duration::ZERO]);
+    }
+
+    #[test]
+    fn halt_prompts_only_in_an_interactive_run() {
+        assert!(halt_prompts(true, false));
+        assert!(!halt_prompts(true, true), "scripted");
+        assert!(!halt_prompts(false, false), "piped");
+        assert!(!halt_prompts(false, true));
+    }
+
+    #[test]
+    fn a_halt_opens_the_prompt_when_asked_and_q_quits() {
+        // MVI A,41h / OUT 00 / HLT
+        let (mut cpu, console, _dir) = machine(&[0x3E, 0x41, 0xD3, 0x00, 0x76]);
+        let mut stops = Vec::new();
+        let prompt = |cpu: &mut Intel8080, dbg: &mut Debugger, reason: &str| {
+            stops.push((reason.to_string(), dbg.command(cpu, "r").1));
+            // c on a halted CPU stops again at once: v1 has nothing to wake it.
+            dbg.command(cpu, if stops.len() < 2 { "c" } else { "q" }).0
+        };
+        let mut out = Vec::new();
+        let exit = run_loop(&mut cpu, &console, &mut Debugger::new(), script(vec![]), prompt, true, &mut out);
+        assert_eq!(exit, Exit::Quit);
+        assert_eq!(out, b"A\r\n", "the report starts on its own line");
+        assert_eq!(stops.len(), 2);
+        for (reason, regs) in &stops {
+            assert_eq!(reason, "halt");
+            assert!(regs.starts_with("PC=0005 ") && regs.ends_with(" HLT\n"), "{}", regs);
+        }
+    }
+
+    #[test]
+    fn a_bad_script_line_ends_the_run() {
+        // JMP 0000
+        let (mut cpu, console, _dir) = machine(&[0xC3, 0x00, 0x00]);
+        let mut dbg = Debugger::new();
+        dbg.command(&mut cpu, "b 0000");
+        let prompt = |_: &mut Intel8080, _: &mut Debugger, _: &str| Flow::Error;
+        let exit = run_loop(&mut cpu, &console, &mut dbg, script(vec![]), prompt, false, &mut Vec::new());
+        assert_eq!(exit, Exit::BadScript);
     }
 }

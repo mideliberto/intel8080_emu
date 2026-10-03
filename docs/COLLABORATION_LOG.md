@@ -63,6 +63,17 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-03: Host Idle, Halt Prompt, Fail-Fast Scripts, Workspace Symbols, Trace Repeats
+**Decision:** Mike closed the 2026-10-03 open decisions:
+- **Host idle CPU:** when a pump brings nothing and the console input FIFO is empty, block for host input up to 1 ms instead of polling with `Duration::ZERO`. Host-only (ARCHITECTURE 7.2).
+- **Piped stdin EOF:** no change. A piped run ends on HLT or Ctrl-C, never at end of input (7.2).
+- **WARM:** keep cold-start re-entry. No fixed WARM vector; the exerciser shim keeps `JMP F000` at 0000 (ARCHITECTURE 2).
+- **Debugger:** (a) in an interactive run (terminal, no `--script`) HLT opens the `dbg>` prompt with `* halt`; piped and scripted runs still print `HLT at PC=xxxx` and exit. (b) A bad `--script` line exits with status 2; at the terminal a bad command still only prints `? message`. (c) The workspace is declared as labels (`ORG 0080H` + `DS`, matching ARCHITECTURE 1.1) so `monitor.sym` names it; ROM bytes unchanged. (d) Port-trace repeats collapse as `<line> ; xN` in the 7.3 format itself, for the debugger and the Pi daemon alike.
+- **MONITOR_SPEC wording:** 4.4 rule 4 allows writes to the stack page (EF00-EFFF) as well as the workspace; 6.1 notes that C over the stack page reports the bytes its own stack use changed, as S does for its pattern copy (6.11).
+
+**Rationale:** At the prompt the emulator spun a full host core. HLT ending an interactive session threw away the state you'd want to inspect. A script that carries on past a bad line runs with the wrong breakpoints and produces confidently wrong output. Workspace names make `w STOR_ADDR` work. One repeat rule for both tracers is what lets them diff.
+**Mantra check:** No WARM vector, no EOF exit: both were "add a mechanism" options and both were declined. The workspace labels are a source-only change; the assembled ROM is byte-identical apart from the DATE/TIME stamp.
+
 ### 2026-10-02: Hardware Alignment: Buildable, One Hard Fix
 **Decision:** Accept the hardware-alignment pass. The changes that matter:
 - The WAIT flip-flop is set from the 8224 STSTB, AND NOT RESET, AND D4/D6, AND the port window, not from SYNC.
@@ -450,7 +461,7 @@ Console I/O debugging session:
 - Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
 **Testing (verified 2026-10-03):**
-- 7 host + 130 CPU + 36 device + 23 monitor + 12 debugger = 208, all passing (strict transcript harness, reference-model CPU tests, port-level device tests)
+- 11 host + 130 CPU + 36 device + 23 monitor + 16 debugger = 216, all passing (strict transcript harness, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 
 ### In Progress
@@ -460,7 +471,7 @@ Console I/O debugging session:
 
 ### Open Decisions
 
-Host-only questions from 2026-10-03 (idle CPU at the prompt, exit at piped EOF, debugger options) and two MONITOR_SPEC wording questions from step E (the stack page in 4.4 rule 4 and in C's 65536-byte compare), the exerciser shim's exit (F000 vs a fixed WARM vector); see `TODO.md` Open Decisions. Everything else closed 2026-10-02. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
+The 2026-10-03 set (idle CPU, piped EOF, debugger options, MONITOR_SPEC 4.4 rule 4 and 6.1 wording, shim exit vs WARM) closed 2026-10-03; see Key Decisions. Still open, both host-only (`TODO.md` Open Decisions): the idle wait's slowdown of compute-bound programs, and the debugger's NAME+n region rule. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
 
 ### Blocked/Deferred
 
@@ -476,6 +487,13 @@ Host-only questions from 2026-10-03 (idle CPU at the prompt, exit at piped EOF, 
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: The 2026-10-03 Decisions Implemented
+- Host idle wait (1 ms when a pump brings nothing and the FIFO is empty); interactive HLT opens `dbg>` (piped and scripted runs still print `HLT at PC=xxxx` and exit); a bad `--script` line exits 2; piped EOF unchanged and now written down; no WARM vector, the shim keeps F000.
+- Workspace declared as `ORG 0080H` + `DS` per ARCHITECTURE 1.1: `monitor.sym` gains 9 names, ROM bytes identical to the previous bin except DATE/TIME (diffed). The 7.3 repeat rule (`<line> ; xN`, decimal, no ` ; x1`) moved into 7.3; the debugger already wrote it. MONITOR_SPEC 4.4 rule 4 and 6.1 reworded.
+- Tests 208 -> 216 (pump wait choice, halt-prompt decision and path, bad script exits 2, workspace symbols vs table 1.1, trace repeat format). Release exercisers 4/4.
+- Review fixes: Current State open decisions rewritten; 7.2 idle wait says what was measured; 7.4 diff recipe merges stop-split runs (`uniq`); README piped vs `--script` endings; stale comments in `monitor_tests.rs` and `rom/Makefile`.
+- What bit us: the decided idle trigger also fires for compute-bound programs (empty FIFO): a 26M-step loop runs about 15x slower in release. And workspace labels made "nearest symbol" name user RAM (`0100 STOR_ADDR+19`), so NAME+n now stays within one memory-map region. Both shipped and logged in TODO Open Decisions for Mike.
 
 ### 2026-10-03: The ROM to MONITOR_SPEC (step E)
 - `rom/monitor.asm` rewritten on the review's prototypes: WARM (`LXI SP` before MAIN_LOOP) that every command and error tail jumps to, one tail per message, no POP cleanup chains. One parser (C:D:E, digit limit in B) for READ_HEX_WORD and READ_HEX_ADDR24 with the absent (CY Z) / invalid (CY, NZ) contract and the terminator check; READ_HEX_BYTE on top for byte forms. One RANGE helper for C, D, F, S; both `CPI 0F0H` heuristics gone.

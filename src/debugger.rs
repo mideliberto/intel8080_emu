@@ -22,6 +22,8 @@ pub enum Flow {
     Stay,
     Resume,
     Quit,
+    /// The command was bad and changed nothing; the output is its `? message` line.
+    Error,
 }
 
 /// One step as the ring records it: where, the bytes there, and the registers before it ran.
@@ -187,7 +189,7 @@ impl Debugger {
         let mut out = String::new();
         match self.exec(cpu, line, &mut out) {
             Ok(flow) => (flow, out),
-            Err(e) => (Flow::Stay, format!("? {}\n", e)),
+            Err(e) => (Flow::Error, format!("? {}\n", e)),
         }
     }
 
@@ -333,9 +335,15 @@ impl Debugger {
         }
     }
 
-    /// NAME, NAME+n with the nearest symbol at or below `addr`, or AAAA.
+    /// The nearest symbol at or below `addr` in its memory-map region (ARCHITECTURE 1),
+    /// so a user-area address is never named after the workspace.
+    fn nearest(&self, addr: u16) -> Option<&(u16, String)> {
+        self.symbols.iter().rev().find(|s| s.0 <= addr && region(s.0) == region(addr))
+    }
+
+    /// NAME, NAME+n with the nearest symbol, or AAAA.
     fn symbolic(&self, addr: u16) -> String {
-        match self.symbols.iter().rev().find(|s| s.0 <= addr) {
+        match self.nearest(addr) {
             Some((a, name)) if *a == addr => name.clone(),
             Some((a, name)) => format!("{}+{:X}", name, addr - a),
             None => format!("{:04X}", addr),
@@ -344,7 +352,7 @@ impl Debugger {
 
     /// AAAA, or AAAA and its symbolic form.
     fn location(&self, addr: u16) -> String {
-        if self.symbols.iter().any(|s| s.0 <= addr) {
+        if self.nearest(addr).is_some() {
             format!("{:04X} {}", addr, self.symbolic(addr))
         } else {
             format!("{:04X}", addr)
@@ -383,6 +391,17 @@ impl Debugger {
             s.hl,
             s.sp
         )
+    }
+}
+
+/// The memory-map region (ARCHITECTURE 1) holding `addr`: unused, workspace, user, stack, ROM.
+fn region(addr: u16) -> u8 {
+    match addr {
+        0x0000..=0x007F => 0,
+        0x0080..=0x00FF => 1,
+        0x0100..=0xEEFF => 2,
+        0xEF00..=0xEFFF => 3,
+        0xF000..=0xFFFF => 4,
     }
 }
 

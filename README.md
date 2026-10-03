@@ -86,11 +86,11 @@ Ready.
 > 
 ```
 
-Ctrl-C quits the emulator. Ctrl-E opens the debugger. Host key mapping: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). With stdin piped instead of a terminal, its bytes go straight to the console. A piped run ends only on HLT (`HLT at PC=xxxx`) or Ctrl-C; at end of input the monitor just waits at its prompt. Example: `printf 'F 0200 0200 76\rG 0200\r' | cargo run`.
+Ctrl-C quits the emulator. Ctrl-E opens the debugger. Host key mapping: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). With stdin piped instead of a terminal, its bytes go straight to the console. A piped run ends only on HLT (`HLT at PC=xxxx`) or Ctrl-C; at end of input the monitor just waits at its prompt. A `--script` run also prints `HLT at PC=xxxx` and exits on a halt; see Debugger for how else it ends. In an interactive terminal run with no `--script`, HLT opens the debugger prompt instead (`q` quits). Example: `printf 'F 0200 0200 76\rG 0200\r' | cargo run`.
 
 ## Debugger
 
-Host-side; the 8080 never sees it. Ctrl-E stops the CPU and opens a `dbg>` prompt; `cargo run -- --debug` starts stopped; `cargo run -- --script FILE` runs debugger commands from FILE first (each echoed as `dbg> ...`). ROM labels from `rom/monitor.sym` work anywhere an address does, as `NAME` or `NAME+n`. Numbers are hex.
+Host-side; the 8080 never sees it. Ctrl-E stops the CPU and opens a `dbg>` prompt; `cargo run -- --debug` starts stopped; `cargo run -- --script FILE` runs debugger commands from FILE first (each echoed as `dbg> ...`; a bad line exits with status 2). ROM labels from `rom/monitor.sym` work anywhere an address does, as `NAME` or `NAME+n`. Numbers are hex.
 
 ```
 c                  continue              s [n]            step n instructions

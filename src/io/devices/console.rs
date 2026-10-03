@@ -26,6 +26,11 @@ impl Console {
         self.input.extend(bytes);
     }
 
+    /// True while input bytes wait in the FIFO (IN 02 bit 0).
+    pub fn has_input(&self) -> bool {
+        !self.input.is_empty()
+    }
+
     /// Bytes sent with OUT 00 and not yet drained.
     pub fn output(&self) -> &[u8] {
         &self.output

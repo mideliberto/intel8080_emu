@@ -5,7 +5,7 @@
 ;
 ; Memory map (ARCHITECTURE 1):
 ;   0000-007F  unused, not initialized
-;   0080-00FF  monitor workspace (equates below)
+;   0080-00FF  monitor workspace (labels below)
 ;   0100-EEFF  user area
 ;   EF00-EFFF  monitor stack (SP starts at F000)
 ;   F000-FFFF  this ROM (also at 0000 through the overlay until OUT FE)
@@ -19,7 +19,6 @@
 ; balance the stack: WARM resets SP.
 
         CPU     8080
-        ORG     0F000H
 
 ; ============================================
 ; CONSTANTS
@@ -53,24 +52,25 @@ DEL             EQU     7FH
 
 ; ============================================
 ; WORKSPACE (RAM at 0x0080-0x00FF, ARCHITECTURE 1.1)
+; Labels, so the debugger symbols name them. DS reserves and emits no bytes.
 ; ============================================
 
-LINE_BUFFER     EQU     0080H       ; 80 bytes for command line
-LINE_LENGTH     EQU     80          ; 79 characters + NUL
-LAST_DUMP_ADDR  EQU     00D2H       ; Last dump address (2 bytes)
-LAST_EXAM_ADDR  EQU     00D4H       ; Last examine address (2 bytes)
+        ORG     0080H
+LINE_BUFFER:    DS      80          ; command line: 79 characters + NUL
+                DS      2           ; free
+LAST_DUMP_ADDR: DS      2           ; last dump address
+LAST_EXAM_ADDR: DS      2           ; last examine address
+IO_IN_STUB:     DS      3           ; IN pp / RET (self-modifying code)
+IO_OUT_STUB:    DS      3           ; OUT pp / RET (self-modifying code)
+SEARCH_PATTERN: DS      8           ; search pattern
+SEARCH_LENGTH:  DS      1           ; search pattern length
+SEARCH_END:     DS      2           ; search end address
+STOR_ADDR:      DS      3           ; storage address (lo, mid, hi)
+                DS      22          ; free
 
-; I/O stubs (self-modifying code)
-IO_IN_STUB      EQU     00D6H       ; 3 bytes: IN xx / RET
-IO_OUT_STUB     EQU     00D9H       ; 3 bytes: OUT xx / RET
+LINE_LENGTH     EQU     80          ; LINE_BUFFER size
 
-; Search command workspace
-SEARCH_PATTERN  EQU     00DCH       ; 8 bytes for pattern
-SEARCH_LENGTH   EQU     00E4H       ; 1 byte for pattern length
-SEARCH_END      EQU     00E5H       ; 2 bytes for end address
-
-; Storage command workspace
-STOR_ADDR       EQU     00E7H       ; 3 bytes: storage address (lo, mid, hi)
+        ORG     0F000H
 
 ; ============================================
 ; COLD START (ARCHITECTURE 3.2)

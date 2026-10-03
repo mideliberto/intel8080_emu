@@ -342,7 +342,8 @@ fn compare() {
     m.play("compare");
     // C 0000 FFFF compares 65536 bytes (MONITOR_SPEC 6.1): the last pair is FFFF (ROM
     // padding) against 0000 (00 after compare.txt). Not a transcript: the ROM and stack
-    // page mismatches are thousands of lines, and the stack page ones are an open question.
+    // page mismatches are thousands of lines, and the stack page ones are C's own stack use
+    // (MONITOR_SPEC 6.1).
     let out = m.run("C 0000 FFFF 0001");
     assert!(out.ends_with("\\r\\nFFFF:FF 0000:00\\r\\n"), "{}", &out[out.len().saturating_sub(80)..]);
 }
