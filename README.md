@@ -14,18 +14,19 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Memory subsystem with ROM overlay | ✅ |
 | Console device | ✅ |
 | Storage device (24-bit, 16MB) | ✅ |
-| Monitor ROM v0.5 (15 commands + Intel HEX loader) | ✅ |
+| Monitor ROM v0.6 (17 commands + Intel HEX loader) | ✅ |
 | Host-side debugger (breakpoints, watchpoints, I/O breaks, port trace, trace ring, ROM symbols) | ✅ |
-| 266 tests (13 host + 130 CPU + 37 device + 30 mailbox + 32 monitor + 16 debugger + 8 terminal), plus 4 exercisers (`#[ignore]`) | ✅ |
+| 279 tests (13 host + 130 CPU + 37 device + 34 mailbox + 41 monitor + 16 debugger + 8 terminal), plus 4 exercisers (`#[ignore]`) | ✅ |
 | Intel HEX loader (Phase 5) | ✅ |
 | Service Mailbox (ports 10-13) and `TIME` / T (Phase 6) | ✅ |
-| Mailbox `ASM`/`DIS`, A and U (Phase 7): specified ([DEVICE_SPECS](docs/DEVICE_SPECS.md) 8, [MONITOR_SPEC](docs/MONITOR_SPEC.md) 6.16-6.17) | 🔲 In progress |
+| Mailbox `ASM`/`DIS`, A and U (Phase 7) | ✅ |
 | Pi daemon `pi8080d`: specified ([PI_DAEMON](docs/PI_DAEMON.md)) | 🔲 Not started |
 | Mailbox: HTTP, Claude (Phases 8-9) | 🔲 Future |
 
 ## Monitor Commands
 
 ```
+A addr                - Assemble, one instruction per line ('.' ends)
 C start end dest      - Compare memory regions
 D [start] [end]       - Dump memory
 E [addr]              - Examine/modify memory
@@ -38,13 +39,14 @@ M src dst cnt         - Move memory block
 O port val            - Output to I/O port
 S start end bytes     - Search for pattern
 T                     - Show time (YYYY-MM-DD HH:MM:SS)
+U addr [cnt]          - Unassemble cnt instructions (default 8)
 W mem stor [cnt]      - Write memory to storage
 X [file | -]          - Mount/unmount storage
 :LLAAAATT..CC         - Intel HEX record (paste at the prompt)
 ?                     - Help
 ```
 
-Coming: A/U (assemble/unassemble), N (HTTP GET), Q (ask Claude), R (registers). Full contract for every command, argument and message: [docs/MONITOR_SPEC.md](docs/MONITOR_SPEC.md).
+Coming: N (HTTP GET), Q (ask Claude), R (registers). Full contract for every command, argument and message: [docs/MONITOR_SPEC.md](docs/MONITOR_SPEC.md).
 
 ## Storage System
 
@@ -85,7 +87,7 @@ You'll see:
 8080 Emulator
 Built: 2026-10-02 19:20:00        <- emulator build time (build.rs)
 
-8080 Monitor v0.5
+8080 Monitor v0.6
 Built: 10/02/2026 19:13:00        <- ROM assembly time (asl DATE/TIME)
 Ready.
 > 
@@ -145,7 +147,7 @@ src/
 ├── lib.rs               # Library exports
 ├── cpu.rs               # 8080 CPU emulation
 ├── debugger.rs          # Debugger: commands, breaks, watchpoints, trace ring, port trace
-├── disasm.rs            # Table-driven disassembler (all 256 opcodes)
+├── disasm.rs            # Opcode table: disassembler, DIS line, single-line assembler
 ├── registers.rs         # Register enums, flags
 └── io/
     ├── mod.rs           # build_bus: the port map (devices in power-on state)
@@ -153,7 +155,7 @@ src/
     ├── device.rs        # IoDevice trait
     └── devices/
         ├── console.rs       # Console 00-02: input FIFO, output buffer
-        ├── mailbox.rs       # Service Mailbox 10-13: TIME
+        ├── mailbox.rs       # Service Mailbox 10-13: TIME, ASM, DIS
         └── storage.rs       # Storage and mount 08-0F: 24-bit linear storage
 
 rom/

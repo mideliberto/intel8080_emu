@@ -1,0 +1,74 @@
+# U: Unassemble (MONITOR_SPEC 6.17, vectors 6.17.1). Format: tests/monitor_tests.rs header.
+# Runs on hardware with a Phase 7 Pi service. U only shows memory written first.
+
+# The 6.16 example, then U over it.
+> F 0200 0207 00
+< A 0200\rMVI A,0D\rlxi h , 1234\r\rJMP 0200\rMOV A,Q\r.\r
+A 0200
+0200: MVI A,0D
+0202: lxi h , 1234
+0205:\x20
+0205: JMP 0200
+0208: MOV A,Q
+Invalid instruction
+0208: .
+> U 0200 3
+0200  3E 0D     MVI A,0D
+0202  21 34 12  LXI H,1234
+0205  C3 00 02  JMP 0200
+
+# The roadmap's Phase 7 success criterion.
+< A 0200\rMVI A,0D\rJMP 0200\r.\r
+A 0200
+0200: MVI A,0D
+0202: JMP 0200
+0205: .
+> U 0200 2
+0200  3E 0D     MVI A,0D
+0202  C3 00 02  JMP 0200
+
+# The count defaults to 8 instructions.
+> F 0200 020F 76
+> U 0200
+0200  76        HLT
+0201  76        HLT
+0202  76        HLT
+0203  76        HLT
+0204  76        HLT
+0205  76        HLT
+0206  76        HLT
+0207  76        HLT
+
+# Lowercase, tokens after count ignored (4.1).
+> u 0200 2 junk
+0200  76        HLT
+0201  76        HLT
+
+# Starred aliases.
+> F 0200 0200 08
+> U 0200 1
+0200  08        NOP*
+> F 0200 0202 DD
+> U 0200 1
+0200  DD DD DD  CALL* DDDD
+
+# U wraps past FFFF. FFFF is in the ROM's unused tail, which the image fills with FF.
+< A 0000\rJMP 1234\r.\r
+A 0000
+0000: JMP 1234
+0003: .
+> U FFFF 2
+FFFF  FF        RST 7
+0000  C3 34 12  JMP 1234
+
+# Argument errors.
+> U
+Invalid address
+> U 02G0
+Invalid address
+> U 0200 ZZ
+Invalid hex value
+> U 0200 10000
+Invalid hex value
+> U 0200 0
+Invalid range

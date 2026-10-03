@@ -1,0 +1,133 @@
+# A: Assemble (MONITOR_SPEC 6.16, vectors 6.17.1). Format: tests/monitor_tests.rs header.
+# Runs on hardware with a Phase 7 Pi service. An A dialog is one '<' step: every line
+# typed with \r, ending in the '.' line; the step ends at the "> " after '.'.
+# Memory is shown with D only after F wrote all of it (on hardware RAM is random).
+
+# An empty line prompts again at the same address, with nothing sent.
+> F 0200 020F FF
+< A 0200\rMVI A,0D\r\r.\r
+A 0200
+0200: MVI A,0D
+0202:\x20
+0202: .
+> D 0200 020F
+0200: 3E 0D FF FF FF FF FF FF  FF FF FF FF FF FF FF FF  >...............
+
+# Leading spaces and the ASM grammar's blanks; lowercase folds on the Pi.
+> F 0200 020F FF
+< A 0200\r  lxi h , 1234\r.\r
+A 0200
+0200:   lxi h , 1234
+0203: .
+> D 0200 020F
+0200: 21 34 12 FF FF FF FF FF  FF FF FF FF FF FF FF FF  !4..............
+
+# Starred aliases; '.' after leading spaces ends A, and the rest of its line is ignored.
+> F 0200 020F FF
+< A 0200\rNOP*\rcall* 0005\r   . junk\r
+A 0200
+0200: NOP*
+0201: call* 0005
+0204:    . junk
+> D 0200 020F
+0200: 08 DD 05 00 FF FF FF FF  FF FF FF FF FF FF FF FF  ................
+
+# A line that does not assemble (82) prints Invalid instruction, writes nothing and
+# prompts the same address again.
+> F 0200 020F FF
+< A 0200\rMOV A,Q\rNOP\r.\r
+A 0200
+0200: MOV A,Q
+Invalid instruction
+0200: NOP
+0201: .
+> D 0200 020F
+0200: 00 FF FF FF FF FF FF FF  FF FF FF FF FF FF FF FF  ................
+
+# A line of only spaces prompts again, with nothing sent.
+> F 0200 020F FF
+< A 0200\r   \r.\r
+A 0200
+0200:\x20\x20\x20\x20
+0200: .
+> D 0200 020F
+0200: FF FF FF FF FF FF FF FF  FF FF FF FF FF FF FF FF  ................
+
+# Paste regression: blank lines in pasted source never end A, so XCHG never runs as
+# X CHG (which would mount, and create, a file). X then finds nothing mounted.
+> F 0200 020F FF
+< A 0200\rNOP\r\rXCHG\r\rADD B\r.\r
+A 0200
+0200: NOP
+0201:\x20
+0201: XCHG
+0202:\x20
+0202: ADD B
+0203: .
+> D 0200 020F
+0200: 00 EB 80 FF FF FF FF FF  FF FF FF FF FF FF FF FF  ................
+> X
+No storage mounted
+
+# The same paste with CR LF line ends, and a line that fails mid-paste: every LF is an
+# empty line that only prompts again (the one after '.' is an empty monitor line), and
+# the failure prompts the same address again.
+> F 0200 020F FF
+< A 0200\r\nNOP\r\nMOV A,Q\r\n\r\nXCHG\r\nLXI H,1234\r\nADD B\r\n.\r\n
+A 0200
+0200:\x20
+0200: NOP
+0201:\x20
+0201: MOV A,Q
+Invalid instruction
+0201:\x20
+0201:\x20
+0201:\x20
+0201: XCHG
+0202:\x20
+0202: LXI H,1234
+0205:\x20
+0205: ADD B
+0206:\x20
+0206: .
+\x3E\x20
+> D 0200 020F
+0200: 00 EB 21 34 12 80 FF FF  FF FF FF FF FF FF FF FF  ..!4............
+> X
+No storage mounted
+
+# Lowercase command letter.
+> F 0200 020F FF
+< a 0200\rRST 7\r.\r
+a 0200
+0200: RST 7
+0201: .
+> D 0200 020F
+0200: FF FF FF FF FF FF FF FF  FF FF FF FF FF FF FF FF  ................
+
+# Tokens after addr are ignored (4.1).
+> F 0200 020F FF
+< A 0200 junk\rNOP\r.\r
+A 0200 junk
+0200: NOP
+0201: .
+> D 0200 020F
+0200: 00 FF FF FF FF FF FF FF  FF FF FF FF FF FF FF FF  ................
+
+# The address wraps past FFFF. FFFF is ROM: the write has no effect, the address still
+# advances.
+> F 0000 000F 00
+< A FFFF\rCALL 1234\r.\r
+A FFFF
+FFFF: CALL 1234
+0002: .
+> D FFFF FFFF
+FFFF: FF 34 12 00 00 00 00 00  00 00 00 00 00 00 00 00  .4..............
+
+# addr is required.
+> A
+Invalid address
+> A 02G0
+Invalid address
+> A 10000
+Invalid address

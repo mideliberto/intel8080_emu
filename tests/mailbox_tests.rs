@@ -15,10 +15,10 @@
 //     capture, so the test clock reads a thread-local (each test runs on its own
 //     thread) that `set_clock` changes.
 //
-// Not testable at port level in Phase 6: BUSY (TIME completes within execute), a request
-// that produces bytes later or fails mid-response, an empty response, abort of a running
-// background request, interrupts (rule 2.7). Rule 2.9 (Pi service restart) only as
-// "a fresh device reads 00".
+// Not testable at port level until a command runs in the background (Phase 8): BUSY
+// (TIME, ASM and DIS complete within execute), a request that produces bytes later or
+// fails mid-response, an empty response, abort of a running background request,
+// interrupts (rule 2.7). Rule 2.9 (Pi service restart) only as "a fresh device reads 00".
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -91,9 +91,9 @@ impl Rig {
     fn out(&mut self, port: u8, value: u8) {
         self.bus.write(port, value);
     }
-    /// IN 12, checked against what Phase 6 can ever return.
-    /// States: "04-7F | - | Never returned". Transitions, Phase 6: TIME "never reads 01".
-    /// Error codes: "84-FF | Reserved".
+    /// IN 12, checked against what TIME, ASM and DIS can ever return.
+    /// States: "04-7F | - | Never returned". Transitions: "Commands that complete within
+    /// the execute access ... It never reads 01." Error codes: "84-FF | Reserved".
     fn status(&mut self) -> u8 {
         let s = self.inp(STATUS);
         assert!(matches!(s, IDLE | AVAIL | DONE | 0x80..=0x83), "IN 12 = {:02X}", s);
@@ -108,8 +108,8 @@ impl Rig {
         self.out(CTL, CLEAR);
     }
     /// OUT 11 = 01, then IN 12.
-    /// "Phase 6: TIME completes within the execute access. Right after execute, IN 12
-    /// reads 02 or an error code (80-83) ... It never reads 01."
+    /// "Commands that complete within the execute access: TIME (Phase 6), ASM and DIS
+    /// (Phase 7). Right after execute, IN 12 reads 02 or an error code ... It never reads 01."
     fn execute(&mut self) -> u8 {
         self.out(CTL, EXECUTE);
         let s = self.status();
@@ -594,11 +594,11 @@ fn command_bytes_are_any_value() {
 }
 
 #[test]
-fn placeholder_commands_are_unknown_in_phase_6() {
-    // Commands lists ASM, DIS, GET and ASK as placeholders for later phases; until then
-    // they are unknown words (80), with or without arguments.
+fn placeholder_commands_are_unknown() {
+    // Command format: "A placeholder word in the Commands table (GET, ASK) is unknown until
+    // its phase ships, so it gives 80, with or without arguments."
     let mut r = rig();
-    for command in [&b"ASM"[..], b"ASM NOP", b"DIS", b"DIS 00", b"GET", b"GET x", b"ASK", b"ASK hi"] {
+    for command in [&b"GET"[..], b"GET x", b"ASK", b"ASK hi"] {
         assert_eq!(r.command(command), E_UNKNOWN, "{:?}", String::from_utf8_lossy(command));
     }
 }
@@ -650,7 +650,7 @@ fn time_year_is_zero_padded_to_four_digits() {
 
 #[test]
 fn time_is_taken_at_execute() {
-    // Transitions: "Phase 6: TIME completes within the execute access." The response is
+    // Transitions: "Commands that complete within the execute access: TIME". The response is
     // fixed then; the clock moving while the bytes are read changes nothing.
     set_clock(Some(T1));
     let mut r = rig_with_clock();
@@ -700,7 +700,7 @@ fn host_local_now() -> Vec<u8> {
 #[test]
 fn time_through_build_bus_is_the_host_local_clock() {
     // Commands: "local time". TIME clock: "Emulator: the host's local time (localtime_r)."
-    // Transitions, Phase 6: "TIME completes within the execute access. Right after
+    // Transitions: "Commands that complete within the execute access: TIME ... Right after
     // execute, IN 12 reads 02 ... It never reads 01." (checked in execute()).
     let mut r = rig();
     let before = host_local_now();
@@ -746,6 +746,166 @@ fn reference_client_reads_time() {
     assert_eq!(end, Ok(()));
     assert!(is_time_shape(&sink), "{:?}", String::from_utf8_lossy(&sink));
     assert!(!sink.contains(&0x0D) && !sink.contains(&0x0A));
+}
+
+// ---------- ASM and DIS ----------
+
+impl Rig {
+    /// The reference client end to end: the status right after execute, and the response
+    /// read to DONE (empty when the status is an error, after checking IN 13 reads 00).
+    fn ask(&mut self, command: &[u8]) -> (u8, Vec<u8>) {
+        match self.command(command) {
+            AVAIL => {
+                let (got, end) = self.drain();
+                assert_eq!(end, DONE, "{:?}", String::from_utf8_lossy(command));
+                (AVAIL, got)
+            }
+            s => {
+                assert_eq!(self.inp(RESP), 0x00, "{:?}", String::from_utf8_lossy(command));
+                (s, Vec::new())
+            }
+        }
+    }
+}
+
+#[test]
+fn asm_conformance_vectors() {
+    // ASM and DIS conformance vectors: "Device-level tests MUST cover every row."
+    // Transitions: "ASM and DIS can give 80-82 and never 83." ASM: "Response: the machine
+    // code, 1-3 bytes, binary ... There is no line ending."
+    let ok: [(&str, &[u8]); 19] = [
+        ("ASM MVI A,0D", &[0x3E, 0x0D]),
+        ("ASM mvi a,0d", &[0x3E, 0x0D]),
+        ("ASM   MVI   A , 0D  ", &[0x3E, 0x0D]),
+        ("ASM MVI A,D", &[0x3E, 0x0D]),
+        ("ASM MVI A,000D", &[0x3E, 0x0D]),
+        ("ASM MVI A,00AA", &[0x3E, 0xAA]),
+        ("ASM LXI H,1", &[0x21, 0x01, 0x00]),
+        ("ASM LXI SP,EFFE", &[0x31, 0xFE, 0xEF]),
+        ("ASM CALL 0005", &[0xCD, 0x05, 0x00]),
+        ("ASM MOV A,M", &[0x7E]),
+        ("ASM HLT", &[0x76]),
+        ("ASM IN 02", &[0xDB, 0x02]),
+        ("ASM POP PSW", &[0xF1]),
+        ("ASM RST 7", &[0xFF]),
+        ("ASM xchg", &[0xEB]),
+        ("ASM NOP*", &[0x08]),
+        ("ASM JMP* 0200", &[0xCB, 0x00, 0x02]),
+        ("ASM RET*", &[0xD9]),
+        ("ASM call* 1234", &[0xDD, 0x34, 0x12]),
+    ];
+    let mut r = rig();
+    for (cmd, code) in ok {
+        assert_eq!(r.ask(cmd.as_bytes()), (AVAIL, code.to_vec()), "{}", cmd);
+    }
+    let bad = [
+        "ASM", "ASM ", "ASM    ",
+        "ASM MVI A,100", "ASM MVI A,1AA",
+        "ASM LXI H,10000", "ASM LXI H,00001", "ASM MVI A,0000D",
+        "ASM MVI A,0DH", "ASM MVI A,0x0D", "ASM MVI A,+D", "ASM MVI A,-1",
+        "ASM MOV M,M", "ASM LDAX H", "ASM PUSH SP", "ASM LXI PSW,0",
+        "ASM RST 8", "ASM RST 07",
+        "ASM JMP", "ASM NOP 00",
+        "ASM MVI A,", "ASM MOV A B", "ASM MOV A,,B", "ASM MOV A,B,C",
+        "ASM MVI\tA,0D",
+        "ASM NOP ;c", "ASM LABEL: NOP", "ASM DB 00",
+    ];
+    for cmd in bad {
+        assert_eq!(r.ask(cmd.as_bytes()), (E_ARGS, Vec::new()), "{:?}", cmd);
+    }
+    assert_eq!(r.ask(b"asm NOP"), (E_UNKNOWN, Vec::new()));
+    // ASM: "Length: the 128-byte buffer leaves 124 bytes for <line>. A longer command gives 81."
+    let mut long = b"ASM ".to_vec();
+    long.extend([b' '; 125]);
+    assert_eq!(r.ask(&long), (E_OVERFLOW, Vec::new()), "129 bytes");
+    let mut full = b"ASM NOP".to_vec();
+    full.extend([b' '; 121]);
+    assert_eq!(r.ask(&full), (AVAIL, vec![0x00]), "128 bytes, trailing spaces ignored");
+}
+
+#[test]
+fn asm_rejects_every_byte_outside_20_to_7e() {
+    // ASM: "Characters: only 20h-7Eh. Any other byte, including Tab, CR, LF, 00 and 80-FF,
+    // gives 82."
+    let mut r = rig();
+    for b in (0x00..0x20).chain(0x7F..=0xFF) {
+        for cmd in [[&b"ASM NOP"[..], &[b]].concat(), [&b"ASM "[..], &[b], b"NOP"].concat()] {
+            assert_eq!(r.ask(&cmd), (E_ARGS, Vec::new()), "{:02X}", b);
+        }
+    }
+}
+
+#[test]
+fn dis_conformance_vectors() {
+    // ASM and DIS conformance vectors. DIS: "Response: one length byte L, binary 01, 02 or
+    // 03, the instruction's length. Then the instruction line, then CR LF."
+    let ok: [(&str, u8, &str); 11] = [
+        ("DIS 0100 3E 0D 00", 2, "0100  3E 0D     MVI A,0D"),
+        ("DIS 0100 00 FF FF", 1, "0100  00        NOP"),
+        ("DIS 0100 c3 00 f0", 3, "0100  C3 00 F0  JMP F000"),
+        ("DIS FFFF CD 34 12", 3, "FFFF  CD 34 12  CALL 1234"),
+        ("DIS 0200 31 FE EF", 3, "0200  31 FE EF  LXI SP,EFFE"),
+        ("DIS 0100 FB 00 00", 1, "0100  FB        EI"),
+        ("DIS 0200 DB 02 00", 2, "0200  DB 02     IN 02"),
+        ("DIS 0200 FF 00 00", 1, "0200  FF        RST 7"),
+        ("DIS 0100 08 FF FF", 1, "0100  08        NOP*"),
+        ("DIS 0100 DD 00 01", 3, "0100  DD 00 01  CALL* 0100"),
+        ("DIS abcd 00 00 00", 1, "ABCD  00        NOP"),
+    ];
+    let mut r = rig();
+    for (cmd, len, line) in ok {
+        let want = [&[len][..], line.as_bytes(), b"\r\n"].concat();
+        assert_eq!(r.ask(cmd.as_bytes()), (AVAIL, want), "{}", cmd);
+    }
+    let bad = [
+        "DIS", "DIS ", "DIS 0100 3E 0D", "DIS 100 3E 0D 00", "DIS 0100 3E 0D 00 ", "DIS 0100  3E 0D 00",
+        "DIS 0100 3E 0D 0G", "DIS 0100 +E 0D 00", "DIS 0100 3E 0D 00 00", "DIS 01000 3E 0D 0",
+        "DIS +100 3E 0D 00", "DIS 0100\t3E 0D 00",
+    ];
+    for cmd in bad {
+        assert_eq!(r.ask(cmd.as_bytes()), (E_ARGS, Vec::new()), "{:?}", cmd);
+    }
+    assert_eq!(r.ask(b"DIS 0100 3E 0D \xC0\xC0"), (E_ARGS, Vec::new()));
+    assert_eq!(r.ask(b"dis 0100 00 00 00"), (E_UNKNOWN, Vec::new()));
+    // The line length range: "The line is 18-27 bytes ..., and the response is 21-30 bytes."
+    for x in 0..=255u8 {
+        let (_, resp) = r.ask(format!("DIS 0000 {:02X} 34 12", x).as_bytes());
+        assert!((21..=30).contains(&resp.len()), "{:02X}: {:?}", x, String::from_utf8_lossy(&resp));
+    }
+}
+
+#[test]
+fn dis_then_asm_round_trips_r1_and_r2() {
+    // Round-trip properties: "For every x in 00-FF and every operand pair y z in {00 00,
+    // FF FF, 34 12}, DIS 0000 x y z responds with a length L and a line; let t be the line
+    // from column 16 ... up to the CR LF. Tests MUST check R1 and R2 for all 768 cases."
+    // R1: "ASM t responds with L bytes, and DIS 0000 of those bytes (padded with y z)
+    // gives t again." R2: "the L bytes ASM t responds with are the first L of x y z, for
+    // every opcode except the 8 duplicate aliases. NOP* always assembles to 08 ... and
+    // CALL* always assembles to DD".
+    let mut r = rig();
+    let dis = |r: &mut Rig, b: [u8; 3]| -> (usize, String) {
+        let (s, resp) = r.ask(format!("DIS 0000 {:02X} {:02X} {:02X}", b[0], b[1], b[2]).as_bytes());
+        assert_eq!(s, AVAIL);
+        let line = std::str::from_utf8(&resp[1..]).unwrap().strip_suffix("\r\n").unwrap();
+        (resp[0] as usize, line[16..].to_string())
+    };
+    for x in 0..=255u8 {
+        for (y, z) in [(0x00, 0x00), (0xFF, 0xFF), (0x34, 0x12)] {
+            let (len, t) = dis(&mut r, [x, y, z]);
+            let (s, code) = r.ask(format!("ASM {}", t).as_bytes());
+            assert_eq!((s, code.len()), (AVAIL, len), "R1 {:02X} {:02X} {:02X}: {}", x, y, z, t);
+            let mut padded = [x, y, z];
+            padded[..len].copy_from_slice(&code);
+            assert_eq!(dis(&mut r, padded), (len, t.clone()), "R1 {:02X} {:02X} {:02X}", x, y, z);
+            let first = match x {
+                0x10 | 0x18 | 0x20 | 0x28 | 0x30 | 0x38 => 0x08,
+                0xED | 0xFD => 0xDD,
+                _ => x,
+            };
+            assert_eq!(code, [first, y, z][..len], "R2 {:02X} {:02X} {:02X}: {}", x, y, z, t);
+        }
+    }
 }
 
 // ---------- RESET and Pi service restart ----------

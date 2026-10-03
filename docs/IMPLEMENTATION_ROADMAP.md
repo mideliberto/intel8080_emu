@@ -10,7 +10,7 @@
 | 4 | Storage System | ✅ Complete |
 | 5 | Program Loading | ✅ Complete |
 | 6 | Time | ✅ Complete |
-| **7** | **Development Tools** | **🔲 In progress (specified 2026-10-03)** |
+| 7 | Development Tools | ✅ Complete |
 | 8 | Internet Services | 🔲 Future |
 | 9 | Claude Integration | 🔲 Future |
 | 10 | R command (debugger done early) | 🔲 Future |
@@ -121,26 +121,26 @@ No timer in v1. The Pi keeps wall-clock time via NTP. A periodic interrupt sourc
 
 ---
 
-## Phase 7: Development Tools (in progress)
+## Phase 7: Development Tools ✅ COMPLETE (2026-10-03)
 
 **Goal:** Assemble and unassemble on the machine, with the tools running on the Pi.
 
 **Specified 2026-10-03** (decisions: COLLABORATION_LOG Key Decisions, "Phase 7 Specified"): mailbox `ASM` and `DIS` in `DEVICE_SPECS.md` 8; `A` and `U` in `MONITOR_SPEC.md` 6.16-6.17, with the conformance vectors in 6.17.1.
 
 **Tasks:**
-- [ ] `src/disasm.rs`: `assemble(line) -> Option<Vec<u8>>`, the OPCODES table read backwards (DEVICE_SPECS 8, ASM); `line(addr, bytes, name)` moved out of `Debugger::insn`, so DIS and the debugger share it
-- [ ] Mailbox `ASM` and `DIS` in `mailbox.rs` (DEVICE_SPECS 8): pure, complete within the execute access, 82 on a bad argument, never 83. No test knob
-- [ ] ROM: mailbox client MB_SEND/MB_PUT/MB_GET (MONITOR_SPEC 9), T moved onto it with no change to its port sequence; A and U (6.16, 6.17); `Invalid instruction`; help lines; v0.6
-- [ ] Tests, `tests/mailbox_tests.rs`: every DEVICE_SPECS 8 ASM/DIS vector; R1 and R2 at port level (one loop over `DIS 0000 x y z` and `ASM t` through the rig, no new pub items)
-- [ ] Tests, `tests/monitor_tests.rs`: the MONITOR_SPEC 6.17.1 rows as marked there. `t_against(statuses, bytes)` generalises to take the typed input and return `step`'s output; the *rule 4* rows join the existing argument-error test; A dialogs in transcripts are single `<` steps
+- [x] `src/disasm.rs`: `assemble(line) -> Option<Vec<u8>>`, the OPCODES table read backwards (DEVICE_SPECS 8, ASM); `line(addr, bytes, name)` moved out of `Debugger::insn`, so DIS and the debugger share it
+- [x] Mailbox `ASM` and `DIS` in `mailbox.rs` (DEVICE_SPECS 8): pure, complete within the execute access, 82 on a bad argument, never 83. No test knob
+- [x] ROM: mailbox client MB_SEND/MB_PUT/MB_GET (MONITOR_SPEC 9), T moved onto it with no change to its port sequence; A and U (6.16, 6.17); `Invalid instruction`; help lines; v0.6
+- [x] Tests, `tests/mailbox_tests.rs`: every DEVICE_SPECS 8 ASM/DIS vector; R1 and R2 at port level (one loop over `DIS 0000 x y z` and `ASM t` through the rig, no new pub items)
+- [x] Tests, `tests/monitor_tests.rs`: the MONITOR_SPEC 6.17.1 rows as marked there. `t_against` became `scripted(statuses, bytes) -> Mon`, so T, A and U tests type into the same scripted rig; the *rule 4* rows join the existing argument-error test; A dialogs in transcripts are single `<` steps
+
+**Done:** +322 bytes (2571 -> 2893, 1203 free): dispatch 10, T -25 (56 -> 31 on the shared client), MB_SEND/MB_PUT 13, MB_HEX 23, MB_GET 19, A 81, U 100, the command strings 15, help lines 64, `Invalid instruction` 22. Measured at 2.048 MHz before READY wait states: an A line of `MVI A,0D` 3,760 cycles from prompt to prompt (READ_LINE and echo 2,776, the mailbox round trip 984); a U line about 4,450-5,600 cycles (8 lines about 36k, 18 ms, after the command line). Tests: `tests/transcripts/assemble.txt` and `unassemble.txt` (every 6.17.1 transcript row, the paste regression with LF and CR LF ends and a mid-paste failure, then `X` finds nothing mounted), 7 Rust tests in `monitor_tests.rs` (both *ports* rows, every *scripted* row, a 256-instruction U, Identity and Round trip over all 256 opcodes), 4 in `mailbox_tests.rs` (every ASM/DIS vector, bytes outside 20-7E, the 21-30 byte DIS response, R1 and R2 over 768 cases).
 
 **Success criteria:**
 - `A 0200`, then `MVI A,0D`, `JMP 0200`, `.`; `U 0200 2` prints `0200  3E 0D     MVI A,0D` and `0202  C3 00 02  JMP 0200`.
 - For every opcode, U's text typed into A gives back the same bytes, except the R2 aliases (DEVICE_SPECS 8).
 - Pasting source with blank lines into A never runs a monitor command.
 - `t_runs_the_reference_client` passes unchanged.
-
-**Estimate:** +328 ROM bytes (2571 -> 2899, 1197 free), measured on a sketch: dispatch 10, T -25 (56 -> 31 on the shared client), MB_SEND/MB_PUT 13, MB_GET 19, A 87, U 100, MB_HEX 23, the command strings 15, help lines 64, `Invalid instruction` 22.
 
 ---
 

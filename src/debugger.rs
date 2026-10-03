@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 
 use crate::cpu::{Intel8080, Transfer};
-use crate::disasm::disassemble;
+use crate::disasm;
 
 /// Steps kept in the trace ring, and how many of them a stop report shows.
 const RING: usize = 256;
@@ -364,27 +364,20 @@ impl Debugger {
         self.symbols.iter().find(|s| s.0 == addr).map(|s| s.1.clone())
     }
 
-    /// Instruction line without a newline, and the instruction length.
-    fn insn(&self, addr: u16, bytes: [u8; 3]) -> (String, u16) {
-        let (text, len) = disassemble(bytes, |w| self.name_at(w));
-        let hex: Vec<String> = bytes[..len as usize].iter().map(|b| format!("{:02X}", b)).collect();
-        (format!("{:04X}  {:<8}  {}", addr, hex.join(" "), text), len)
-    }
-
     /// The instruction line, preceded by a NAME: line for each symbol at `addr`.
     fn listing(&self, addr: u16, bytes: [u8; 3]) -> (String, u16) {
         let mut text = String::new();
         for (_, name) in self.symbols.iter().filter(|s| s.0 == addr) {
             let _ = writeln!(text, "{}:", name);
         }
-        let (line, len) = self.insn(addr, bytes);
+        let (line, len) = disasm::line(addr, bytes, |w| self.name_at(w));
         (text + &line + "\n", len)
     }
 
     fn ring_line(&self, s: &Step) -> String {
         format!(
             "{:<34} A={:02X} F={:02X} BC={:04X} DE={:04X} HL={:04X} SP={:04X}\n",
-            self.insn(s.pc, s.bytes).0,
+            disasm::line(s.pc, s.bytes, |w| self.name_at(w)).0,
             s.a,
             s.f,
             s.bc,

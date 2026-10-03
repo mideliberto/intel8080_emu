@@ -510,9 +510,9 @@ fn mailbox() {
 
 #[test]
 fn t_runs_the_reference_client() {
-    // 6.15 step 1: "Runs the mailbox command TIME with the reference client in
-    // DEVICE_SPECS.md (Service Mailbox): clear (OUT 11h <- 02h), send T I M E to OUT 10h,
-    // execute (OUT 11h <- 01h), then poll IN 12h."
+    // 6.15 step 1: "Runs the mailbox command TIME through the mailbox client (section 9;
+    // DEVICE_SPECS.md, Service Mailbox, Reference client): clear (OUT 11h <- 02h), send T I
+    // M E to OUT 10h, execute (OUT 11h <- 01h), then poll IN 12h."
     // Step 2: "Each response byte read from IN 13h is printed to the console as it arrives."
     // Step 3: "On status 03h (DONE), prints <CR><LF>."
     // "T sends exactly TIME." "T uses ports 10h-13h."
@@ -582,8 +582,8 @@ impl IoDevice for ScriptedMailbox {
     }
 }
 
-/// Boot, put a ScriptedMailbox at 10-13, run T; returns T's output (echo stripped).
-fn t_against(statuses: &[u8], bytes: &[u8]) -> String {
+/// Boot and put a ScriptedMailbox at 10-13.
+fn scripted(statuses: &[u8], bytes: &[u8]) -> Mon {
     let mut m = boot();
     let stub = Rc::new(RefCell::new(ScriptedMailbox {
         statuses: statuses.iter().copied().collect(),
@@ -592,7 +592,7 @@ fn t_against(statuses: &[u8], bytes: &[u8]) -> String {
         executed: false,
     }));
     m.map_mailbox(stub);
-    m.run("T")
+    m
 }
 
 #[test]
@@ -600,26 +600,27 @@ fn t_prints_service_error() {
     // 6.15 step 4: "On status 00h after execute (Pi service restarted) or 80h-FFh, prints
     // Service error then <CR><LF>. Any response bytes already printed stay on the same
     // line, with no <CR><LF> before the message: an error after 2026- prints 2026-Service error."
-    // Messages (5): "Service error | T (Phase 6): mailbox status 00 after execute, or 80-FF".
+    // Messages (5): "Service error | T, U: mailbox status 00 after execute, or 80-FF".
     for status in [0x00, 0x80, 0x81, 0x82, 0x83, 0x84, 0xC0, 0xFF] {
-        assert_eq!(t_against(&[status], b""), "Service error\\r\\n", "status {:02X}", status);
+        assert_eq!(scripted(&[status], b"").run("T"), "Service error\\r\\n", "status {:02X}", status);
     }
     // A failure mid-response (DEVICE_SPECS 8: "The request fails (including mid-response)
     // | BUSY, AVAIL | ERROR"): the bytes printed so far stay, then the message.
-    assert_eq!(t_against(&[0x02, 0x02, 0x02, 0x02, 0x02, 0x83], b"2026-"), "2026-Service error\\r\\n");
+    assert_eq!(scripted(&[0x02, 0x02, 0x02, 0x02, 0x02, 0x83], b"2026-").run("T"), "2026-Service error\\r\\n");
     // A Pi restart mid-response reads 00 (DEVICE_SPECS 2.9).
-    assert_eq!(t_against(&[0x02, 0x00], b"2"), "2Service error\\r\\n");
+    assert_eq!(scripted(&[0x02, 0x00], b"2").run("T"), "2Service error\\r\\n");
 }
 
 #[test]
 fn t_handles_every_status_the_reference_client_does() {
-    // DEVICE_SPECS 8 reference client: 01 polls again, 02 reads and sinks a byte, 03 ends.
+    // DEVICE_SPECS 8 reference client, MB_GET: 01 polls again; "byte" (02: IN 13, T prints
+    // it), "done" (03: T prints CR LF), "failed" (00 or 80-FF: Service error).
     // "BUSY can follow AVAIL in the middle of a response ... One polling loop handles every
     // case." "A response may be empty." "Response bytes can be any value 00-FF. The end is
     // marked by status, not by a terminator."
-    assert_eq!(t_against(&[0x01, 0x01, 0x01, 0x02, 0x01, 0x01, 0x02, 0x01, 0x03], b"AB"), "AB\\r\\n");
-    assert_eq!(t_against(&[0x03], b""), "\\r\\n");
-    assert_eq!(t_against(&[0x02, 0x02, 0x02, 0x02, 0x03], &[0x00, 0x0D, 0xFF, 0x7F]), "\\x00\\r\\xFF\\x7F\\r\\n");
+    assert_eq!(scripted(&[0x01, 0x01, 0x01, 0x02, 0x01, 0x01, 0x02, 0x01, 0x03], b"AB").run("T"), "AB\\r\\n");
+    assert_eq!(scripted(&[0x03], b"").run("T"), "\\r\\n");
+    assert_eq!(scripted(&[0x02, 0x02, 0x02, 0x02, 0x03], &[0x00, 0x0D, 0xFF, 0x7F]).run("T"), "\\x00\\r\\xFF\\x7F\\r\\n");
 }
 
 #[test]
@@ -631,6 +632,178 @@ fn t_with_the_pi_clock_not_set_prints_service_error() {
     m.map_mailbox(mb);
     assert_eq!(m.run("T"), "Service error\\r\\n");
     assert_eq!(m.run("I 12"), "83\\r\\n");
+}
+
+// ---------- A and U (MONITOR_SPEC 6.16, 6.17, 6.17.1) ----------
+
+#[test]
+fn assemble() {
+    boot().play("assemble");
+}
+
+#[test]
+fn unassemble() {
+    boot().play("unassemble");
+}
+
+impl Mon {
+    /// Type `input` exactly (an A dialog); return everything printed, escaped.
+    fn dialog(&mut self, input: &str) -> String {
+        show(&self.step(input.as_bytes()).unwrap_or_else(|e| panic!("{}", e)))
+    }
+
+    /// Write RAM directly (load_program would move PC).
+    fn poke(&mut self, addr: u16, bytes: &[u8]) {
+        for (i, &b) in bytes.iter().enumerate() {
+            self.cpu.write_byte(addr.wrapping_add(i as u16), b);
+        }
+    }
+
+    /// The mailbox port accesses (10-13) from `from` on.
+    fn mailbox_ports(&self, from: usize) -> Vec<Transfer> {
+        self.ports[from..].iter().filter(|t| matches!(t, Transfer::In(0x10..=0x13, _) | Transfer::Out(0x10..=0x13, _))).copied().collect()
+    }
+}
+
+#[test]
+fn a_runs_the_mailbox_client() {
+    // 6.17.1 ports row: "A 0200, MVI A,0D, . | prompts 0200: , 0202: | OUT 11 02; OUT 10 41
+    // 53 4D 20 4D 56 49 20 41 2C 30 44 (ASM MVI A,0D); OUT 11 01; IN 12 02, IN 13 3E, IN 12
+    // 02, IN 13 0D, IN 12 03".
+    use Transfer::{In, Out};
+    let mut m = boot();
+    let n = m.ports.len();
+    assert_eq!(m.dialog("A 0200\rMVI A,0D\r.\r"), "A 0200\\r\\n0200: MVI A,0D\\r\\n0202: .\\r\\n");
+    let mut want = vec![Out(0x11, 0x02)];
+    want.extend(b"ASM MVI A,0D".iter().map(|&b| Out(0x10, b)));
+    want.extend([Out(0x11, 0x01), In(0x12, 0x02), In(0x13, 0x3E), In(0x12, 0x02), In(0x13, 0x0D), In(0x12, 0x03)]);
+    assert_eq!(m.mailbox_ports(n), want);
+    assert_eq!(m.mem(0x0200, 2), [0x3E, 0x0D]);
+    // 6.16 step 5: <text> runs from the first non-space character to the end of the stored
+    // line, trailing spaces included.
+    let n = m.ports.len();
+    assert_eq!(m.dialog("A 0200\r  MVI A,0D  \r.\r"), "A 0200\\r\\n0200:   MVI A,0D  \\r\\n0202: .\\r\\n");
+    let mut want = vec![Out(0x11, 0x02)];
+    want.extend(b"ASM MVI A,0D  ".iter().map(|&b| Out(0x10, b)));
+    want.extend([Out(0x11, 0x01), In(0x12, 0x02), In(0x13, 0x3E), In(0x12, 0x02), In(0x13, 0x0D), In(0x12, 0x03)]);
+    assert_eq!(m.mailbox_ports(n), want);
+    // 6.16 step 4 and "A uses ports 10h-13h, and only after a line other than an empty one
+    // or . is entered": empty lines, lines of spaces (CR, LF and CR LF ends) and '.' send nothing.
+    let n = m.ports.len();
+    m.dialog("A 0200\r\r  \n\r\n \r\n . x\r");
+    assert_eq!(m.mailbox_ports(n), []);
+    assert_eq!(m.mem(0x0200, 2), [0x3E, 0x0D]);
+}
+
+#[test]
+fn a_failures_prompt_the_same_address_again() {
+    // 6.16 steps 7-8 and the 6.17.1 scripted rows. JUNK at 0200 shows "unchanged".
+    for (status, msg) in [(0x83, "Service error"), (0x00, "Service error"), (0x80, "Service error"),
+        (0x81, "Service error"), (0xFF, "Service error"), (0x82, "Invalid instruction")] {
+        let mut m = scripted(&[status], b"");
+        assert_eq!(m.dialog("A 0200\rNOP\r.\r"),
+            format!("A 0200\\r\\n0200: NOP\\r\\n{}\\r\\n0200: .\\r\\n", msg), "{:02X}", status);
+        assert_eq!(m.mem(0x0200, 1), [JUNK], "{:02X}", status);
+    }
+    // A restart after one byte, then a retry: the retry rewrites the line from its start.
+    let mut m = scripted(&[0x02, 0x00, 0x02, 0x02, 0x02, 0x03], &[0x21, 0x21, 0x34, 0x12]);
+    assert_eq!(m.dialog("A 0200\rLXI H,1234\rLXI H,1234\r.\r"),
+        "A 0200\\r\\n0200: LXI H,1234\\r\\nService error\\r\\n0200: LXI H,1234\\r\\n0203: .\\r\\n");
+    assert_eq!(m.mem(0x0200, 4), [0x21, 0x34, 0x12, JUNK]);
+    // BUSY between bytes (MB_GET polls again).
+    let mut m = scripted(&[0x01, 0x02, 0x01, 0x01, 0x02, 0x01, 0x03], &[0x3E, 0x0D]);
+    assert_eq!(m.dialog("A 0200\rMVI A,0D\r.\r"), "A 0200\\r\\n0200: MVI A,0D\\r\\n0202: .\\r\\n");
+    assert_eq!(m.mem(0x0200, 3), [0x3E, 0x0D, JUNK]);
+}
+
+#[test]
+fn u_runs_the_mailbox_client() {
+    // 6.17.1 ports row: "U 0200 1 with 0200 = 3E 0D 21 | 0200  3E 0D     MVI A,0D | OUT 11
+    // 02; OUT 10 DIS 0200 3E 0D 21 (17 bytes); OUT 11 01; then IN 12 / IN 13 pairs: 02 (the
+    // length), then the 24 line bytes and 0D 0A; then IN 12 03".
+    use Transfer::{In, Out};
+    let mut m = boot();
+    m.poke(0x0200, &[0x3E, 0x0D, 0x21]);
+    let n = m.ports.len();
+    assert_eq!(m.run("U 0200 1"), "0200  3E 0D     MVI A,0D\\r\\n");
+    let mut want = vec![Out(0x11, 0x02)];
+    want.extend(b"DIS 0200 3E 0D 21".iter().map(|&b| Out(0x10, b)));
+    want.push(Out(0x11, 0x01));
+    for &b in [&[0x02][..], b"0200  3E 0D     MVI A,0D\r\n"].concat().iter() {
+        want.extend([In(0x12, 0x02), In(0x13, b)]);
+    }
+    want.push(In(0x12, 0x03));
+    assert_eq!(m.mailbox_ports(n), want);
+}
+
+#[test]
+fn u_prints_service_error() {
+    // 6.17 step 5 and the 6.17.1 scripted rows: "On status 00 at any point after execute
+    // (the Pi restarted), on 80h-FFh, or on DONE before the length byte, print Service
+    // error and end U. Bytes of the current line already printed stay on that line".
+    let line = [0x02, 0x30, 0x32, 0x30, 0x30, 0x20];
+    let cases: [(&[u8], &[u8], &str, &str); 8] = [
+        (&[0x83], &[], "U 0200 2", "Service error"),
+        (&[0x00], &[], "U 0200 2", "Service error"),
+        (&[0x82], &[], "U 0200 2", "Service error"),
+        (&[0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x83], &line, "U 0200 2", "0200 Service error"),
+        (&[0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x00], &line, "U 0200 2", "0200 Service error"),
+        (&[0x03], &[], "U 0200 1", "Service error"),
+        // A failure on the last line still prints the message.
+        (&[0x02, 0x02, 0x83], &[0x01, b'X'], "U 0200 1", "XService error"),
+        // A failure on the second line: the first line stands.
+        (&[0x02, 0x02, 0x02, 0x03, 0x02, 0x00], &[0x01, b'A', b'\n', 0x01], "U 0200 3", "A\\nService error"),
+    ];
+    for (statuses, bytes, cmd, want) in cases {
+        assert_eq!(scripted(statuses, bytes).run(cmd), format!("{}\\r\\n", want), "{:?}", statuses);
+    }
+}
+
+#[test]
+fn u_counts_instructions_past_ff() {
+    // 4.3: "Count for U is a number of instructions, 0001 to FFFF." Not a transcript: 256 lines.
+    let mut m = boot();
+    m.run("F 0200 03FF 00");
+    let out = m.run("U 0200 100");
+    let lines: Vec<&str> = out.split("\\r\\n").filter(|l| !l.is_empty()).collect();
+    assert_eq!((lines.len(), lines[0], lines[255]), (256, "0200  00        NOP", "02FF  00        NOP"));
+}
+
+#[test]
+fn u_lines_are_the_debugger_lines() {
+    // 6.17.1 Identity: "for every opcode xx, with 0200-0202 = xx 01 02, U 0200 1 | the output
+    // string (.1) of Debugger::new().command(&mut m.cpu, "u 0200 1"), no symbols loaded, with
+    // its LF replaced by CR LF".
+    let mut m = boot();
+    for xx in 0..=255u8 {
+        m.poke(0x0200, &[xx, 0x01, 0x02]);
+        let want = Debugger::new().command(&mut m.cpu, "u 0200 1").1.replace('\n', "\r\n");
+        assert_eq!(m.run("U 0200 1"), show(want.as_bytes()), "{:02X}", xx);
+    }
+}
+
+#[test]
+fn u_text_typed_into_a_gives_the_bytes_back() {
+    // 6.17.1 Round trip: "for every opcode xx, U 0200 1, then A 0300 with U's text field, . |
+    // 0300.. = 0200.. for the instruction's length, except the R2 aliases". R2: NOP* is 08,
+    // CALL* is DD.
+    let mut m = boot();
+    for xx in 0..=255u8 {
+        m.poke(0x0200, &[xx, 0x01, 0x02]);
+        let out = m.run("U 0200 1");
+        let text = out[16..].strip_suffix("\\r\\n").unwrap();
+        let len = (out[6..14].trim().len() + 1) / 3;
+        m.poke(0x0300, &[JUNK; 3]);
+        let next = format!("{:04X}", 0x0300 + len);
+        assert_eq!(m.dialog(&format!("A 0300\r{}\r.\r", text)),
+            format!("A 0300\\r\\n0300: {}\\r\\n{}: .\\r\\n", text, next), "{:02X}", xx);
+        let first = match xx {
+            0x10 | 0x18 | 0x20 | 0x28 | 0x30 | 0x38 => 0x08,
+            0xED | 0xFD => 0xDD,
+            _ => xx,
+        };
+        assert_eq!(m.mem(0x0300, len), [first, 0x01, 0x02][..len], "{:02X} {}", xx, text);
+    }
 }
 
 // ---------- G entry (not a transcript: the program is a HLT) ----------
@@ -675,6 +848,8 @@ fn argument_errors_write_no_port_and_no_memory_outside_the_workspace() {
         "S 0200 0210", "S 0200 0210 AA ZZ", "S 0300 0200 41", "S 0200 0210 100",
         "L 0", "L 0 0200 0", "L 0 0200 ZZ", "L 1234567 0200", "L 0 10200",
         "W 0200", "W 0200 0 0", "W 0200 0 ZZ", "W 0200 1000000",
+        "A", "A 02G0", "A 10000",
+        "U", "U 02G0", "U 0200 ZZ", "U 0200 10000", "U 0200 0",
     ];
     let errors = ["Invalid address", "Invalid hex value", "Invalid port/value", "Invalid range"];
     let mut m = boot();

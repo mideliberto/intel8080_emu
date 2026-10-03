@@ -1,4 +1,6 @@
-// disasm.rs - Table-driven 8080 disassembler (ARCHITECTURE 7.4, Output).
+// disasm.rs - The 8080 opcode table, read forwards (disassembler, the DIS line) and
+// backwards (the single-line assembler). Device code: mailbox ASM and DIS
+// (DEVICE_SPECS 8) and the debugger (ARCHITECTURE 7.4) share it.
 
 /// All 256 opcodes in the notation of docs/reference/Complete_Intel_8080_Instruction_Set_Reference.txt:
 /// d8 and p8 are a byte operand, d16 and a16 a word operand. A star marks an
@@ -38,4 +40,51 @@ pub fn disassemble(bytes: [u8; 3], name: impl Fn(u16) -> Option<String>) -> (Str
     } else {
         (t.to_string(), 1)
     }
+}
+
+/// The DIS instruction line (DEVICE_SPECS 8, DIS), without a line ending, and the
+/// instruction length: `AAAA  B0 B1 B2  TEXT`, the bytes field padded to 8. `name` as
+/// for `disassemble`: DIS passes `|_| None`, the debugger its symbol lookup.
+pub fn line(addr: u16, bytes: [u8; 3], name: impl Fn(u16) -> Option<String>) -> (String, u16) {
+    let (text, len) = disassemble(bytes, name);
+    let hex: Vec<String> = bytes[..len as usize].iter().map(|b| format!("{:02X}", b)).collect();
+    (format!("{:04X}  {:<8}  {}", addr, hex.join(" "), text), len)
+}
+
+/// One instruction in the notation `disassemble` prints, as machine code (DEVICE_SPECS 8,
+/// ASM), or None if it does not assemble. The table is searched from opcode 00 and the
+/// first matching entry wins, so a starred alias gives the lowest opcode of its group.
+/// A token must equal the entry's text or be a hex number, so a line with a byte outside
+/// 20-7E, an empty operand or an operand with a space in it matches no entry.
+pub fn assemble(line: &str) -> Option<Vec<u8>> {
+    let line = line.to_ascii_uppercase();
+    let line = line.trim_matches(' ');
+    let (mnemonic, rest) = line.split_once(' ').unwrap_or((line, ""));
+    let rest = rest.trim_matches(' ');
+    let operands: Vec<&str> = if rest.is_empty() { Vec::new() } else { rest.split(',').map(|o| o.trim_matches(' ')).collect() };
+    (0..=255u8).find_map(|op| {
+        let (m, entry) = OPCODES[op as usize].split_once(' ').unwrap_or((OPCODES[op as usize], ""));
+        let entry: Vec<&str> = if entry.is_empty() { Vec::new() } else { entry.split(',').collect() };
+        if m != mnemonic || entry.len() != operands.len() {
+            return None;
+        }
+        let mut code = vec![op];
+        for (&e, &o) in entry.iter().zip(&operands) {
+            match e {
+                "d8" | "p8" => code.push(u8::try_from(number(o)?).ok()?),
+                "d16" | "a16" => code.extend(number(o)?.to_le_bytes()),
+                _ if e == o => {}
+                _ => return None,
+            }
+        }
+        Some(code)
+    })
+}
+
+/// 1-4 hex digits and nothing else (no sign, prefix or suffix).
+fn number(tok: &str) -> Option<u16> {
+    if tok.len() > 4 || !tok.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u16::from_str_radix(tok, 16).ok() // None when empty
 }

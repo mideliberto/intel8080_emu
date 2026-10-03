@@ -148,6 +148,8 @@ NOT_LOWER:
         ; Command dispatch. ':' first: a pasted HEX file is many lines.
         CPI     ':'                 ; Not a command letter: an Intel HEX record
         JZ      HEX_RECORD
+        CPI     'A'
+        JZ      CMD_ASM
         CPI     'C'
         JZ      CMD_COMPARE
         CPI     'D'
@@ -170,6 +172,8 @@ NOT_LOWER:
         JZ      CMD_SEARCH
         CPI     'T'
         JZ      CMD_TIME
+        CPI     'U'
+        JZ      CMD_UNASM
         CPI     'L'
         JZ      CMD_LOAD
         CPI     'W'
@@ -541,8 +545,119 @@ RANGE:
         RET
 
 ; ============================================
+; MAILBOX CLIENT (DEVICE_SPECS 8 reference client, MONITOR_SPEC 9)
+; Used by T, A and U. The caller sends with MB_SEND (and MB_PUT, MB_HEX),
+; executes (OUT 11 <- 01), then calls MB_GET until it returns done or failed.
+; ============================================
+
+; MB_SEND - Clear the mailbox (the resync), then append a NUL-terminated string
+; MB_PUT - Append a NUL-terminated string, without the clear
+; Input: HL = string
+; Output: HL = address of the NUL
+; Trashes: A, flags
+MB_SEND:
+        MVI     A,02H
+        OUT     MAILBOX_CTRL        ; clear (resync)
+MB_PUT:
+        MOV     A,M
+        ORA     A
+        RZ
+        OUT     MAILBOX_DATA
+        INX     H
+        JMP     MB_PUT
+
+; MB_HEX - Append A as two uppercase hex digits
+; Input: A = byte
+; Trashes: A, flags
+MB_HEX:
+        PUSH    PSW
+        RRC
+        RRC
+        RRC
+        RRC
+        CALL    MB_NIBBLE
+        POP     PSW
+MB_NIBBLE:
+        ANI     0FH
+        CPI     0AH
+        JC      MBN_DIGIT
+        ADI     07H
+MBN_DIGIT:
+        ADI     '0'
+        OUT     MAILBOX_DATA
+        RET
+
+; MB_GET - Wait for the next result after execute. Polls status: 01 (busy)
+; polls again. Three outcomes; callers test CY before Z:
+;   byte:   CY=0, A = the next response byte (Z undefined). Status was 02.
+;   done:   CY=1 Z=1. Status 03.
+;   failed: CY=1 Z=0, A = the status: 00 (after execute: the Pi service
+;           restarted) or 80-FF. 04-7F is never returned.
+; Trashes: A, flags
+MB_GET:
+        IN      MAILBOX_STATUS
+        CPI     01H
+        JZ      MB_GET              ; 01 busy
+        CPI     02H
+        JNZ     MB_END
+        IN      MAILBOX_RESPONSE    ; 02 avail (CY=0 from the CPI)
+        RET
+MB_END:
+        CPI     03H                 ; Z: 03 done
+        STC                         ; NZ: failed, A = status
+        RET
+
+; ============================================
 ; COMMANDS (MONITOR_SPEC 6)
 ; ============================================
+
+; CMD_ASM - A addr (MONITOR_SPEC 6.16)
+; Prompts AAAA: and reads a line. Empty: prompt again. '.': end. Otherwise
+; mailbox ASM <text>, and each response byte is stored at the address, which
+; advances (wrapping). Status 82 prints Invalid instruction, any other failure
+; Service error; both prompt again at the address the line started at. Only
+; '.' ends A, so pasted source never reaches the command dispatcher.
+CMD_ASM:
+        CALL    READ_HEX_WORD       ; DE = address
+        JC      ERR_ADDR
+CA_PROMPT:
+        XCHG
+        CALL    PRINT_ADDR          ; AAAA:
+        XCHG
+        CALL    PRINT_SPACE
+        CALL    READ_LINE
+        LXI     H,LINE_BUFFER
+        CALL    SKIP_SPACES         ; HL = the text, A = its first character
+        ORA     A
+        JZ      CA_PROMPT           ; empty: same address, nothing sent
+        CPI     '.'
+        JZ      WARM
+        PUSH    H
+        LXI     H,STR_ASM
+        CALL    MB_SEND             ; clear, "ASM "
+        POP     H
+        CALL    MB_PUT              ; the text, trailing spaces included
+        MVI     A,01H
+        OUT     MAILBOX_CTRL        ; execute
+        PUSH    D                   ; the address this line started at
+CA_GET:
+        CALL    MB_GET
+        JC      CA_END
+        STAX    D                   ; a byte: store it, advance
+        INX     D
+        JMP     CA_GET
+CA_END:
+        POP     H                   ; HL = line start
+        JZ      CA_PROMPT           ; done: DE = the next address
+        XCHG                        ; failed: DE = line start
+        CPI     82H
+        LXI     H,MSG_BAD_INSN
+        JZ      CA_FAIL
+        LXI     H,MSG_SERVICE
+CA_FAIL:
+        CALL    PRINT_STRING
+        JMP     CA_PROMPT
+
 
 ; CMD_COMPARE - C start end dest
 ; Prints AAAA:XX BBBB:YY for each mismatch. dest wraps past FFFF.
@@ -991,37 +1106,84 @@ CS_NEXT:
         JNZ     CS_LOOP
         JMP     WARM
 
-; CMD_TIME - T (arguments ignored). Mailbox TIME with the reference client
-; (DEVICE_SPECS 8): clear, send TIME, execute, then poll status and print each
-; response byte as it arrives. DONE prints CR LF. 00 after execute (the Pi
-; service restarted) or 80-FF prints Service error, after any bytes already
-; printed. 01 (busy) polls again; 04-7F is never returned.
+; CMD_TIME - T (arguments ignored, MONITOR_SPEC 6.15). Mailbox TIME: each
+; response byte is printed as it arrives; done prints CR LF; a failure prints
+; Service error, after any bytes already printed.
 CMD_TIME:
-        MVI     A,02H               ; Clear (resync)
-        OUT     MAILBOX_CTRL
-        MVI     A,'T'
-        OUT     MAILBOX_DATA
-        MVI     A,'I'
-        OUT     MAILBOX_DATA
-        MVI     A,'M'
-        OUT     MAILBOX_DATA
-        MVI     A,'E'
-        OUT     MAILBOX_DATA
-        MVI     A,01H               ; Execute
-        OUT     MAILBOX_CTRL
-CT_POLL:
-        IN      MAILBOX_STATUS
-        CPI     01H
-        JC      ERR_SERVICE         ; 00 after execute: Pi restarted
-        JZ      CT_POLL             ; 01 busy
-        CPI     03H
-        JZ      CT_DONE             ; 03 done
-        JNC     ERR_SERVICE         ; 80-FF error
-        IN      MAILBOX_RESPONSE    ; 02 avail
+        LXI     H,STR_TIME
+        CALL    MB_SEND             ; clear, "TIME"
+        MVI     A,01H
+        OUT     MAILBOX_CTRL        ; execute
+CT_GET:
+        CALL    MB_GET
+        JC      CT_END
         CALL    CONOUT
-        JMP     CT_POLL
-CT_DONE:
+        JMP     CT_GET
+CT_END:
+        JNZ     ERR_SERVICE
         CALL    PRINT_CRLF
+        JMP     WARM
+
+; CMD_UNASM - U addr [count] (MONITOR_SPEC 6.17). count instructions, default 8,
+; 0 is Invalid range. For each: mailbox DIS AAAA B0 B1 B2 (the 3 bytes at the
+; address, wrapping); the first response byte is the length, the rest (the line
+; and its CR LF) is printed as it arrives; the address advances by the length.
+; A failure, or done before the length byte, prints Service error and ends U.
+CMD_UNASM:
+        CALL    READ_HEX_WORD
+        JC      ERR_ADDR
+        PUSH    D                   ; address
+        CALL    READ_HEX_WORD       ; DE = count
+        LXI     B,0008H
+        JZ      CU_COUNTED          ; Absent: 8
+        JC      ERR_HEX
+        MOV     B,D
+        MOV     C,E
+        MOV     A,B
+        ORA     C
+        JZ      ERR_RANGE           ; Count 0
+CU_COUNTED:
+        POP     H                   ; HL = address
+CU_LINE:
+        PUSH    B                   ; count
+        PUSH    H
+        LXI     H,STR_DIS
+        CALL    MB_SEND             ; clear, "DIS "
+        POP     H
+        MOV     A,H
+        CALL    MB_HEX
+        MOV     A,L
+        CALL    MB_HEX              ; AAAA
+        PUSH    H
+        MVI     B,3
+CU_BYTE:
+        MVI     A,SPACE
+        OUT     MAILBOX_DATA
+        MOV     A,M
+        CALL    MB_HEX              ; B0, B1, B2
+        INX     H
+        DCR     B
+        JNZ     CU_BYTE
+        POP     H                   ; HL = address
+        MVI     A,01H
+        OUT     MAILBOX_CTRL        ; execute
+        CALL    MB_GET              ; the length byte
+        JC      ERR_SERVICE         ; done or failed before it
+        MOV     C,A
+        MVI     B,0
+        DAD     B                   ; HL = the next address (wraps)
+CU_TEXT:
+        CALL    MB_GET
+        JC      CU_END
+        CALL    CONOUT
+        JMP     CU_TEXT
+CU_END:
+        JNZ     ERR_SERVICE         ; failed: the message follows the bytes printed
+        POP     B
+        DCX     B
+        MOV     A,B
+        ORA     C
+        JNZ     CU_LINE
         JMP     WARM
 
 ; CMD_HELP - ? (arguments ignored)
@@ -1279,18 +1441,19 @@ CW_LOOP:
         JMP     STOR_CHECK
 
 ; ============================================
-; STRINGS (MONITOR_SPEC 1.1, 5, 6.14)
+; STRINGS (MONITOR_SPEC 1.1, 5, 6.14; mailbox commands)
 ; ============================================
 
 MSG_BANNER:
         DB      CR,LF
-        DB      "8080 Monitor v0.5",CR,LF
+        DB      "8080 Monitor v0.6",CR,LF
         DB      'Built: ', DATE, ' ', TIME, CR, LF
         DB      "Ready.",CR,LF
         DB      0
 
 MSG_HELP:
         DB      "Commands:",CR,LF
+        DB      "  A addr           - Assemble",CR,LF
         DB      "  C start end dest - Compare memory",CR,LF
         DB      "  D [start] [end]  - Dump memory",CR,LF
         DB      "  E [addr]         - Examine/modify",CR,LF
@@ -1303,6 +1466,7 @@ MSG_HELP:
         DB      "  O port value     - Output to port",CR,LF
         DB      "  S start end pat  - Search memory",CR,LF
         DB      "  T                - Show time",CR,LF
+        DB      "  U addr [cnt]     - Unassemble",CR,LF
         DB      "  W mem stor [cnt] - Write to storage",CR,LF
         DB      "  X [file | -]     - Mount/unmount storage",CR,LF
         DB      "  :LLAAAATT..CC    - Intel HEX record",CR,LF
@@ -1347,6 +1511,16 @@ MSG_ADDR_RANGE:
         DB      "Address out of range",CR,LF,0
 MSG_SERVICE:
         DB      "Service error",CR,LF,0
+MSG_BAD_INSN:
+        DB      "Invalid instruction",CR,LF,0
+
+; Mailbox command words (MB_SEND)
+STR_TIME:
+        DB      "TIME",0
+STR_ASM:
+        DB      "ASM ",0
+STR_DIS:
+        DB      "DIS ",0
 
 ; ROM_END - first byte after the ROM contents. make size: ROM_END - F000.
 ROM_END:

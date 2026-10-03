@@ -439,7 +439,7 @@ RESET
 
 ### 7.4 Debugger
 
-Host-side only. The 8080 cannot observe it: it adds no cycles, no port, no memory and no byte to the console stream. Code: `src/debugger.rs` (commands, breaks, ring, trace), `src/disasm.rs` (the opcode table and the instruction line: device code for mailbox `ASM` and `DIS`, `DEVICE_SPECS.md` 8, which the debugger reuses; the move of the line out of the debugger is pending, `TODO.md`), `src/main.rs` (entry and prompt). Tests: `tests/debugger_tests.rs`.
+Host-side only. The 8080 cannot observe it: it adds no cycles, no port, no memory and no byte to the console stream. Code: `src/debugger.rs` (commands, breaks, ring, trace), `src/disasm.rs` (the opcode table, the assembler and the instruction line `disasm::line`: device code for mailbox `ASM` and `DIS`, `DEVICE_SPECS.md` 8, which the debugger reuses), `src/main.rs` (entry and prompt). Tests: `tests/debugger_tests.rs`.
 
 **Entry.**
 
@@ -498,7 +498,7 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 ## 8. Later Phases (Placeholders)
 
 - **Phase 6 (done 2026-10-03):** Service Mailbox device (ports 10-13), mailbox `TIME`, and the `T` command. Protocol: `DEVICE_SPECS.md` (Service Mailbox). Command: `MONITOR_SPEC.md`. No memory-map or circuit change.
-- **Phase 7 (specified 2026-10-03; code pending, `TODO.md`):** mailbox `ASM` and `DIS`, and the `A` and `U` commands (`DEVICE_SPECS.md` 8, `MONITOR_SPEC.md` 6.16-6.17). No memory-map or circuit change.
+- **Phase 7 (done 2026-10-03):** mailbox `ASM` and `DIS`, and the `A` and `U` commands (`DEVICE_SPECS.md` 8, `MONITOR_SPEC.md` 6.16-6.17). No memory-map or circuit change.
 - **Phases 8-9:** more mailbox commands (`GET`, `ASK`). No architecture change.
 - **Phase 10:** what is left after the debugger (7.4): the monitor's `R` command, which needs the `G` return contract to capture registers.
 - **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6).

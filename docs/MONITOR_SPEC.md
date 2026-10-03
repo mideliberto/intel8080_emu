@@ -2,14 +2,14 @@
 
 Normative. This is the contract for everything the monitor ROM shows the user: the banner, the prompt, line input, the argument grammar, every command, the messages, the Intel HEX loader, the `G` return contract and the ROM routine contracts. It replaces the deleted `MONITOR_IMPLEMENTATION_STATUS.md`.
 
-**Scope.** Monitor ROM v0.5 (v0.3 plus Phase 5, the HEX loader, and Phase 6, the `T` command) and the 2026-10-02 decisions, plus Phase 7 (the `A` and `U` commands, specified 2026-10-03 and not yet implemented; see Status). Phases 8-10 get one-line placeholders (Future Commands).
+**Scope.** Monitor ROM v0.6 (v0.3 plus Phase 5, the HEX loader, Phase 6, the `T` command, and Phase 7, the `A` and `U` commands) and the 2026-10-02 decisions. Phases 8-10 get one-line placeholders (Future Commands).
 
 **Elsewhere (one fact, one home):**
 - `ARCHITECTURE.md`: the memory map, workspace layout, stack page, reset and boot sequence, WARM entry code, the ROM overlay, the hardware interface (READY, the Pi window), and Host-Side Conveniences (the host key map, Ctrl-C quit, the Ctrl-E debugger hotkey).
 - `DEVICE_SPECS.md`: every port protocol (console, storage, mount, Service Mailbox, system control) and the READY contract as software sees it.
 - `TODO.md`: the work queue and every known difference between the code and this spec.
 
-**Status of this spec.** All decisions are made (2026-10-02 and 2026-10-03; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6, v0.5) is implemented (2026-10-03). The Phase 7 edits (3 item 5, 4.3 U count, 4.4 rule 5, 5, 6.14, 6.15 step 1, 6.16, 6.17, the section 9 mailbox client, 10 and 11) are not yet implemented (`TODO.md`).
+**Status of this spec.** All decisions are made (2026-10-02 and 2026-10-03; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6, v0.5) is implemented (2026-10-03). 6.16 and 6.17 (`A` and `U`, Phase 7, v0.6) and the section 9 mailbox client are implemented (2026-10-03).
 
 ---
 
@@ -37,7 +37,7 @@ Built: <date> <time><CR><LF>
 Ready.<CR><LF>
 ```
 
-- `<version>` is `0.5` today (`MSG_BANNER` in `rom/monitor.asm`; Phase 6). A phase that changes the command set bumps it in the same commit.
+- `<version>` is `0.6` today (`MSG_BANNER` in `rom/monitor.asm`; Phase 7). A phase that changes the command set bumps it in the same commit.
 - `<date>` and `<time>` are the assembler's `DATE` and `TIME` at build time.
 - Tests MUST NOT match on the version, date or time. A banner check matches only `8080 Monitor v`.
 - **Input across reset.** RESET empties the console input FIFO (`DEVICE_SPECS.md`, Rules Common to All Ports), so the monitor never sees bytes typed before a reset. Bytes that arrive after the reset are ordinary input and are processed after the banner. The ROM has no input-drain loop.
@@ -436,7 +436,7 @@ Example, after the 6.16 example:
 
 Phase 7 tests MUST cover every row. "Prompts" lists the `AAAA: ` prompts A prints, in order. RAM is set by `F` or `A` first, because transcripts only display memory they wrote.
 
-- **Where each row lives.** Rows marked *scripted* are Rust tests in `tests/monitor_tests.rs`: they map the test-local `ScriptedMailbox` (statuses, bytes) at 10-13 with `map_mailbox`, as `t_against` does for T, and the statuses and bytes given are its script. `Mailbox` gets no test knob: it is the code the Pi runs. Rows marked *ports* use the real `Mailbox` from `build_bus` and check the port sequence. Rows marked *rule 4* join the `lines` list of `argument_errors_write_no_port_and_no_memory_outside_the_workspace`. Every other row is a transcript.
+- **Where each row lives.** Rows marked *scripted* are Rust tests in `tests/monitor_tests.rs`: they map the test-local `ScriptedMailbox` (statuses, bytes) at 10-13 with `map_mailbox`, as `scripted` does for T, A and U, and the statuses and bytes given are its script. `Mailbox` gets no test knob: it is the code the Pi runs. Rows marked *ports* use the real `Mailbox` from `build_bus` and check the port sequence. Rows marked *rule 4* join the `lines` list of `argument_errors_write_no_port_and_no_memory_outside_the_workspace`. Every other row is a transcript.
 - **An A dialog in a transcript** is one step in the `<` form, every line typed with `\r`, ending in the `.` line, followed by the expected lines. Example: `< A 0200\rMVI A,0D\r.\r`, then `A 0200`, `0200: MVI A,0D`, `0202: .`. The step ends at the `> ` after `.`, so neither the transcript player nor the daemon end-to-end test changes.
 
 | Input | Expected output | Memory and port effect |

@@ -1,6 +1,7 @@
 # ? prints the command list exactly (MONITOR_SPEC 6.14); arguments are ignored.
 > ?
 Commands:
+  A addr           - Assemble
   C start end dest - Compare memory
   D [start] [end]  - Dump memory
   E [addr]         - Examine/modify
@@ -13,12 +14,14 @@ Commands:
   O port value     - Output to port
   S start end pat  - Search memory
   T                - Show time
+  U addr [cnt]     - Unassemble
   W mem stor [cnt] - Write to storage
   X [file | -]     - Mount/unmount storage
   :LLAAAATT..CC    - Intel HEX record
   ?                - Help
 > ? junk
 Commands:
+  A addr           - Assemble
   C start end dest - Compare memory
   D [start] [end]  - Dump memory
   E [addr]         - Examine/modify
@@ -31,6 +34,7 @@ Commands:
   O port value     - Output to port
   S start end pat  - Search memory
   T                - Show time
+  U addr [cnt]     - Unassemble
   W mem stor [cnt] - Write to storage
   X [file | -]     - Mount/unmount storage
   :LLAAAATT..CC    - Intel HEX record

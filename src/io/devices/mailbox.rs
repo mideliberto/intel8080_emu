@@ -1,10 +1,11 @@
 // mailbox.rs - Service Mailbox (ports 10-13), DEVICE_SPECS 8.
 //
 // The 8080 writes a text command, executes it, polls status and pops the response.
-// Phase 6 has one command, TIME, which completes within the execute access, so there
-// is no background worker and the device never reports BUSY (01). A command that takes
-// time (Phase 8) brings the worker, BUSY and the abort of a running request.
+// TIME, ASM and DIS complete within the execute access, so there is no background
+// worker and the device never reports BUSY (01). A command that takes time (Phase 8)
+// brings the worker, BUSY and the abort of a running request.
 
+use crate::disasm;
 use crate::io::IoDevice;
 use std::collections::VecDeque;
 
@@ -55,14 +56,20 @@ impl Mailbox {
         }
     }
 
-    /// The command word is the bytes before the first 20h, matched exactly.
+    /// The command word is the bytes before the first 20h, matched exactly; the argument
+    /// string is everything after it (None when there is no 20h).
     fn run(&self, command: &[u8]) -> Result<Vec<u8>, u8> {
-        let word = command.split(|&b| b == b' ').next().unwrap_or_default();
-        match word {
-            b"TIME" if command == b"TIME" => (self.clock)()
+        let (word, args) = match command.iter().position(|&b| b == b' ') {
+            Some(i) => (&command[..i], Some(&command[i + 1..])),
+            None => (command, None),
+        };
+        match (word, args) {
+            (b"TIME", None) => (self.clock)()
                 .map(|(y, mo, d, h, mi, s)| format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, h, mi, s).into_bytes())
                 .ok_or(ERR_SERVICE),
-            b"TIME" => Err(ERR_ARGS),
+            (b"ASM", Some(args)) => std::str::from_utf8(args).ok().and_then(disasm::assemble).ok_or(ERR_ARGS),
+            (b"DIS", Some(args)) => dis(args).ok_or(ERR_ARGS),
+            (b"TIME" | b"ASM" | b"DIS", _) => Err(ERR_ARGS),
             _ => Err(ERR_UNKNOWN),
         }
     }
@@ -93,6 +100,21 @@ impl IoDevice for Mailbox {
             _ => {}
         }
     }
+}
+
+/// DIS: `AAAA B0 B1 B2` (exactly 13 bytes) -> the length byte, the DIS line, CR LF.
+fn dis(args: &[u8]) -> Option<Vec<u8>> {
+    if args.len() != 13 || [4, 7, 10].iter().any(|&i| args[i] != b' ') {
+        return None;
+    }
+    // from_str_radix alone would take a leading '+'.
+    let hex = |r: std::ops::Range<usize>| -> Option<u16> {
+        let digits = std::str::from_utf8(&args[r]).ok()?;
+        digits.bytes().all(|b| b.is_ascii_hexdigit()).then(|| u16::from_str_radix(digits, 16).unwrap())
+    };
+    let bytes = [hex(5..7)? as u8, hex(8..10)? as u8, hex(11..13)? as u8];
+    let (line, len) = disasm::line(hex(0..4)?, bytes, |_| None);
+    Some([&[len as u8][..], line.as_bytes(), b"\r\n"].concat())
 }
 
 /// The host's local time (the emulator uses the host clock, DEVICE_SPECS 8). None if

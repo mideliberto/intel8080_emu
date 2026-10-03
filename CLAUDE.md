@@ -5,10 +5,10 @@
 **Mantra:** "A fool admires complexity, genius admires simplicity."
 
 ## Status
-- Phase 6 complete (Service Mailbox at 10-13, `TIME` + T). Phase 7 in progress: `ASM`/`DIS`, A and U, specified 2026-10-03 (DEVICE_SPECS 8, MONITOR_SPEC 6.16-6.17), code pending. Pi daemon `pi8080d` specified 2026-10-03 (`docs/PI_DAEMON.md`), code pending.
-- 266 tests passing (13 host + 130 CPU + 37 device + 30 mailbox + 32 monitor + 16 debugger + 8 terminal), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
-- Monitor ROM v0.5, 15 commands plus the `:` HEX loader, matches MONITOR_SPEC. 2571 of 4096 bytes used (`cd rom && make size`), ~1.5KB headroom
-- Spec: four normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC since 2026-10-02; PI_DAEMON since 2026-10-03). Open decisions: none (the Pi daemon and Phase 7 sets closed 2026-10-03; `TODO.md`).
+- Phase 7 complete (mailbox `ASM`/`DIS`, A and U, the shared ROM mailbox client). Pi daemon `pi8080d` specified 2026-10-03 (`docs/PI_DAEMON.md`), code pending.
+- 279 tests passing (13 host + 130 CPU + 37 device + 34 mailbox + 41 monitor + 16 debugger + 8 terminal), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
+- Monitor ROM v0.6, 17 commands plus the `:` HEX loader, matches MONITOR_SPEC. 2893 of 4096 bytes used (`cd rom && make size`), ~1.2KB headroom
+- Spec: four normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC since 2026-10-02; PI_DAEMON since 2026-10-03). Open decisions: one, the MONITOR_SPEC 6.17 U cycle figure vs the measurement (`TODO.md`).
 - Live task list: `TODO.md`
 
 ## Roles

@@ -310,7 +310,7 @@ The monitor's `X name` follows this sequence and prints `Invalid filename` for 0
 
 ## 8. Service Mailbox (Ports 10-13)
 
-One device carries every Pi service. The 8080 writes a text command and reads back a byte stream. The Pi handles TLS, DNS, JSON, NTP and the API key. The device logic is Rust behind `IoDevice`: the emulator bus calls it, and on the Pi a GPIO front end calls the same code. Phase 6 brought `TIME`; Phase 7 adds `ASM` and `DIS` (specified 2026-10-03; the code is pending, `TODO.md`, and until it ships both give 80).
+One device carries every Pi service. The 8080 writes a text command and reads back a byte stream. The Pi handles TLS, DNS, JSON, NTP and the API key. The device logic is Rust behind `IoDevice`: the emulator bus calls it, and on the Pi a GPIO front end calls the same code. Phase 6 brought `TIME`, Phase 7 `ASM` and `DIS`.
 
 ### Registers
 
@@ -501,7 +501,7 @@ Device-level tests MUST cover every row. Responses are shown as hex bytes; for D
 
 ### Reference client
 
-This is the monitor's mailbox client (`MONITOR_SPEC.md` 9; the ROM routines are pending, `TODO.md`, and v0.5's `T` inlines the same port sequence). MB_SEND clears the mailbox (the resync) and sends a NUL-terminated string, and MB_PUT appends one without the clear. The caller executes. MB_GET then waits for the next result and returns one of three outcomes: a response byte, done (03), or failed with the status (00 after execute, meaning the Pi restarted, or 80-FF). Each monitor command's sink and messages: `MONITOR_SPEC.md` 6.15-6.17.
+This is the monitor's mailbox client (`MONITOR_SPEC.md` 9: MB_SEND, MB_PUT and MB_GET in `rom/monitor.asm`). MB_SEND clears the mailbox (the resync) and sends a NUL-terminated string, and MB_PUT appends one without the clear. The caller executes. MB_GET then waits for the next result and returns one of three outcomes: a response byte, done (03), or failed with the status (00 after execute, meaning the Pi restarted, or 80-FF). Each monitor command's sink and messages: `MONITOR_SPEC.md` 6.15-6.17.
 
 ```asm
 ; HL -> NUL-terminated command text
@@ -553,5 +553,5 @@ Superseded on 2026-10-02 (see COLLABORATION_LOG Key Decisions):
 | Port map 00-6F | `build_bus` (`src/io/mod.rs`), used by `main.rs` and every test harness. It takes the TIME clock as a parameter, `build_bus(storage_dir, clock)`, and the emulator's callers pass `mailbox::local_time` (pending, `TODO.md`) | Pi daemon: the same function, with its own clock (`PI_DAEMON.md` 6, 8) |
 | Console 00-02 | `src/io/devices/console.rs` (input FIFO and output buffer, no terminal code); the terminal side is `src/main.rs` | Pi: the same Rust code, with the terminal connected to the Pi over TCP (`PI_DAEMON.md` 7) |
 | Storage 08-0C, Mount 0D-0F | `src/io/devices/storage.rs`, one device (std::fs) | Pi: the same Rust code, files on its SD card |
-| Service Mailbox 10-13 | `src/io/devices/mailbox.rs`. `TIME` reads a clock passed to `Mailbox::new` (a plain fn returning the date and time fields, or None for "not set"). The device formats the 19 bytes, so the emulator and the Pi daemon share the formatter. `build_bus` passes the host's local time (`mailbox::local_time`, `localtime_r` through the `libc` crate); tests pass a fixed or a failing one. `ASM` and `DIS` call `src/disasm.rs`: `assemble` reads the opcode table backwards, and `line` formats the DIS line, which the debugger reuses (pending, `TODO.md`) | Pi: the same Rust code and formatter behind GPIO, with a clock that reports "not set" (83) unless the kernel is NTP-synchronized (section 8, TIME clock; `PI_DAEMON.md` 8). `ASM` and `DIS` are the same code |
+| Service Mailbox 10-13 | `src/io/devices/mailbox.rs`. `TIME` reads a clock passed to `Mailbox::new` (a plain fn returning the date and time fields, or None for "not set"). The device formats the 19 bytes, so the emulator and the Pi daemon share the formatter. `build_bus` passes the host's local time (`mailbox::local_time`, `localtime_r` through the `libc` crate); tests pass a fixed or a failing one. `ASM` and `DIS` call `src/disasm.rs`: `assemble` reads the opcode table backwards, and `line` formats the DIS line, which the debugger reuses | Pi: the same Rust code and formatter behind GPIO, with a clock that reports "not set" (83) unless the kernel is NTP-synchronized (section 8, TIME clock; `PI_DAEMON.md` 8). `ASM` and `DIS` are the same code |
 | System control FE-FF | `src/cpu.rs` | 74HCT74 and decode (`ARCHITECTURE.md`, Overlay Glue) |

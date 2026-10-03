@@ -510,37 +510,38 @@ Console I/O debugging session:
 
 **CPU Core:** All 256 opcodes (5 undocumented aliases decoded), flags match ARCHITECTURE 5.1-5.3 including AC, 8080A interrupt input (EI delay, HLT wake), reset() = RESET pin. All four exercisers pass, 8080EXM included
 
-**Monitor ROM v0.5:**
-- 15 commands: D, E, F, M, S, C, H, G, I, O, L, W, X, T, ?, to MONITOR_SPEC sections 1-6, 8, 9, 11 (strict arguments, WARM, G return, memmove, Storage error, Mount failed)
+**Monitor ROM v0.6:**
+- 17 commands: A, C, D, E, F, G, H, I, L, M, O, S, T, U, W, X, ?, to MONITOR_SPEC sections 1-6, 8, 9, 11 (strict arguments, WARM, G return, memmove, Storage error, Mount failed)
 - Intel HEX loader (Phase 5, MONITOR_SPEC 7): a `:` line is one record, validated in full (pass 1: steps 1-4) before the type, the guard and the write (pass 2)
-- T (Phase 6, MONITOR_SPEC 6.15): mailbox `TIME` through the DEVICE_SPECS 8 reference client, `Service error` on 00 after execute or 80-FF
+- T (Phase 6, MONITOR_SPEC 6.15): mailbox `TIME`, `Service error` on 00 after execute or 80-FF
+- A and U (Phase 7, MONITOR_SPEC 6.16-6.17): mailbox `ASM` and `DIS`; only `.` ends A. T, A and U share MB_SEND/MB_PUT/MB_GET, the DEVICE_SPECS 8 reference client
 - ROM overlay boot mechanism; CONOUT is OUT 00 / RET, so the first Pi access after reset is the banner's OUT 00
-- 2571 of 4096 bytes used (1525 free; `make size`)
+- 2893 of 4096 bytes used (1203 free; `make size`)
 
 **Debugger (host-side, ARCHITECTURE 7.4):** Ctrl-E / `--debug` / `--script`, break, step, registers, memory, disassembly with ROM symbols (`rom/monitor.sym`), watchpoints, I/O breaks, port trace, 256-step trace ring
 
 **Devices:**
-- Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), Service Mailbox (0x10-0x13, `TIME`; the clock is a plain fn passed to `Mailbox::new`), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
+- Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), Service Mailbox (0x10-0x13, `TIME`, `ASM`, `DIS`; the clock is a plain fn passed to `Mailbox::new`; `ASM`/`DIS` read the one opcode table in `src/disasm.rs`, which the debugger shares), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
 **Testing (verified 2026-10-03):**
-- 13 host + 130 CPU + 37 device + 30 mailbox + 32 monitor + 16 debugger + 8 terminal = 266, all passing (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
+- 13 host + 130 CPU + 37 device + 34 mailbox + 41 monitor + 16 debugger + 8 terminal = 279, all passing (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 
 ### In Progress
 
 - **Phase 6:** done 2026-10-03 (Service Mailbox, `TIME`, T, v0.5).
-- **Phase 7:** specified 2026-10-03 (DEVICE_SPECS 8, MONITOR_SPEC 6.16-6.17); code not started (`TODO.md`, Phase 7).
+- **Phase 7:** done 2026-10-03 (mailbox `ASM`/`DIS`, A, U, v0.6).
 - **Pi daemon:** specified 2026-10-03 (`docs/PI_DAEMON.md`); code not started (`TODO.md`, Current).
 - **Review findings:** 2026-10-02 review found CPU flag bugs, ROM range and parse bugs, and vacuous tests. All fixed by 2026-10-03 (steps A-E); `TODO.md` keeps the repros.
 
 ### Open Decisions
 
-None open. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon and Phase 7 sets closed 2026-10-03 too. The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
+One open: the MONITOR_SPEC 6.17 U cost figure (about 9,500 cycles a line) vs about 4,450-5,600 measured on v0.6 (`TODO.md`, Open Decisions). The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon and Phase 7 sets closed 2026-10-03 too. The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
 
 ### Blocked/Deferred
 
 - **R command:** Needs return mechanism (Phase 10). The debugger itself shipped 2026-10-03
-- **Pi services:** one Service Mailbox at 0x10-0x13. Phase 6 `TIME` done; 7 `ASM`/`DIS`, 8 `GET` (brings the background worker and BUSY), 9 `ASK`
+- **Pi services:** one Service Mailbox at 0x10-0x13. Phase 6 `TIME` and 7 `ASM`/`DIS` done; 8 `GET` (brings the background worker and BUSY), 9 `ASK`
 - **8253 timer / interrupts:** Someday
 
 ### Future Vision (Documented, Not Started)
@@ -551,6 +552,20 @@ None open. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "cl
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Phase 7 Review Fixes
+- Review found no Rust or ROM bug; four small test/doc gaps, all applied. The fifth item (U's `MVI B,0` is an equivalent mutant) is left as is: 2 bytes for not leaning on the CU_BYTE loop's exit state.
+- `a_runs_the_mailbox_client` now sends `  MVI A,0D  ` and asserts the wire bytes are `ASM MVI A,0D  ` (6.16 step 5: leading spaces dropped, trailing kept). The reviewer's surviving mutant (send the whole line buffer) now fails it; checked with `make -B`.
+- `u_text_typed_into_a_gives_the_bytes_back` takes the instruction length from U's bytes field, not from `disasm::disassemble` (the code under test).
+- MONITOR_SPEC 6.17.1 names `scripted`, not the removed `t_against`. The U cost in TODO, roadmap and log corrected to about 4,450-5,600 cycles a line (LXI SP,EFFE is the longest); the 6.17 figure stays an Open Decision.
+- What bit us: ASM trims both ends on the Pi, so the stored bytes could not tell what the ROM sent; only the port sequence does. 279 tests, exercisers 4/4, clippy clean.
+
+### 2026-10-03: Phase 7, Assemble and Unassemble (v0.6)
+- Rust: `disasm::assemble` reads the OPCODES table backwards (first match from 00, so starred aliases give 08 CB D9 DD); `disasm::line` is the DIS line, moved out of the debugger, which now calls it with its symbol lookup (output and tests unchanged). Mailbox `ASM` and `DIS`: argument string after the first 20h, 82 on a bad one, never 83, no worker.
+- ROM: MB_SEND/MB_PUT/MB_GET (the DEVICE_SPECS 8 reference client) and MB_HEX; T moved onto them with its port sequence unchanged; A (only `.` ends it; empty lines, `Invalid instruction` and `Service error` prompt again) and U (count in instructions, default 8). Banner v0.6. 2571 -> 2893 bytes (+322 against a +328 sketch). Measured: an A line of `MVI A,0D` 3,760 cycles, a U line about 4,450-5,600.
+- Tests 266 -> 279: every DEVICE_SPECS 8 ASM/DIS vector and R1/R2 over 768 cases at port level; every MONITOR_SPEC 6.17.1 row (transcripts `assemble.txt`, `unassemble.txt`; ports, scripted, Identity and Round trip as Rust tests; rule 4 rows). The paste regression runs with LF and CR LF ends and a mid-paste failure, then `X` reports nothing mounted. Release exercisers 4/4, clippy clean.
+- Mutants: Rust 62/62 after deleting three redundant checks in `assemble`/`number` that only produced equivalent mutants (bad bytes and bad operands already fail the table match). ROM 201 generated: 193 killed, 4 unviable, 2 more killed by new tests (U count high byte, a failure on U's last line), 2 equivalent.
+- What bit us: U's spec figure (about 9,500 cycles a line) is about twice the measurement; logged in TODO Open Decisions rather than reworded. A mutant that drops U's `JNZ ERR_SERVICE` survived every scripted row, because the next line's execute failed the same way; only a failure on the last line shows it.
 
 ### 2026-10-03: Pi Daemon and Phase 7 Specs Integrated
 - Mike accepted every recommendation in both spec sets (Key Decisions, same date). Installed `docs/PI_DAEMON.md` as the fourth normative doc, with the open-decision markers replaced by the decisions.
