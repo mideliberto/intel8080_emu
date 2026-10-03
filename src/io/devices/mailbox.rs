@@ -106,6 +106,6 @@ pub fn local_time() -> Option<(u16, u8, u8, u8, u8, u8)> {
     if unsafe { libc::localtime_r(&secs, &mut tm) }.is_null() {
         return None;
     }
-    let year = u16::try_from(tm.tm_year + 1900).ok()?;
+    let year = u16::try_from(tm.tm_year + 1900).ok().filter(|&y| y <= 9999)?; // > 9999 is "not set" (DEVICE_SPECS 8)
     Some((year, tm.tm_mon as u8 + 1, tm.tm_mday as u8, tm.tm_hour as u8, tm.tm_min as u8, tm.tm_sec as u8))
 }

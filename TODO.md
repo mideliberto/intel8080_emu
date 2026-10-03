@@ -46,7 +46,7 @@ Budget was ~250 bytes, from a 176-byte sketch that left out the five messages an
 
 ## Decided, to implement (from the specs; small, not Phase 5)
 Emulator:
-- [ ] `mailbox::local_time` reports "not set" (None, so TIME gives 83) for a year above 9999 (DEVICE_SPECS 8, TIME clock). Today it returns the year and TIME would print 20 bytes; unreachable before the year 10000. One `filter` plus a note in its doc comment.
+- [x] `mailbox::local_time` reports "not set" for a year above 9999: done 2026-10-03 (filter in `local_time`; unreachable before 10000, so untested).
 - [x] Delete `src/io/devices/timer.rs` and its port hooks in `src/cpu.rs` (ports 0x30-0x32, tick at ~:947). Keep a CPU interrupt input `interrupt(rst)` with 8080A acceptance (EI delay, HLT wake, 11 cycles); tests only.
 - [x] HLT: `execute_one` fetches nothing while halted; `run()` returns on halt; main.rs prints `HLT at PC=xxxx`, restores the terminal, exits; `perform_hlt` stops printing.
 - [x] Host input pump + Ctrl-C quit in the emulator run loop; host key map per ARCHITECTURE; the run loop returns a quit/halted status (ARCHITECTURE 7.2). Done 2026-10-03: `run_loop`/`map_key` in `src/main.rs`; piped stdin feeds the console unmapped
