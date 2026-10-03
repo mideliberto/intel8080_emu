@@ -14,6 +14,7 @@ Commands:
   S start end pat  - Search memory
   W mem stor [cnt] - Write to storage
   X [file | -]     - Mount/unmount storage
+  :LLAAAATT..CC    - Intel HEX record
   ?                - Help
 > ? junk
 Commands:
@@ -30,4 +31,5 @@ Commands:
   S start end pat  - Search memory
   W mem stor [cnt] - Write to storage
   X [file | -]     - Mount/unmount storage
+  :LLAAAATT..CC    - Intel HEX record
   ?                - Help

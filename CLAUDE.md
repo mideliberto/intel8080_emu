@@ -5,10 +5,10 @@
 **Mantra:** "A fool admires complexity, genius admires simplicity."
 
 ## Status
-- Phase 4 complete (24-bit storage, 16MB). Phase 5 next: Intel HEX loader, parsed in ROM by the 8080.
-- 219 tests passing (13 host + 130 CPU + 37 device + 23 monitor + 16 debugger), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
-- Monitor ROM v0.3, 14 commands, matches MONITOR_SPEC except the Phase 5 HEX loader and Phase 6 `T`. 2165 of 4096 bytes used (`cd rom && make size`), ~1.9KB headroom
-- Spec solidified 2026-10-02: three normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC). Open decisions: none as of 2026-10-03 (`TODO.md`).
+- Phase 5 complete (Intel HEX loader, parsed in ROM by the 8080). Phase 6 next: Service Mailbox, `TIME` + T.
+- 222 tests passing (13 host + 130 CPU + 37 device + 26 monitor + 16 debugger), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
+- Monitor ROM v0.4, 14 commands plus the `:` HEX loader, matches MONITOR_SPEC except Phase 6 `T`. 2454 of 4096 bytes used (`cd rom && make size`), ~1.6KB headroom
+- Spec solidified 2026-10-02: three normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC). Open decisions: four Phase 5 spec-wording items (`TODO.md`).
 - Live task list: `TODO.md`
 
 ## Roles

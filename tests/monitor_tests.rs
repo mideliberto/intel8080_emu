@@ -364,6 +364,42 @@ fn go() {
 }
 
 #[test]
+fn hex_loader() {
+    boot().play("hex");
+}
+
+/// An Intel HEX type 00 record of `len` copies of `data` at `addr`, checksum correct.
+fn hex_data_record(len: u8, addr: u16, data: u8) -> String {
+    let mut bytes = vec![len, (addr >> 8) as u8, addr as u8, 0x00];
+    bytes.extend(std::iter::repeat(data).take(len as usize));
+    let sum = bytes.iter().fold(0u8, |s, b| s.wrapping_add(*b));
+    bytes.push(sum.wrapping_neg());
+    bytes.iter().fold(":".to_string(), |s, b| s + &format!("{:02X}", b))
+}
+
+#[test]
+fn hex_guard_sweep() {
+    // MONITOR_SPEC 7.2 step 6 for every high byte, at the low bytes and lengths where
+    // the carry into the high byte changes: accepted iff AAAA >= 0100 and
+    // AAAA + LL <= EF00 without wrap. An accepted record writes exactly its bytes.
+    let mut m = boot();
+    for hi in 0..=0xFFu16 {
+        for lo in [0x00u16, 0x01, 0xDE, 0xDF, 0xFF] {
+            for len in [0x01u8, 0x02, 0x21, 0x22] {
+                let addr = hi << 8 | lo;
+                let data = (hi as u8) ^ lo as u8 ^ len;
+                let ok = addr >= 0x0100 && addr as u32 + len as u32 <= 0xEF00;
+                let out = m.run(&hex_data_record(len, addr, data));
+                assert_eq!(out, if ok { "" } else { "Address out of range\\r\\n" }, "{:04X} {:02X}", addr, len);
+                if ok {
+                    assert!(m.mem(addr, len as usize).iter().all(|&b| b == data), "{:04X} {:02X}", addr, len);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn storage() {
     let mut m = boot();
     m.play("storage");
@@ -487,5 +523,78 @@ fn argument_errors_write_no_port_and_no_memory_outside_the_workspace() {
         let out = String::from_utf8(m.con.borrow_mut().take_output()).unwrap();
         let msg = out.trim_start_matches("> ").strip_prefix(&format!("{}\r\n", line)).and_then(|o| o.strip_suffix("\r\n"));
         assert!(msg.is_some_and(|msg| errors.contains(&msg)), "{}: {:?}", line, out);
+    }
+}
+
+// ---------- HEX loader: validate before write, under the debugger ----------
+
+#[test]
+fn hex_records_are_validated_before_any_write() {
+    // MONITOR_SPEC 7.2: the whole record is validated before any byte is written, and
+    // a failure writes nothing. Once READ_LINE has stored the line (break at HEX_RECORD)
+    // the debugger stops on any write outside the stack page, on any OUT but the console,
+    // and at WARM. A record that writes nothing must reach WARM having printed its message.
+    // A data record must make its first write from HR_WRITE, the step after every check,
+    // at AAAA.
+    let full = ":22020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F2021AB";
+    let quiet = [
+        (":0100FF00AA56", "Address out of range"),
+        (":0200FF001122CC", "Address out of range"),
+        (":01EF0000AA66", "Address out of range"),
+        (":02EEFF001122DE", "Address out of range"),
+        (":01000000AA55", "Address out of range"),
+        (":22EEDF00000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F2021E0", "Address out of range"),
+        (":11EEF00055555555555555555555555555555555556C", "Address out of range"),
+        (":10FFF80011111111111111111111111111111111E9", "Address out of range"),
+        (":0100000001FE", "Address out of range"),
+        (":020080004142FB", "Address out of range"),
+        (":2200CE000000000000000000000000000000000000000000000000000000000000000000000010", "Address out of range"),
+        (":020000021000EC", "Bad record type"),
+        (":0400000300000100F8", "Bad record type"),
+        (":020000040000FA", "Bad record type"),
+        (":0400000500000100F6", "Bad record type"),
+        (":0401000601020304EB", "Bad record type"),
+        (":010100FF55AA", "Bad record type"),
+        (":0401000001020304F0", "Checksum error"),
+        (":0401000001020G04F1", "Bad record"),
+        (":0401000001020304", "Bad record"),
+        (":0401000001020304F1 ", "Bad record"),
+        (":", "Bad record"),
+        (&format!(" {}", full), "Bad record"),
+        (":23020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20212288", "Line too long"),
+        (":0000000000", ""),
+        (":00000001FF", "Loaded"),
+        (":0101000112EB", "Loaded"),
+    ];
+    let writes = [(":01010000AA54", 0x0100u16, 0xAAu8), (":01EEFF00AA68", 0xEEFF, 0xAA), (full, 0x0200, 0x00)];
+    let mut m = boot();
+    let mut dbg = Debugger::new();
+    dbg.load_symbols(&std::fs::read_to_string("rom/monitor.sym").unwrap()).unwrap();
+    let mut until = |m: &mut Mon, line: &str| -> String {
+        m.con.borrow_mut().take_output();
+        m.con.borrow_mut().push_input(format!("{}\r", line).as_bytes());
+        for cmd in ["bc", "b HEX_RECORD", "c"] {
+            dbg.command(&mut m.cpu, cmd);
+        }
+        assert_eq!(dbg.run(&mut m.cpu, 1_000_000), Some(format!("break {:04X} HEX_RECORD", sym("HEX_RECORD"))), "{}", line);
+        let watches = ["bc", "b WARM", "w 0000-EEFF w", "w F000-FFFF w"].map(String::from);
+        for cmd in watches.into_iter().chain((0x01..=0xFF).map(|p| format!("io {:02X} out", p))) {
+            assert_eq!(dbg.command(&mut m.cpu, &cmd).1, "", "{}", cmd);
+        }
+        assert_eq!(dbg.command(&mut m.cpu, "c").1, "");
+        dbg.run(&mut m.cpu, 1_000_000).unwrap_or_else(|| panic!("{}: no stop, PC={:04X}", line, m.cpu.pc))
+    };
+    for (line, msg) in quiet {
+        let stop = until(&mut m, line);
+        assert_eq!(stop, format!("break {:04X} WARM", sym("WARM")), "{}", line);
+        let out = String::from_utf8(m.con.borrow_mut().take_output()).unwrap();
+        let echo = &line[..line.len().min(79)];
+        let want = if msg.is_empty() { String::new() } else { format!("{}\r\n", msg) };
+        assert_eq!(out.trim_start_matches("> ").strip_prefix(&format!("{}\r\n", echo)), Some(want.as_str()), "{}", line);
+    }
+    for (line, addr, byte) in writes {
+        let stop = until(&mut m, line);
+        assert_eq!(stop, format!("watch write {:04X} {:02X}", addr, byte), "{}", line);
+        assert!((sym("HR_WRITE")..sym("HR_EOF")).contains(&m.cpu.pc), "{}: write from {:04X}", line, m.cpu.pc);
     }
 }

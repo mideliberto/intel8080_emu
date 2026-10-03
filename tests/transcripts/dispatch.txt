@@ -20,6 +20,9 @@ Unknown command. Type ? for help.
 > D   0200   020F   junk
 0200: 41 41 41 41 41 41 41 41  41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
 
-# ':' selects the Intel HEX loader, which is Phase 5. Until then it is unknown.
+# ':' selects the Intel HEX loader (MONITOR_SPEC 7, tests in hex.txt), after
+# leading spaces too.
 > :00000001FF
-Unknown command. Type ? for help.
+Loaded
+>   :00000001FF
+Loaded

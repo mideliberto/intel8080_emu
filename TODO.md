@@ -4,6 +4,10 @@
 - The 2026-10-02 set closed 2026-10-02 and the 2026-10-03 sets closed 2026-10-03; see COLLABORATION_LOG Key Decisions. The specs are docs/ARCHITECTURE.md, docs/DEVICE_SPECS.md, docs/MONITOR_SPEC.md.
 - [x] Idle wait slowed compute-bound programs 15x (2026-10-03): closed 2026-10-03, the wait now also requires an `IN 02` read in the last pump interval (ARCHITECTURE 7.2); the 26M-step loop is back to no-wait speed.
 - [x] Debugger NAME+n only within one memory-map region (2026-10-03): accepted by Mike 2026-10-03 (ARCHITECTURE 7.4 Location).
+- [ ] HEX guard wording (2026-10-03, Phase 5): ARCHITECTURE 1 ("rejects any record that touches either range") and the 2026-10-02 Key Decision ("records touching 0x0000-0x00FF") disagree with MONITOR_SPEC 7.2 step 6 / 7.3, where the guard applies only to type 00 records with LL > 0, so `:00000001FF` and `:0000000000` at 0000 are accepted. The ROM follows MONITOR_SPEC (7.5 requires it). Proposed: ARCHITECTURE says "any record that would write into either range". Not edited; Mike's call.
+- [ ] HEX "nothing is written on any failure" (2026-10-03, Phase 5): MONITOR_SPEC 7.2 can't hold literally, since every CALL writes the stack page, and it doesn't say whether the workspace counts. 4.4 rule 4 exempts the workspace and the stack page for argument errors; 7.3 ("the loader may read data bytes from the buffer while it writes them") assumes LINE_BUFFER still holds the typed line. Option A: "nothing outside the workspace and the stack page (EF00-EFFF) is written" (would allow decoding in place into LINE_BUFFER). Option B: "nothing outside the stack page is written; LINE_BUFFER keeps the stored line". The shipped ROM and `hex_records_are_validated_before_any_write` meet B, so B needs no code change. Mike's call.
+- [ ] HEX 7.1 vs READ_LINE control characters (2026-10-03, Phase 5): 7.1 says no other characters may appear inside the record, but READ_LINE drops control characters (Tab, Esc) and applies BS/DEL before the loader sees the line, so a record with an embedded Tab loads. 7.1 already says the grammar applies to the stored line; proposed: one sentence saying so for control characters. Wording only; Mike's call.
+- [ ] HEX `Line too long` wording (2026-10-03, Phase 5): step 2 fires on short lines such as `:23` and `:FF` because LL is checked before the length (MONITOR_SPEC 5, 7.2). Correct per spec, misleading to a user. Wording only; Mike's call.
 
 ## Current
 - [x] Apply alignment package (archived: docs/archive/HANDOFF_2026-10.md)
@@ -17,17 +21,17 @@
 - [x] 8080A/8224/8228 hardware reference: docs/reference/8080_HARDWARE.md
 - [x] Implement the 2026-10-03 decisions (2026-10-03): idle wait in the pump; HLT opens the prompt in an interactive run; a bad `--script` line exits 2; workspace labels in `monitor.asm` (ROM bytes identical but DATE/TIME, `monitor.sym` gains 9 names); the 7.3 repeat rule; MONITOR_SPEC 4.4 rule 4 and 6.1 wording
 
-## Next (Phase 5 - Intel HEX Loader), build order
-Budget: ~250 bytes of the 1931 free (a working sketch came in at 176). The parser it needs exists: READ_HEX_WORD's absent/invalid contract and the shared error tails.
+## Done: Phase 5 - Intel HEX Loader (2026-10-03)
+Budget was ~250 bytes, from a 176-byte sketch that left out the five messages and the help line (126 bytes the spec requires). Shipped at +289 (2165 -> 2454): 163 code, 87 the five messages, 39 the help line. Built from three candidate implementations: the two-pass one as the base, grafts and tests from the other two.
 1. [x] Fix the vacuous tests (Review findings) and add a monitor test that maps storage and checks `X -` prints `Unmounted`. That test is the guard against shipping a stale bin. (2026-10-02: `tests/transcripts/storage.txt`)
 2. [x] Edge tests for what the loader leans on: READ_LINE (full buffer, BS, CR/LF/CRLF) and TO_HEX_DIGIT (lowercase, invalid): `line_input.txt`, `hex_math.txt`. DEL shipped with the READ_LINE DEL fix (2026-10-03).
-3. [ ] MAIN_LOOP: a line starting with `:` dispatches to the loader.
-4. [ ] `GET_HEX_BYTE`: exactly 2 digits from (HL) into A, add to running sum in C, HL+=2, carry on error. Unit-test via monitor.
-5. [ ] Pass 1: line length vs LL (max 34 data bytes, else "Line too long"), checksum (sum of all bytes == 0), type 00/01 only.
-6. [ ] Pass 2: range guard (reject records touching 0000-00FF or EF00-FFFF), write type 00 data.
-7. [ ] Type 01 (EOF) message; distinct error strings.
-8. [ ] Integration tests: multi-record paste with CRLF, bad checksum mid-stream, 34-byte record OK, 35-byte rejected, page-00 and EFxx rejected, types 02-05 rejected.
-9. [ ] Rebuild `monitor.bin`, record size, update docs.
+3. [x] MAIN_LOOP: a line starting with `:` dispatches to the loader (`HEX_RECORD`). `:` is tested first: a paste is many lines.
+4. [x] `HEX_PAIR`: exactly 2 digits from (HL) into A, HL+=2, CY on error, trashes B. The checksum sum lives in the caller's loop, not in HEX_PAIR.
+5. [x] Pass 1: MONITOR_SPEC 7.2 steps 1-4 (LL syntax, LL <= 22h, every pair + end of line, checksum). No writes.
+6. [x] Pass 2: re-read the header, steps 5-6 (type 00/01, guard 0100-EEFF without wrap), then write type 00 data.
+7. [x] Type 01 prints `Loaded`; the five HEX messages per MONITOR_SPEC 5.
+8. [x] Tests: `tests/transcripts/hex.txt` (every 7.5 vector, CRLF, LF and CR pastes, bad record mid-stream, truncation inside a paste, step-order cases incl. a wrong CC followed by junk, guard edges, LINE_BUFFER targets, LAST_DUMP_ADDR and LAST_EXAM_ADDR untouched), `hex_records_are_validated_before_any_write` (debugger: no memory write and no OUT but the console before HR_WRITE), `hex_guard_sweep` (step 6 on every page, 5,120 records). Mutants of the loader: 18/18 killed.
+9. [x] `monitor.bin` v0.4 rebuilt, size recorded, docs updated.
 
 ## Decided, to implement (from the specs; small, not Phase 5)
 Emulator:

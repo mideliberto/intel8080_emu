@@ -8,8 +8,8 @@
 | 2 | Memory Operations | ✅ Complete |
 | 3 | Execution & I/O | ✅ Complete |
 | 4 | Storage System | ✅ Complete |
-| **5** | **Program Loading** | **🔲 Next** |
-| 6 | Time | 🔲 Future |
+| 5 | Program Loading | ✅ Complete |
+| **6** | **Time** | **🔲 Next** |
 | 7 | Development Tools | 🔲 Future |
 | 8 | Internet Services | 🔲 Future |
 | 9 | Claude Integration | 🔲 Future |
@@ -83,7 +83,7 @@ ROM:
 
 ---
 
-## Phase 5: Program Loading 🔲 NEXT
+## Phase 5: Program Loading ✅ COMPLETE (2026-10-03)
 
 **Goal:** Load programs into memory by pasting Intel HEX at the prompt. The 8080 parses it in ROM.
 
@@ -94,7 +94,7 @@ ROM:
 - No sender pacing: the console is a Pi FIFO behind READY (`DEVICE_SPECS.md`).
 - Ships as monitor v0.4.
 
-**Tasks:** see TODO.md Next (build order).
+**Done:** `HEX_RECORD` in `rom/monitor.asm`, two passes over LINE_BUFFER (pass 1: MONITOR_SPEC 7.2 steps 1-4; pass 2: steps 5-6, then the write). Tests: `tests/transcripts/hex.txt` (every 7.5 vector plus edges), `hex_records_are_validated_before_any_write` (debugger watchpoints and I/O breaks) and `hex_guard_sweep`. +289 bytes. From the line to WARM, a 16-byte record takes 20.0k-23.1k cycles (9.8-11.3 ms at 2.048 MHz, before READY wait states), 9.2k-12.3k of them in the loader; a 34-byte record 36.6k-43.1k (17.9-21.1 ms). The spread is the number of A-F digits (TO_HEX_DIGIT: 34 cycles for 0-9, 80 for A-F).
 
 **Success Criteria:** every conformance vector in `MONITOR_SPEC.md` (Intel HEX Loader) passes as a cargo test. A pasted HEX file loads, verifiable with `D`.
 

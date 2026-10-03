@@ -14,10 +14,10 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Memory subsystem with ROM overlay | ✅ |
 | Console device | ✅ |
 | Storage device (24-bit, 16MB) | ✅ |
-| Monitor ROM v0.3 (14 commands) | ✅ |
+| Monitor ROM v0.4 (14 commands + Intel HEX loader) | ✅ |
 | Host-side debugger (breakpoints, watchpoints, I/O breaks, port trace, trace ring, ROM symbols) | ✅ |
-| 208 tests (7 host + 130 CPU + 36 device + 23 monitor + 12 debugger), plus 4 exercisers (`#[ignore]`) | ✅ |
-| Intel HEX loader (Phase 5) | 🔲 Next |
+| 222 tests (13 host + 130 CPU + 37 device + 26 monitor + 16 debugger), plus 4 exercisers (`#[ignore]`) | ✅ |
+| Intel HEX loader (Phase 5) | ✅ |
 | Service Mailbox: time, HTTP, Claude (Phases 6-9) | 🔲 Future |
 
 ## Monitor Commands
@@ -36,10 +36,11 @@ O port val            - Output to I/O port
 S start end bytes     - Search for pattern
 W mem stor [cnt]      - Write memory to storage
 X [file | -]          - Mount/unmount storage
+:LLAAAATT..CC         - Intel HEX record (paste at the prompt)
 ?                     - Help
 ```
 
-Coming: `:` Intel HEX records pasted at the prompt (Phase 5), then T (time), A/U (assemble/unassemble), N (HTTP GET), Q (ask Claude), R (registers). Full contract for every command, argument and message: [docs/MONITOR_SPEC.md](docs/MONITOR_SPEC.md).
+Coming: T (time), A/U (assemble/unassemble), N (HTTP GET), Q (ask Claude), R (registers). Full contract for every command, argument and message: [docs/MONITOR_SPEC.md](docs/MONITOR_SPEC.md).
 
 ## Storage System
 
@@ -80,7 +81,7 @@ You'll see:
 8080 Emulator
 Built: 2026-10-02 19:20:00        <- emulator build time (build.rs)
 
-8080 Monitor v0.3
+8080 Monitor v0.4
 Built: 10/02/2026 19:13:00        <- ROM assembly time (asl DATE/TIME)
 Ready.
 > 

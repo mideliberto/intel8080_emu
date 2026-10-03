@@ -1,0 +1,334 @@
+# Intel HEX loader (MONITOR_SPEC 7). Format: tests/monitor_tests.rs header.
+# The expected output of the first two sections was generated from a model of
+# MONITOR_SPEC 7.2/7.3 that is independent of the ROM; the last section is by hand.
+# RAM is random on hardware: clear everything the transcript displays.
+> F 0000 000F 00
+> F 0100 04FF 00
+> F EE00 EEFF 00
+
+# ---- MONITOR_SPEC 7.5 conformance vectors, in table order ----
+# Data records load silently.
+> :01010000AA54
+> :01EEFF00AA68
+> D 0100 0100
+0100: AA 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+> D EEF0 EEF0
+EEF0: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 AA  ................
+# Lowercase hex.
+> :0401000001020304f1
+> D 0100 0100
+0100: 01 02 03 04 00 00 00 00  00 00 00 00 00 00 00 00  ................
+# Leading spaces before the colon.
+> F 0100 0100 00
+>    :01010000AA54
+> D 0100 0100
+0100: AA 02 03 04 00 00 00 00  00 00 00 00 00 00 00 00  ................
+# A full 34-byte record is 79 characters and fits LINE_BUFFER exactly.
+> :22020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F2021AB
+> D 0200 0221
+0200: 00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F  ................
+0210: 10 11 12 13 14 15 16 17  18 19 1A 1B 1C 1D 1E 1F  ................
+0220: 20 21 00 00 00 00 00 00  00 00 00 00 00 00 00 00   !..............
+# A trailing character past the 79th is discarded by READ_LINE: the record loads.
+> F 0200 0221 00
+< :22020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F2021ABX\r
+:22020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F2021AB
+> D 0200 0221
+0200: 00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F  ................
+0210: 10 11 12 13 14 15 16 17  18 19 1A 1B 1C 1D 1E 1F  ................
+0220: 20 21 00 00 00 00 00 00  00 00 00 00 00 00 00 00   !..............
+# One leading space pushes the last checksum digit out of the buffer.
+> F 0200 0221 00
+<  :22020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F2021AB\r
+ :22020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F2021A
+Bad record
+> D 0200 0221
+0200: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0210: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0220: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+# 35 data bytes: Line too long (the line is also truncated at 79).
+< :23020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20212288\r
+:23020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F202122
+Line too long
+> D 0200 0221
+0200: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0210: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0220: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+# The guard: 0100-EEFF only. The straddling and wrapping records write nothing.
+> :0100FF00AA56
+Address out of range
+> :01EF0000AA66
+Address out of range
+> :11EEF00055555555555555555555555555555555556C
+Address out of range
+> :10FFF80011111111111111111111111111111111E9
+Address out of range
+> D EEF0 EEF0
+EEF0: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 AA  ................
+> D 0000 0000
+0000: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+# Types 02-05 (and anything but 00 and 01) are rejected.
+> :020000021000EC
+Bad record type
+> :0400000300000100F8
+Bad record type
+> :020000040000FA
+Bad record type
+> :0400000500000100F6
+Bad record type
+# Checksum error. 0100-0103 are set to 5A first: the record writes nothing.
+> F 0100 0103 5A
+> :0401000001020304F0
+Checksum error
+> D 0100 0100
+0100: 5A 5A 5A 5A 00 00 00 00  00 00 00 00 00 00 00 00  ZZZZ............
+# Syntax: a non-hex digit, no CC, a trailing space, a bare colon.
+> :0401000001020G04F1
+Bad record
+> :0401000001020304
+Bad record
+> :0401000001020304F1\x20
+Bad record
+> :
+Bad record
+> D 0100 0100
+0100: 5A 5A 5A 5A 00 00 00 00  00 00 00 00 00 00 00 00  ZZZZ............
+# Type 00 with LL 0 at 0000 is not guarded and does nothing.
+> :0000000000
+# EOF records print Loaded and write nothing, whatever LL, AAAA and data say.
+> :00000001FF
+Loaded
+> :0101000112EB
+Loaded
+> D 0100 0100
+0100: 5A 5A 5A 5A 00 00 00 00  00 00 00 00 00 00 00 00  ZZZZ............
+# Three good records, a bad checksum, a good one, pasted with CRLF: each CRLF
+# gives an extra empty line and prompt (MONITOR_SPEC 2, 7.4).
+< :10030000101112131415161718191A1B1C1D1E1F75\r\n:10031000202122232425262728292A2B2C2D2E2F65\r\n:10032000303132333435363738393A3B3C3D3E3F55\r\n:10033000555555555555555555555555555555556E\r\n:10034000666666666666666666666666666666664D\r\n
+:10030000101112131415161718191A1B1C1D1E1F75
+\x3E\x20
+\x3E\x20:10031000202122232425262728292A2B2C2D2E2F65
+\x3E\x20
+\x3E\x20:10032000303132333435363738393A3B3C3D3E3F55
+\x3E\x20
+\x3E\x20:10033000555555555555555555555555555555556E
+Checksum error
+\x3E\x20
+\x3E\x20:10034000666666666666666666666666666666664D
+\x3E\x20
+> D 0300 034F
+0300: 10 11 12 13 14 15 16 17  18 19 1A 1B 1C 1D 1E 1F  ................
+0310: 20 21 22 23 24 25 26 27  28 29 2A 2B 2C 2D 2E 2F   !"#$%&'()*+,-./
+0320: 30 31 32 33 34 35 36 37  38 39 3A 3B 3C 3D 3E 3F  0123456789:;<=>?
+0330: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0340: 66 66 66 66 66 66 66 66  66 66 66 66 66 66 66 66  ffffffffffffffff
+
+# ---- Edge cases ----
+# MONITOR_SPEC 7.4 example, LF-only line ends.
+> F 0100 0103 00
+< :0401000001020304F1\n:0401000001020304F0\n:00000001FF\n
+:0401000001020304F1
+\x3E\x20:0401000001020304F0
+Checksum error
+\x3E\x20:00000001FF
+Loaded
+> D 0100 0100
+0100: 01 02 03 04 00 00 00 00  00 00 00 00 00 00 00 00  ................
+# LF-only paste: a bad record mid-stream does not stop the records after it.
+< :02040000A1A2B7\n:01040200B1480\n:020403021000E5\n:02040400C1C273\n:00000001FF\n
+:02040000A1A2B7
+\x3E\x20:01040200B1480
+Bad record
+\x3E\x20:020403021000E5
+Bad record type
+\x3E\x20:02040400C1C273
+\x3E\x20:00000001FF
+Loaded
+> D 0400 0400
+0400: A1 A2 00 00 C1 C2 00 00  00 00 00 00 00 00 00 00  ................
+# Mixed case, and leading spaces with lowercase.
+> :02041000BbCc63
+>   :02041200dead5d
+> D 0410 0410
+0410: BB CC DE AD 00 00 00 00  00 00 00 00 00 00 00 00  ................
+# Step order (7.2): the first failing step wins.
+# Step 1 before 2: LL not hex.
+> :2G
+Bad record
+> :0
+Bad record
+# Step 2 before 3: LL too big wins over a short line.
+> :23
+Line too long
+> :FF0100
+Line too long
+# Step 3 before 4: a short line whose sum is wrong is a Bad record.
+> :0401000001
+Bad record
+# Step 3: a space inside the record.
+> :01 010000AA54
+Bad record
+# Step 4 before 5: a bad checksum on a type 02 record.
+> :020000021000ED
+Checksum error
+# Step 5 before 6: a type 02 record at 00FF is a type error, not a range error.
+> :0200FF021000ED
+Bad record type
+# Types 06 and FF.
+> :00040006F6
+Bad record type
+> :000400FFFD
+Bad record type
+# Guard edges: 00FF fails, 0100 loads, 00FF-0100 straddles.
+> F 0100 0101 00
+> :0100FF007789
+Address out of range
+> :0200FF00778800
+Address out of range
+> D 0100 0100
+0100: 00 00 03 04 00 00 00 00  00 00 00 00 00 00 00 00  ................
+> :010100007787
+> D 0100 0100
+0100: 77 00 03 04 00 00 00 00  00 00 00 00 00 00 00 00  w...............
+# EEFE-EEFF loads; EEFF-EF00 straddles; EF00 fails.
+> F EEF0 EEFF 00
+> :02EEFF00999ADE
+Address out of range
+> :01EF00009977
+Address out of range
+> D EEF0 EEF0
+EEF0: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+> :02EEFE00999ADF
+> D EEF0 EEF0
+EEF0: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 99 9A  ................
+# 34 bytes ending at EEFF load; one address higher straddles EF00.
+> F EEC0 EEFF 00
+> :22EEDF00404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F606160
+Address out of range
+> D EED0 EEFF
+EED0: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+EEE0: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+EEF0: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+> :22EEDE00404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F606161
+> D EED0 EEFF
+EED0: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 40 41  ..............@A
+EEE0: 42 43 44 45 46 47 48 49  4A 4B 4C 4D 4E 4F 50 51  BCDEFGHIJKLMNOPQ
+EEF0: 52 53 54 55 56 57 58 59  5A 5B 5C 5D 5E 5F 60 61  RSTUVWXYZ[\\]^_`a
+# 0000, FFFF, and LINE_BUFFER itself (0080-00CF) are out of range.
+> :0100000001FE
+Address out of range
+> :01FFFF000100
+Address out of range
+> :020080004142FB
+Address out of range
+> :2200CE000000000000000000000000000000000000000000000000000000000000000000000010
+Address out of range
+# Type 00 LL 0 at an ordinary address: nothing.
+> :00050000FB
+# The loader leaves LAST_DUMP_ADDR alone: bare D continues after D 0300 030F.
+> D 0300 030F
+0300: 10 11 12 13 14 15 16 17  18 19 1A 1B 1C 1D 1E 1F  ................
+> :0104200011CA
+> :00000001FF
+Loaded
+> D
+0310: 20 21 22 23 24 25 26 27  28 29 2A 2B 2C 2D 2E 2F   !"#$%&'()*+,-./
+0320: 30 31 32 33 34 35 36 37  38 39 3A 3B 3C 3D 3E 3F  0123456789:;<=>?
+0330: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0340: 66 66 66 66 66 66 66 66  66 66 66 66 66 66 66 66  ffffffffffffffff
+0350: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0360: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0370: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0380: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+
+# ---- Step order, EOF, LAST_*_ADDR and paste edge cases (by hand) ----
+# Step 3 before step 4: a wrong CC followed by junk or a space is a Bad record,
+# not a Checksum error. 0100-0103 are 5A, so a write would show.
+> F 0100 0103 5A
+> :0401000001020304F0X
+Bad record
+> :0401000001020304F0\x20
+Bad record
+# A correct CC followed by junk; a non-hex second CC digit; a non-hex first LL digit.
+> :0401000001020304F1X
+Bad record
+> :0401000001020304FG
+Bad record
+> :G1
+Bad record
+# EOF records pass steps 1-4 like any other: a trailing pair, half a pair, a bad
+# checksum. A 34-byte type 01 record and one with an address are still only EOF.
+> :00000001FF00
+Bad record
+> :00000001F
+Bad record
+> :00000001FE
+Checksum error
+> :2201000100000000000000000000000000000000000000000000000000000000000000000000DC
+Loaded
+> :00001001EF
+Loaded
+# Type 00 with LL 0 at the guard boundary EF00 is not guarded and does nothing.
+> :00EF000011
+# Lowercase with trailing junk is rejected; the same bytes with a CC load.
+> :03010D00c0ffeeXX
+Bad record
+> :03010D00c0FFee42
+> D 0100 0100
+0100: 5A 5A 5A 5A 00 00 00 00  00 00 00 00 00 C0 FF EE  ZZZZ............
+
+# The loader leaves LAST_DUMP_ADDR and LAST_EXAM_ADDR alone (7.3): bare E goes
+# back to 0480 and bare D goes on from 0410.
+> F 0400 048F 77
+< E 0480\r.
+E 0480
+0480: 77-
+> D 0400 040F
+0400: 77 77 77 77 77 77 77 77  77 77 77 77 77 77 77 77  wwwwwwwwwwwwwwww
+> :01040000AA51
+> D
+0410: 77 77 77 77 77 77 77 77  77 77 77 77 77 77 77 77  wwwwwwwwwwwwwwww
+0420: 77 77 77 77 77 77 77 77  77 77 77 77 77 77 77 77  wwwwwwwwwwwwwwww
+0430: 77 77 77 77 77 77 77 77  77 77 77 77 77 77 77 77  wwwwwwwwwwwwwwww
+0440: 77 77 77 77 77 77 77 77  77 77 77 77 77 77 77 77  wwwwwwwwwwwwwwww
+0450: 77 77 77 77 77 77 77 77  77 77 77 77 77 77 77 77  wwwwwwwwwwwwwwww
+0460: 77 77 77 77 77 77 77 77  77 77 77 77 77 77 77 77  wwwwwwwwwwwwwwww
+0470: 77 77 77 77 77 77 77 77  77 77 77 77 77 77 77 77  wwwwwwwwwwwwwwww
+0480: 77 77 77 77 77 77 77 77  77 77 77 77 77 77 77 77  wwwwwwwwwwwwwwww
+< E\r.
+E
+0480: 77-
+> D 0400 040F
+0400: AA 77 77 77 77 77 77 77  77 77 77 77 77 77 77 77  .wwwwwwwwwwwwwww
+
+# LF-only paste (7.4) with leading spaces and lowercase, a trailing space, a
+# record that is too long (READ_LINE drops its tail), and records after an EOF
+# record: there is no loader state, so EOF ends nothing.
+> F 0300 034F EE
+< :10030000000102030405060708090A0B0C0D0E0F75\n  :10031000101112131415161718191a1b1c1d1e1f65\n:10032000202122232425262728292A2B2C2D2E2F55\x20\n:23020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20212288\n:00000001FF\n:10033000303132333435363738393A3B3C3D3E3F45\n:10034000404142434445464748494A4B4C4D4E4F35\n
+:10030000000102030405060708090A0B0C0D0E0F75
+\x3E\x20  :10031000101112131415161718191a1b1c1d1e1f65
+\x3E\x20:10032000202122232425262728292A2B2C2D2E2F55\x20
+Bad record
+\x3E\x20:23020000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F202122
+Line too long
+\x3E\x20:00000001FF
+Loaded
+\x3E\x20:10033000303132333435363738393A3B3C3D3E3F45
+\x3E\x20:10034000404142434445464748494A4B4C4D4E4F35
+> D 0300 034F
+0300: 00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F  ................
+0310: 10 11 12 13 14 15 16 17  18 19 1A 1B 1C 1D 1E 1F  ................
+0320: EE EE EE EE EE EE EE EE  EE EE EE EE EE EE EE EE  ................
+0330: 30 31 32 33 34 35 36 37  38 39 3A 3B 3C 3D 3E 3F  0123456789:;<=>?
+0340: 40 41 42 43 44 45 46 47  48 49 4A 4B 4C 4D 4E 4F  @ABCDEFGHIJKLMNO
+# CR-only line ends: the 7.4 example.
+> F 0100 0103 00
+< :0401000001020304F1\r:0401000001020304F0\r:00000001FF\r
+:0401000001020304F1
+\x3E\x20:0401000001020304F0
+Checksum error
+\x3E\x20:00000001FF
+Loaded
+> D 0100 0100
+0100: 01 02 03 04 00 00 00 00  00 00 00 00 00 C0 FF EE  ................

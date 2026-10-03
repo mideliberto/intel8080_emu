@@ -30,7 +30,7 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 | W | `W mem stor [cnt]` | Write to storage (24-bit `stor`), then flush; `cnt` default 0100 |
 | X | `X [file \| -]` | `X` query, `X name` mount, `X -` unmount |
 | ? | `?` | Help |
-| : | `:LLAAAATT..CC` | Intel HEX record, auto-detected at the prompt (Phase 5) |
+| : | `:LLAAAATT..CC` | Intel HEX record, auto-detected at the prompt |
 
 ### Argument rules
 

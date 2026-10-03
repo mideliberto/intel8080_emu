@@ -139,7 +139,9 @@ NOT_LOWER:
 
         INX     H                   ; Point past command char
 
-        ; Command dispatch
+        ; Command dispatch. ':' first: a pasted HEX file is many lines.
+        CPI     ':'                 ; Not a command letter: an Intel HEX record
+        JZ      HEX_RECORD
         CPI     'C'
         JZ      CMD_COMPARE
         CPI     'D'
@@ -187,6 +189,21 @@ ERR_RANGE:
         JMP     PRINT_WARM
 ERR_NOSTOR:
         LXI     H,MSG_NO_STORAGE
+        JMP     PRINT_WARM
+ERR_RECORD:
+        LXI     H,MSG_BAD_RECORD
+        JMP     PRINT_WARM
+ERR_TOO_LONG:
+        LXI     H,MSG_TOO_LONG
+        JMP     PRINT_WARM
+ERR_CHECKSUM:
+        LXI     H,MSG_CHECKSUM
+        JMP     PRINT_WARM
+ERR_REC_TYPE:
+        LXI     H,MSG_REC_TYPE
+        JMP     PRINT_WARM
+ERR_ADDR_RANGE:
+        LXI     H,MSG_ADDR_RANGE
         JMP     PRINT_WARM
 
 ; ============================================
@@ -471,6 +488,29 @@ TO_HEX_DIGIT:
         CMC
         RC                          ; above 'F'
         ADI     10                  ; 10-15, carry clear
+        RET
+
+; HEX_PAIR - Parse exactly two hex digits (an Intel HEX byte, MONITOR_SPEC 7.1)
+; Input: HL = the first digit
+; Output: CY=0: A = the byte, HL += 2
+;         CY=1: either character is not a hex digit (the NUL included); HL is
+;         somewhere in the pair
+; Trashes: B, flags
+HEX_PAIR:
+        MOV     A,M
+        CALL    TO_HEX_DIGIT
+        RC
+        ADD     A                   ; high nibble
+        ADD     A
+        ADD     A
+        ADD     A
+        MOV     B,A
+        INX     H
+        MOV     A,M
+        CALL    TO_HEX_DIGIT
+        RC
+        ORA     B                   ; CY=0
+        INX     H
         RET
 
 ; RANGE - Byte count of an inclusive range (MONITOR_SPEC 4.3)
@@ -946,6 +986,104 @@ CMD_HELP:
         JMP     PRINT_WARM
 
 ; ============================================
+; INTEL HEX LOADER (MONITOR_SPEC 7)
+; ============================================
+
+; HEX_RECORD - One Intel HEX record: ':' LL AAAA TT data CC, alone on the line.
+; Entered by JMP from MAIN_LOOP with HL = the character after ':'.
+; Two passes over LINE_BUFFER. Pass 1 runs MONITOR_SPEC 7.2 steps 1-4 and
+; writes nothing. Pass 2 re-reads the header, runs steps 5-6, then acts
+; (7.3). The first failing step prints its message (error tail -> WARM), so
+; a rejected record writes nothing. No state survives the record: each line
+; stands alone (7). Writes only inside 0100-EEFF, so never into LINE_BUFFER.
+HEX_RECORD:
+        PUSH    H                   ; pass 2 starts again at LL
+
+        ; ---- Pass 1: syntax, length, checksum. No writes. ----
+
+        ; Step 1: LL is two hex digits.
+        CALL    HEX_PAIR
+        JC      ERR_RECORD
+
+        ; Step 2: LL <= 22h (34).
+        CPI     23H
+        JNC     ERR_TOO_LONG
+
+        ; Step 3: AAAA, TT, the LL data bytes and CC (LL+4 pairs) are each two
+        ; hex digits, and the line ends right after CC. The loop also adds up
+        ; every byte for step 4; LL is the first.
+        MOV     C,A                 ; C = sum
+        ADI     4
+        MOV     E,A                 ; E = pairs after LL
+HR_PAIRS:
+        CALL    HEX_PAIR
+        JC      ERR_RECORD
+        ADD     C
+        MOV     C,A
+        DCR     E
+        JNZ     HR_PAIRS
+        MOV     A,M
+        ORA     A                   ; the NUL must follow CC
+        JNZ     ERR_RECORD
+
+        ; Step 4: the sum of LL through CC is 00 (mod 100h).
+        MOV     A,C
+        ORA     A
+        JNZ     ERR_CHECKSUM
+
+        ; ---- Pass 2: type, guard, then act. Pass 1 proved every pair, ----
+        ; ---- so these HEX_PAIR calls do not test CY.                  ----
+
+        POP     H                   ; HL = LL
+        CALL    HEX_PAIR
+        MOV     C,A                 ; C = LL
+        CALL    HEX_PAIR
+        MOV     D,A
+        CALL    HEX_PAIR
+        MOV     E,A                 ; DE = AAAA
+        CALL    HEX_PAIR            ; A = TT, HL = first data pair
+
+        ; Step 5: TT = 00 or 01. Type 01 (EOF) ignores LL, AAAA and data.
+        CPI     01H
+        JZ      HR_EOF
+        ORA     A
+        JNZ     ERR_REC_TYPE
+
+        ; Type 00 with LL = 0 writes nothing, so the guard skips it.
+        MOV     A,C
+        ORA     A
+        JZ      WARM
+
+        ; Step 6: AAAA >= 0100h and AAAA + LL <= EF00h, the sum without wrap.
+        MOV     A,D
+        ORA     A                   ; AAAA < 0100: high byte 00
+        JZ      ERR_ADDR_RANGE
+        PUSH    H
+        MVI     H,0
+        MOV     L,C
+        DAD     D                   ; HL = AAAA + LL, CY = carry out of bit 15
+        JC      ERR_ADDR_RANGE
+        MOV     A,L                 ; CY = HL < EF01h, i.e. HL <= EF00h
+        SUI     01H
+        MOV     A,H
+        SBI     0EFH
+        JNC     ERR_ADDR_RANGE
+        POP     H
+
+        ; Write (7.3): the LL data bytes to AAAA, AAAA+1, ...
+HR_WRITE:
+        CALL    HEX_PAIR
+        STAX    D
+        INX     D
+        DCR     C
+        JNZ     HR_WRITE
+        JMP     WARM
+
+HR_EOF:
+        LXI     H,MSG_LOADED
+        JMP     PRINT_WARM
+
+; ============================================
 ; STORAGE COMMANDS
 ; ============================================
 
@@ -1102,7 +1240,7 @@ CW_LOOP:
 
 MSG_BANNER:
         DB      CR,LF
-        DB      "8080 Monitor v0.3",CR,LF
+        DB      "8080 Monitor v0.4",CR,LF
         DB      'Built: ', DATE, ' ', TIME, CR, LF
         DB      "Ready.",CR,LF
         DB      0
@@ -1122,6 +1260,7 @@ MSG_HELP:
         DB      "  S start end pat  - Search memory",CR,LF
         DB      "  W mem stor [cnt] - Write to storage",CR,LF
         DB      "  X [file | -]     - Mount/unmount storage",CR,LF
+        DB      "  :LLAAAATT..CC    - Intel HEX record",CR,LF
         DB      "  ?                - Help",CR,LF
         DB      0
 
@@ -1151,6 +1290,16 @@ MSG_LOADED:
         DB      "Loaded",CR,LF,0
 MSG_WRITTEN:
         DB      "Written",CR,LF,0
+MSG_TOO_LONG:
+        DB      "Line too long",CR,LF,0
+MSG_BAD_RECORD:
+        DB      "Bad record",CR,LF,0
+MSG_CHECKSUM:
+        DB      "Checksum error",CR,LF,0
+MSG_REC_TYPE:
+        DB      "Bad record type",CR,LF,0
+MSG_ADDR_RANGE:
+        DB      "Address out of range",CR,LF,0
 
 ; ROM_END - first byte after the ROM contents. make size: ROM_END - F000.
 ROM_END:

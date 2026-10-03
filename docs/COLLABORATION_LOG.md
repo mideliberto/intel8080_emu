@@ -199,6 +199,7 @@ Ordered newest to oldest. Never delete—only add.
 **Lesson:** Rebuilding bakes in DATE/TIME, so "rebuild and diff" can't detect drift. A behavioral test (`X -` prints Unmounted) is the guard; it's on TODO.
 
 ### 2026-10-02: HEX Loader Paste Speed Is the Sender's Problem (for Now)
+**Superseded** by 2026-10-02 "Console Is a Pi FIFO Device": the Pi buffers, nothing paces the sender (MONITOR_SPEC 2 and 7.4). Measured 2026-10-03 at 2.048 MHz: a 16-byte record takes 9.8-11.3 ms from its first character to WARM, 4.5-6.0 ms of it in the loader, depending on how many A-F digits it has.
 **Decision:** Phase 5 assumes the terminal paces lines (per-line delay). The console chip and flow control (6850 + RTS/CTS vs a Pi FIFO console) are a hardware-build decision.
 **Problem:** About 7ms of ROM work per 16-byte record against 1ms per char at 9600 baud. A real UART overruns. The emulator's unbounded queue hides it.
 
@@ -458,10 +459,11 @@ Console I/O debugging session:
 
 **CPU Core:** All 256 opcodes (5 undocumented aliases decoded), flags match ARCHITECTURE 5.1-5.3 including AC, 8080A interrupt input (EI delay, HLT wake), reset() = RESET pin. All four exercisers pass, 8080EXM included
 
-**Monitor ROM v0.3:**
+**Monitor ROM v0.4:**
 - 14 commands: D, E, F, M, S, C, H, G, I, O, L, W, X, ?, to MONITOR_SPEC sections 1-6, 8, 9, 11 (strict arguments, WARM, G return, memmove, Storage error, Mount failed)
+- Intel HEX loader (Phase 5, MONITOR_SPEC 7): a `:` line is one record, validated in full (pass 1: steps 1-4) before the type, the guard and the write (pass 2)
 - ROM overlay boot mechanism; CONOUT is OUT 00 / RET, so the first Pi access after reset is the banner's OUT 00
-- 2165 of 4096 bytes used (1931 free; `make size`)
+- 2454 of 4096 bytes used (1642 free; `make size`)
 
 **Debugger (host-side, ARCHITECTURE 7.4):** Ctrl-E / `--debug` / `--script`, break, step, registers, memory, disassembly with ROM symbols (`rom/monitor.sym`), watchpoints, I/O breaks, port trace, 256-step trace ring
 
@@ -469,17 +471,17 @@ Console I/O debugging session:
 - Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
 **Testing (verified 2026-10-03):**
-- 13 host + 130 CPU + 37 device + 23 monitor + 16 debugger = 219, all passing (strict transcript harness, reference-model CPU tests, port-level device tests)
+- 13 host + 130 CPU + 37 device + 26 monitor + 16 debugger = 222, all passing (strict transcript harness, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 
 ### In Progress
 
-- **Phase 5:** Intel HEX loader, parsed by the 8080 itself in ROM. All design decisions made 2026-10-02; build order in `TODO.md`. Not started.
+- **Phase 6:** Service Mailbox (0x10-0x13), `TIME` + T. Next.
 - **Review findings:** 2026-10-02 review found CPU flag bugs, ROM range and parse bugs, and vacuous tests. All fixed by 2026-10-03 (steps A-E); `TODO.md` keeps the repros.
 
 ### Open Decisions
 
-The 2026-10-03 set (idle CPU, piped EOF, debugger options, MONITOR_SPEC 4.4 rule 4 and 6.1 wording, shim exit vs WARM) closed 2026-10-03, and so did the two host-only follow-ups (idle wait only while the 8080 polls, the debugger's NAME+n region rule); see Key Decisions. None open. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
+Four open, all Phase 5 spec wording (`TODO.md`): the HEX guard wording in ARCHITECTURE 1 vs MONITOR_SPEC 7; what 7.2's "nothing is written on any failure" covers (workspace, stack page); 7.1 vs the control characters READ_LINE drops; `Line too long` on short lines. The 2026-10-03 set (idle CPU, piped EOF, debugger options, MONITOR_SPEC 4.4 rule 4 and 6.1 wording, shim exit vs WARM) closed 2026-10-03, and so did the two host-only follow-ups (idle wait only while the 8080 polls, the debugger's NAME+n region rule); see Key Decisions. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
 
 ### Blocked/Deferred
 
@@ -495,6 +497,13 @@ The 2026-10-03 set (idle CPU, piped EOF, debugger options, MONITOR_SPEC 4.4 rule
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Phase 5, the Intel HEX Loader (v0.4)
+- 3-way implement and judge: three candidate loaders were built independently and judged against the union of their tests, 2,400 fuzzed records checked against an independent model of 7.2/7.3, and mutants. The two-pass one shipped: one labelled block per MONITOR_SPEC 7.2 step, the step 6 formula as written, and nothing written outside the stack page on any failure. The smallest candidate (+247) decoded into LINE_BUFFER during validation, which fails that reading of 7.2.
+- `HEX_RECORD` in `rom/monitor.asm`: pass 1 (steps 1-4: LL, LL <= 22h, every pair and the end of line, checksum) writes nothing; pass 2 re-reads the header, runs steps 5-6 (type, guard 0100-EEFF via `DAD` with the carry as the wrap check), then writes. New `HEX_PAIR` (exactly two digits, trashes B). Grafted from another candidate: `:` is dispatched first, and the pass-1 count lives in E, so HEX_PAIR needs no PUSH B. Help line, five messages, banner v0.4. 2165 -> 2454 bytes (+289: 163 code, 87 messages, 39 help line). Measured from the line to WARM at 2.048 MHz, before READY wait states: a 16-byte record 20.0k-23.1k cycles (9.8-11.3 ms; READ_LINE, echo and dispatch 10,810, the loader 9.2k-12.3k), a 34-byte record 36.6k-43.1k (17.9-21.1 ms), the spread being the A-F digit count (TO_HEX_DIGIT 34 vs 80 cycles). About 4 KB/s of text: a full 0100-EEFF image in 16-byte records takes roughly 40 s.
+- Tests 219 -> 222: `hex.txt` (every 7.5 vector, CRLF, LF and CR pastes, truncation inside a paste, step-order cases, guard edges, LINE_BUFFER targets, LAST_DUMP_ADDR and LAST_EXAM_ADDR untouched); `hex_records_are_validated_before_any_write` (from HEX_RECORD the debugger stops on any write outside the stack page and any OUT but port 00; 27 non-writing records reach WARM with their message, data records first write from HR_WRITE); `hex_guard_sweep` (5,120 records against the step 6 formula). 18/18 loader mutants killed. Release exercisers 4/4.
+- Review: ship, no ROM defects. 76 valid mutants, 74 killed; the 2 survivors are equivalent (`ORA B` -> `XRA B` in HEX_PAIR; `MVI H,0` in step 6, redundant while LINE_BUFFER is in page 0, kept for clarity). Fixed: single cycle figures became data-dependent ranges, and `hex.txt` comments describe what each section covers instead of which candidate it came from.
+- What bit us: no test in any candidate had a full record with both a wrong CC and trailing junk, so checking the checksum before the end of the line (step 4 before step 3) survived every test set. `:0401000001020304F0X` now kills it. Four spec-wording questions went to TODO Open Decisions, none changing the ROM.
 
 ### 2026-10-03: Idle Wait Narrowed to a Polling 8080
 - The idle wait now also requires that the 8080 read `IN 02` since the previous pump: `Console::take_polled` (a flag `IN 02` sets) and the pure `idle_waits` in `src/main.rs`. Compute-bound programs never wait.
