@@ -1,6 +1,6 @@
 # T: Time (MONITOR_SPEC 6.15). Format: tests/monitor_tests.rs header.
 # The Pi's local time, matched by shape only (\d is any decimal digit).
-# On hardware the Pi clock must be set (NTP or RTC); unset, T prints Service error.
+# On hardware the Pi clock must be set (NTP-synchronized); unset, T prints Service error.
 
 > T
 \d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d

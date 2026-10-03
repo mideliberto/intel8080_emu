@@ -63,6 +63,16 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-03: Phase 6 Readings Confirmed; Pi Clock Policy
+**Decision:** Mike confirmed every Phase 6 literal reading as normative, plus the Pi clock policy. Each now has one home:
+- MONITOR_SPEC 6.15: (1) an error after partial T output prints on the same line, no CR LF first (`2026-Service error`); (9) T transcripts match the shape, never a value, so they run on hardware; device-level tests may inject a clock (replaces "No injectable clock is needed").
+- DEVICE_SPECS 8: (2) `ASM`/`DIS`/`GET`/`ASK` give 80 until their phase ships; (3) a 00 written to OUT 10 is appended like any byte (port 0D ignores 00); (4) OUT 10 in AVAIL/DONE/ERROR appends and changes no status or response, the bytes wait for the next execute; (5) precedence 81 > 80/82 > 83; (6) a year below 1000 is zero-padded, a year above 9999 gives 83; (7) the clock must return in-range fields, the device does not range-check them; (8) the device formats TIME from clock fields, so the emulator and the Pi daemon share the formatter.
+- Harness header (`tests/monitor_tests.rs`): (10) keep the `libc` dependency (`localtime_r`) and the `\d` transcript escape; `\d` was already documented there.
+- DEVICE_SPECS 8 (TIME clock) and HARDWARE_BUILD 5: (11) the Pi runs 64-bit Raspberry Pi OS (no 2038 wrap); "clock set" means the kernel reports NTP-synchronized (`adjtimex()` not `TIME_ERROR`), otherwise 83; local time follows the Pi's TZ, set at install. Lands with the Pi daemon (Someday).
+
+**Rationale:** The implementation and both test sets already took these readings; writing them down turns "most literal" into "specified". 6 and 7 meet in the clock contract: the year bound is the clock's job (a year above 9999 reports "not set"), so the device stays a formatter with no range checks.
+**Code gap:** `mailbox::local_time` does not yet report "not set" for a year above 9999 (unreachable before the year 10000). Logged in TODO, Decided, to implement; no behavior changed here.
+
 ### 2026-10-03: HEX Records: Control Characters Documented, Not Rejected
 **Decision:** Mike closed the last Phase 5 wording question: a HEX record with an embedded Tab, Esc or other control character loads, because READ_LINE drops those bytes and applies BS/DEL before the loader sees the line, and the 7.1 grammar applies to the stored line. MONITOR_SPEC 7.1 now says so; the ROM is unchanged, and `hex.txt` proves it with a Tab/Esc/NUL record and a BS/DEL-corrected one.
 
@@ -492,7 +502,7 @@ Console I/O debugging session:
 
 ### Open Decisions
 
-From Phase 6, in `TODO.md`: the MONITOR_SPEC 6.15 test bullet ("no injectable clock is needed", "never a value") vs the injected clock the device and port tests use; how the Pi daemon detects "clock not set" for 83; and six spec readings from the Phase 6 reconcile, each implemented literally (6.15 "Service error" on the same line, placeholder words give 80, NUL appended on 10, OUT 10 outside IDLE, 81 > 80/82 > 83 precedence, the TIME field range: the clock must return in-range fields, the device does not check). Before them: none open. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
+None open. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
 
 ### Blocked/Deferred
 
@@ -508,6 +518,12 @@ From Phase 6, in `TODO.md`: the MONITOR_SPEC 6.15 test bullet ("no injectable cl
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Phase 6 Readings Made Normative
+- Mike confirmed the six Phase 6 literal readings, the 6.15 test wording and the Pi clock policy (Key Decisions, same date). Written into MONITOR_SPEC 6.15, DEVICE_SPECS 8 (a new TIME clock subsection, the precedence line, the OUT 10 rules, the implementation map) and HARDWARE_BUILD 5. Docs and test comments only; no code or ROM change.
+- Verified against the code: every item matches `mailbox.rs`, `CMD_TIME` and the tests except the year bound. `local_time` still returns a year above 9999 (a 5-digit year, 20 bytes); unreachable before the year 10000, logged in TODO, Decided, to implement.
+- Test comments and transcript headers that quoted the old spec text (`no NTP sync and no RTC`, `NTP or RTC`, `the line before it`, `the Pi's local time`, `The emulator uses the host clock`) now quote the new text.
+- What bit us: tests that quote the spec go stale when the spec is reworded; grep the quotes after any spec edit.
 
 ### 2026-10-03: Phase 6, Time (v0.5)
 - `src/io/devices/mailbox.rs` per DEVICE_SPECS 8, mapped at 10-13 by `build_bus`: 128-byte buffer (exactly 128 accepted, overflow -> 81 on execute), execute from any state, clear = the power-on state, IN 13 = 00 with no side effect outside AVAIL, command word before the first 20h, `TIME` exact or 82, empty/lowercase/unknown 80. TIME completes within the execute access, so no worker and no BUSY.

@@ -491,8 +491,8 @@ impl Mon {
     }
 }
 
-/// `NNNN-NN-NN NN:NN:NN`, N a decimal digit. 6.15: "Tests match the shape
-/// NNNN-NN-NN NN:NN:NN (N = decimal digit), never a value."
+/// `NNNN-NN-NN NN:NN:NN`, N a decimal digit. 6.15: "T transcripts match the shape
+/// NNNN-NN-NN NN:NN:NN (N = decimal digit), never a value".
 fn is_time_shape(b: &[u8]) -> bool {
     b.len() == 19
         && b.iter().enumerate().all(|(i, &c)| match i {
@@ -598,7 +598,8 @@ fn t_against(statuses: &[u8], bytes: &[u8]) -> String {
 #[test]
 fn t_prints_service_error() {
     // 6.15 step 4: "On status 00h after execute (Pi service restarted) or 80h-FFh, prints
-    // Service error. Any response bytes already printed stay on the line before it."
+    // Service error then <CR><LF>. Any response bytes already printed stay on the same
+    // line, with no <CR><LF> before the message: an error after 2026- prints 2026-Service error."
     // Messages (5): "Service error | T (Phase 6): mailbox status 00 after execute, or 80-FF".
     for status in [0x00, 0x80, 0x81, 0x82, 0x83, 0x84, 0xC0, 0xFF] {
         assert_eq!(t_against(&[status], b""), "Service error\\r\\n", "status {:02X}", status);
@@ -623,8 +624,8 @@ fn t_handles_every_status_the_reference_client_does() {
 
 #[test]
 fn t_with_the_pi_clock_not_set_prints_service_error() {
-    // DEVICE_SPECS 8, TIME: "If the Pi clock is not set (no NTP sync and no RTC), the
-    // result is 83." 6.15 step 4: 80h-FFh prints Service error.
+    // DEVICE_SPECS 8, TIME: "If the clock is not set, the result is 83." 6.15 step 4:
+    // 80h-FFh prints Service error.
     let mut m = boot();
     let mb = Rc::new(RefCell::new(Mailbox::new(|| None)));
     m.map_mailbox(mb);

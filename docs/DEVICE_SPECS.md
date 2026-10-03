@@ -358,14 +358,15 @@ One device carries every Pi service. The 8080 writes a text command and reads ba
 
 ### Command buffer (10)
 
-- Each `OUT 10` appends one byte.
+- Each `OUT 10` appends one byte, any value 00-FF. 00 is appended like any other byte (unlike port 0D, which ignores 00).
+- `OUT 10` appends in every state. In AVAIL, DONE or ERROR it changes no status and no response: `IN 12` and `IN 13` read as before, and the bytes wait in the buffer for the next execute.
 - The buffer holds at most 128 bytes. Exactly 128 bytes is accepted. Bytes beyond 128 are dropped and an overflow flag is set; the next execute then fails with 81. Clear and execute both reset the flag.
 - Clear and execute both empty the buffer. Power-on and RESET: empty, flag clear.
 - **Resync rule:** a client MUST write clear (`OUT 11` = 02) before it sends the first command byte. This discards any half-sent command left by an aborted earlier client.
 
 ### Command format
 
-- The **command word** is the bytes before the first 20h, or the whole buffer when it contains no 20h. It is matched exactly and case-sensitively against the uppercase names below. An empty word, a lowercase word or an unknown word gives 80.
+- The **command word** is the bytes before the first 20h, or the whole buffer when it contains no 20h. It is matched exactly and case-sensitively against the uppercase names below. An empty word, a lowercase word or an unknown word gives 80. A placeholder word in the Commands table (`ASM`, `DIS`, `GET`, `ASK`) is unknown until its phase ships, so it gives 80, with or without arguments.
 - The **argument string** is everything after the first 20h, passed verbatim and possibly empty. URLs are case-sensitive.
 - There is no terminator: execute ends the command.
 - Text responses use CR LF (0D 0A) between lines and after each line, except for `TIME` (below).
@@ -380,17 +381,29 @@ One device carries every Pi service. The 8080 writes a text command and reads ba
 | 83 | Service failed (no network, API error, clock not set, host error) |
 | 84-FF | Reserved |
 
+**Precedence on execute:** 81 beats 80 and 82, which beat 83. An overflowed buffer gives 81 whatever it holds, because it is not parsed. A buffer that does not parse gives 80 or 82 without consulting the clock or any service. Only a valid command can give 83.
+
 ### Commands
 
 | Command | Phase | Exact buffer | Response |
 |---------|-------|--------------|----------|
-| `TIME` | 6 | `TIME` only. Any other buffer whose command word is `TIME` (for example `TIME ` or `TIME UTC`) gives 82 | 19 bytes, `YYYY-MM-DD HH:MM:SS`: the Pi's local time, 24-hour, zero-padded, with no line ending. Example: `2026-10-02 14:30:05`. If the Pi clock is not set (no NTP sync and no RTC), the result is 83. The emulator uses the host clock |
-| `ASM <line>` | 7 | Placeholder | Designed in Phase 7 |
-| `DIS <bytes>` | 7 | Placeholder | Designed in Phase 7 |
-| `GET <url> [> FILE]` | 8 | Placeholder | Designed in Phase 8, including how it interacts with the mounted file |
-| `ASK <prompt>` | 9 | Placeholder | Designed in Phase 9 |
+| `TIME` | 6 | `TIME` only. Any other buffer whose command word is `TIME` (for example `TIME ` or `TIME UTC`) gives 82 | 19 bytes, `YYYY-MM-DD HH:MM:SS`: local time, 24-hour, every field zero-padded, with no line ending. Example: `2026-10-02 14:30:05`. A year below 1000 is zero-padded to four digits (`0999-01-02 03:04:05`). A year above 9999 gives 83. If the clock is not set, the result is 83. Clock rules: TIME clock, below |
+| `ASM <line>` | 7 | Placeholder. Gives 80 until Phase 7 ships it | Designed in Phase 7 |
+| `DIS <bytes>` | 7 | Placeholder. Gives 80 until Phase 7 ships it | Designed in Phase 7 |
+| `GET <url> [> FILE]` | 8 | Placeholder. Gives 80 until Phase 8 ships it | Designed in Phase 8, including how it interacts with the mounted file |
+| `ASK <prompt>` | 9 | Placeholder. Gives 80 until Phase 9 ships it | Designed in Phase 9 |
 
 Large results go to storage files, and the 8080 reads them through section 6. How long a request may run, and how a hung request ends, is designed in Phase 8 with `GET`. `TIME` cannot hang.
+
+### TIME clock
+
+`TIME` reads a clock that returns either the fields year, month, day, hour, minute and second of local time, or "not set". The device formats the 19 bytes from the fields; the clock never formats.
+
+- **Contract on the clock:** it returns year 0-9999, month 1-12, day 1-31 (valid for the month), hour 0-23, minute 0-59 and second 0-60 (60 only in a leap second), or "not set". The device does not range-check the fields. A clock that breaks the contract is a bug in the clock, not a device error.
+- **Year above 9999:** the clock reports "not set", so `TIME` gives 83.
+- **Not set:** `TIME` gives 83.
+- **Emulator:** the host's local time (`localtime_r`). It reports "not set" when the host time is before 1970, does not fit the host's `time_t`, gives a year above 9999, or `localtime_r` fails. The host has no other notion of "clock not set".
+- **Pi:** the Pi runs 64-bit Raspberry Pi OS, so `time_t` is 64-bit and does not wrap in 2038. The clock is set when the kernel reports NTP-synchronized: `adjtimex()` does not return `TIME_ERROR`. Otherwise it reports "not set" and `TIME` gives 83. An RTC alone does not count. Local time follows the Pi's configured time zone (TZ), set at install (`HARDWARE_BUILD.md`, Pi Platform). Implemented with the Pi daemon (`TODO.md`, Someday).
 
 ### Reference client
 
@@ -434,5 +447,5 @@ Superseded on 2026-10-02 (see COLLABORATION_LOG Key Decisions):
 | Port map 00-6F | `build_bus` (`src/io/mod.rs`), used by `main.rs` and every test harness | Pi daemon: the same function |
 | Console 00-02 | `src/io/devices/console.rs` (input FIFO and output buffer, no terminal code); the terminal side is `src/main.rs` | Pi, with the terminal connected to the Pi |
 | Storage 08-0C, Mount 0D-0F | `src/io/devices/storage.rs`, one device (std::fs) | Pi: the same Rust code, files on its SD card |
-| Service Mailbox 10-13 | `src/io/devices/mailbox.rs`. `TIME` reads a clock passed to `Mailbox::new` (a plain fn returning the date and time fields; the device formats the 19 bytes): `build_bus` passes the host's local time (`mailbox::local_time`), tests pass a fixed or a failing one | Pi: the same Rust code behind GPIO, with a clock that reports "not set" (83) |
+| Service Mailbox 10-13 | `src/io/devices/mailbox.rs`. `TIME` reads a clock passed to `Mailbox::new` (a plain fn returning the date and time fields, or None for "not set"). The device formats the 19 bytes, so the emulator and the Pi daemon share the formatter. `build_bus` passes the host's local time (`mailbox::local_time`, `localtime_r` through the `libc` crate); tests pass a fixed or a failing one | Pi: the same Rust code and formatter behind GPIO, with a clock that reports "not set" (83) unless the kernel is NTP-synchronized (section 8, TIME clock) |
 | System control FE-FF | `src/cpu.rs` | 74HCT74 and decode (`ARCHITECTURE.md`, Overlay Glue) |

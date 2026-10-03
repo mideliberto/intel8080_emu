@@ -3,7 +3,7 @@
 // spec text: each test quotes the sentence it checks.
 //
 // Every access goes through an IoBus from build_bus (the port map main.rs and the Pi
-// daemon use). Tests that need a known time, or an unset Pi clock, replace ports 10-13
+// daemon use). Tests that need a known time, or an unset clock, replace ports 10-13
 // with a mailbox built on an injected clock; that is the only place the device type is
 // named.
 //
@@ -11,9 +11,9 @@
 //   - build_bus(dir) maps one Service Mailbox device at 10, 11, 12, 13, using the host clock.
 //   - intel8080_emu::io::devices::mailbox::Mailbox implements IoDevice.
 //   - Mailbox::new(clock), clock a plain fn returning Some((year, month, day, hour, minute,
-//     second)) of local time, or None for "the Pi clock is not set" (TIME gives 83). A
-//     plain fn can't capture, so the test clock reads a thread-local (each test runs on
-//     its own thread) that `set_clock` changes.
+//     second)) of local time, or None for "not set" (TIME gives 83). A plain fn can't
+//     capture, so the test clock reads a thread-local (each test runs on its own
+//     thread) that `set_clock` changes.
 //
 // Not testable at port level in Phase 6: BUSY (TIME completes within execute), a request
 // that produces bytes later or fails mid-response, an empty response, abort of a running
@@ -341,9 +341,8 @@ fn done_and_error_persist_and_in_13_reads_00_there() {
 
 #[test]
 fn appending_command_bytes_does_not_change_the_state() {
-    // Command buffer: "Each OUT 10 appends one byte." OUT 10 is not an event in the
-    // transitions table, so it changes no state and no response; the bytes wait in the
-    // buffer for the next execute (which empties it).
+    // Command buffer: "OUT 10 appends in every state. In AVAIL, DONE or ERROR it changes
+    // no status and no response ... the bytes wait in the buffer for the next execute."
     set_clock(Some(T1));
     let mut r = rig_with_clock();
     assert_eq!(r.command(b"TIME"), AVAIL);
@@ -608,8 +607,8 @@ fn placeholder_commands_are_unknown_in_phase_6() {
 
 #[test]
 fn time_is_19_bytes_with_no_line_ending() {
-    // Commands: "TIME ... | 19 bytes, YYYY-MM-DD HH:MM:SS: the Pi's local time, 24-hour,
-    // zero-padded, with no line ending. Example: 2026-10-02 14:30:05."
+    // Commands: "TIME ... | 19 bytes, YYYY-MM-DD HH:MM:SS: local time, 24-hour, every
+    // field zero-padded, with no line ending. Example: 2026-10-02 14:30:05."
     // Command format: "Text responses use CR LF ... except for TIME".
     set_clock(Some(T1));
     let mut r = rig_with_clock();
@@ -619,7 +618,7 @@ fn time_is_19_bytes_with_no_line_ending() {
 
 #[test]
 fn time_is_zero_padded_24_hour() {
-    // Commands: "24-hour, zero-padded".
+    // Commands: "24-hour, every field zero-padded".
     let cases: [(Time, &[u8; 19]); 6] = [
         ((2026, 1, 2, 3, 4, 5), b"2026-01-02 03:04:05"),
         ((2026, 12, 31, 23, 59, 59), b"2026-12-31 23:59:59"),
@@ -638,9 +637,8 @@ fn time_is_zero_padded_24_hour() {
 
 #[test]
 fn time_year_is_zero_padded_to_four_digits() {
-    // Commands: "19 bytes, YYYY-MM-DD HH:MM:SS ... zero-padded". (Reconciler addition: the
-    // year range is unspecified. The clock must return in-range fields; the device does
-    // not check them. Logged for Mike.)
+    // Commands: "A year below 1000 is zero-padded to four digits (0999-01-02 03:04:05)."
+    // TIME clock: "it returns year 0-9999 ... The device does not range-check the fields."
     set_clock(Some((999, 1, 2, 3, 4, 5)));
     let mut r = rig_with_clock();
     assert_eq!(r.command(b"TIME"), AVAIL);
@@ -667,7 +665,7 @@ fn time_is_taken_at_execute() {
 
 #[test]
 fn time_with_the_clock_not_set_is_83() {
-    // Commands: "If the Pi clock is not set (no NTP sync and no RTC), the result is 83."
+    // Commands: "If the clock is not set, the result is 83." TIME clock: "Not set: TIME gives 83."
     // Error codes: "83 | Service failed (no network, API error, clock not set, host error)".
     // States: "80-FF | ERROR | The request failed. The value is the error code".
     set_clock(None);
@@ -701,7 +699,7 @@ fn host_local_now() -> Vec<u8> {
 
 #[test]
 fn time_through_build_bus_is_the_host_local_clock() {
-    // Commands: "the Pi's local time ... The emulator uses the host clock".
+    // Commands: "local time". TIME clock: "Emulator: the host's local time (localtime_r)."
     // Transitions, Phase 6: "TIME completes within the execute access. Right after
     // execute, IN 12 reads 02 ... It never reads 01." (checked in execute()).
     let mut r = rig();

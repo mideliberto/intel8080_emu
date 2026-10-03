@@ -8,15 +8,9 @@
 - [x] HEX "nothing is written on any failure": closed 2026-10-03, MONITOR_SPEC 7.2 now says nothing outside the stack page (option B, matches the ROM).
 - [x] HEX 7.1 vs READ_LINE control characters: closed 2026-10-03, documented, not rejected. MONITOR_SPEC 7.1 now says control characters never reach the stored line; `hex.txt` loads a record with an embedded Tab, Esc and NUL and one corrected with BS and DEL.
 - [x] HEX `Line too long` wording: closed 2026-10-03, renamed `Record too long` (ROM, MONITOR_SPEC 5/7, transcripts).
-- [ ] MONITOR_SPEC 6.15 says T tests "match the shape ..., never a value. No injectable clock is needed." The T transcript and the monitor's T tests match the shape only, but Phase 6 also injects the clock (`Mailbox::new(clock)`, a plain fn): `tests/mailbox_tests.rs` checks exact bytes and padding on fixed clocks, and both it and `t_with_the_pi_clock_not_set_prints_service_error` reach 83 through a failing clock. Proposed: reword the bullet to "Transcripts match the shape ...; emulator tests may inject a clock". Not edited: Mike's call.
-- [ ] Pi daemon `TIME` clock: DEVICE_SPECS 8 says 83 when the Pi clock is not set (no NTP sync, no RTC). The emulator's `mailbox::local_time` never reports "not set" (it fails only before 1970). How the Pi daemon detects "not set" (`adjtimex` sync state? `/run/systemd/timesync/synchronized`?) is undecided; it lands with the Pi daemon. Related: "the Pi's local time" depends on the Pi's TZ setting, which no spec names.
-- [ ] Spec ambiguities found reconciling Phase 6 (2026-10-03). Each is implemented and tested at its most literal reading; confirm or change:
-  - MONITOR_SPEC 6.15 step 4, "Any response bytes already printed stay on the line before it": read as the same line, no CR LF first (`2026-Service error`).
-  - DEVICE_SPECS 8 placeholder words `ASM`, `DIS`, `GET`, `ASK` give 80 in Phase 6 (unknown until their phase defines them), not 82.
-  - `OUT 10` of 00 is appended like any byte ("Each OUT 10 appends one byte"); port 0D, by contrast, ignores 00.
-  - `OUT 10` in AVAIL, DONE or ERROR is not in the transitions table: it appends and changes no state or response; the bytes wait for the next execute.
-  - Precedence: overflow (81) wins over parsing (80/82), and parsing wins over the clock (83).
-  - TIME field range: the clock (a Rust fn) must return in-range fields (year 0-9999, month 1-12, ...); the device formats them and does not check, so an out-of-range field would make TIME longer than 19 bytes. `local_time` cannot produce one. Alternative: range-check every field and give 83 ("host error"). Years below 1000 are zero-padded (`0999-...`).
+- [x] MONITOR_SPEC 6.15 "No injectable clock is needed": closed 2026-10-03, 6.15 now says transcripts match the shape (they run on hardware) and device-level tests may inject a clock.
+- [x] Pi daemon `TIME` clock: closed 2026-10-03, 64-bit Raspberry Pi OS; set = kernel NTP-synchronized (`adjtimex()` not `TIME_ERROR`), else 83; local time per the Pi's TZ set at install (DEVICE_SPECS 8 TIME clock, HARDWARE_BUILD 5).
+- [x] Phase 6 literal readings (same-line `Service error`, placeholders 80, NUL on 10 appended, OUT 10 in AVAIL/DONE/ERROR, 81 > 80/82 > 83, year padding and > 9999 = 83, clock field contract): confirmed normative 2026-10-03, written into MONITOR_SPEC 6.15 and DEVICE_SPECS 8.
 
 ## Current
 - [x] Apply alignment package (archived: docs/archive/HANDOFF_2026-10.md)
@@ -52,6 +46,7 @@ Budget was ~250 bytes, from a 176-byte sketch that left out the five messages an
 
 ## Decided, to implement (from the specs; small, not Phase 5)
 Emulator:
+- [ ] `mailbox::local_time` reports "not set" (None, so TIME gives 83) for a year above 9999 (DEVICE_SPECS 8, TIME clock). Today it returns the year and TIME would print 20 bytes; unreachable before the year 10000. One `filter` plus a note in its doc comment.
 - [x] Delete `src/io/devices/timer.rs` and its port hooks in `src/cpu.rs` (ports 0x30-0x32, tick at ~:947). Keep a CPU interrupt input `interrupt(rst)` with 8080A acceptance (EI delay, HLT wake, 11 cycles); tests only.
 - [x] HLT: `execute_one` fetches nothing while halted; `run()` returns on halt; main.rs prints `HLT at PC=xxxx`, restores the terminal, exits; `perform_hlt` stops printing.
 - [x] Host input pump + Ctrl-C quit in the emulator run loop; host key map per ARCHITECTURE; the run loop returns a quit/halted status (ARCHITECTURE 7.2). Done 2026-10-03: `run_loop`/`map_key` in `src/main.rs`; piped stdin feeds the console unmapped
@@ -177,6 +172,6 @@ All done 2026-10-03 (step E): the WARM/error-tail/one-parser/RANGE refactor from
 - [ ] Phase 10: R command (the debugger shipped early, ARCHITECTURE 7.4)
 - [ ] 8253 timer, TIMER_ISR, RST 7 vector: when something needs a periodic interrupt
 - [ ] Hardware prototype: see docs/HARDWARE_BUILD.md (BOM, 9-step bring-up)
-- [ ] Pi daemon binary (busy-poll /dev/gpiomem, TCP console, shared device code)
+- [ ] Pi daemon binary (busy-poll /dev/gpiomem, TCP console, shared device code). Its `TIME` clock: "not set" unless `adjtimex()` reports NTP-synchronized, local time per the TZ set at install (DEVICE_SPECS 8, TIME clock)
 - [ ] Pi-assisted hardware single-step (needs A8-A15 on the Pi; not in v1)
 - [ ] Interrupt tick source (Pi GPIO vs 8254) when something needs a periodic interrupt

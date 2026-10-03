@@ -1,6 +1,6 @@
 # Service Mailbox from the monitor (DEVICE_SPECS 8) and T (MONITOR_SPEC 6.15).
 # Format: tests/monitor_tests.rs header. Runs on hardware with the Pi clock set
-# (NTP or RTC; unset, TIME is 83): nothing here depends on the time's value.
+# (NTP-synchronized; unset, TIME is 83): nothing here depends on the time's value.
 #
 # T's own output is a time, which an exact transcript can't match; the shape
 # NNNN-NN-NN NN:NN:NN, the port sequence and Service error are Rust-side in

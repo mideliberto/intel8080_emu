@@ -112,6 +112,8 @@ One stage at a time. Do not start a stage until the previous one passes.
 ## 5. Pi Platform and Service Model
 
 - **Platform:** Raspberry Pi 4B for v1, on its own supply, grounds joined at the header. A Pi 5 also works but its GPIO reads cross PCIe to RP1 and are several times slower (est).
+- **OS:** 64-bit Raspberry Pi OS, so `time_t` is 64-bit and the clock does not wrap in 2038.
+- **Clock (mailbox `TIME`):** the clock is set only when the kernel reports NTP-synchronized (`adjtimex()` does not return `TIME_ERROR`); until then `TIME` gives 83. The Pi 4B has no RTC, and an added RTC alone would not count. Local time follows the Pi's configured time zone (TZ), set at install. Implemented with the Pi daemon. Normative text: `DEVICE_SPECS.md` 8, TIME clock.
 - **Bus service:** one thread busy-polls the mmapped GPIO block through `/dev/gpiomem` on a core isolated with `isolcpus`, and calls the IoBus inline. One GPLEV0 read is an atomic snapshot of every signal. Cost: one core at 100%. Expected sub-us to about 3 us per access (est); measure GPLEV latency on day one (bring-up step 5).
 - **RESET:** a gpio character-device (gpio-cdev) both-edge request. The kernel latches the edge, so no pulse is missed, even during an fsync. The bus thread checks it before every ACK (`ARCHITECTURE.md` 6.6).
 - **No rppal.** It was archived 2025-07-01.

@@ -352,12 +352,12 @@ Commands:
 1. Runs the mailbox command `TIME` with the reference client in `DEVICE_SPECS.md` (Service Mailbox): clear (OUT 11h ← 02h), send `T` `I` `M` `E` to OUT 10h, execute (OUT 11h ← 01h), then poll IN 12h.
 2. Each response byte read from IN 13h is printed to the console as it arrives.
 3. On status 03h (DONE), prints `<CR><LF>`.
-4. On status 00h after execute (Pi service restarted) or 80h-FFh, prints `Service error`. Any response bytes already printed stay on the line before it.
+4. On status 00h after execute (Pi service restarted) or 80h-FFh, prints `Service error` then `<CR><LF>`. Any response bytes already printed stay on the same line, with no `<CR><LF>` before the message: an error after `2026-` prints `2026-Service error`.
 
 - Arguments are ignored (4.1). T sends exactly `TIME`.
 - The successful output is one line, `YYYY-MM-DD HH:MM:SS` (the Pi's local time), followed by `<CR><LF>`.
 - T uses ports 10h-13h.
-- Tests match the shape `NNNN-NN-NN NN:NN:NN` (N = decimal digit), never a value. No injectable clock is needed.
+- T transcripts match the shape `NNNN-NN-NN NN:NN:NN` (N = decimal digit), never a value, so they run unchanged on hardware against the Pi's clock. Device-level and emulator tests may inject a clock (`DEVICE_SPECS.md`, TIME clock) to check exact values, padding and the clock-not-set error.
 
 ---
 

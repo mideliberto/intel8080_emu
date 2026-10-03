@@ -8,7 +8,7 @@
 - Phase 6 complete (Service Mailbox at 10-13, `TIME` + T). Phase 7 next: `ASM`/`DIS`, A and U (designed when it starts).
 - 258 tests passing (13 host + 130 CPU + 37 device + 30 mailbox + 32 monitor + 16 debugger), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
 - Monitor ROM v0.5, 15 commands plus the `:` HEX loader, matches MONITOR_SPEC. 2571 of 4096 bytes used (`cd rom && make size`), ~1.5KB headroom
-- Spec solidified 2026-10-02: three normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC). Open decisions: two from Phase 6 plus six literal spec readings to confirm (`TODO.md`).
+- Spec solidified 2026-10-02: three normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC). Open decisions: none (Phase 6 readings and Pi clock policy closed 2026-10-03; `TODO.md`).
 - Live task list: `TODO.md`
 
 ## Roles
