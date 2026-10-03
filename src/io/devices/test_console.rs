@@ -30,8 +30,8 @@ impl TestConsole {
         self.output.clear();
     }
 
-    pub fn add_input(&mut self, input: &str) {
-        self.input.extend(input.bytes());
+    pub fn add_input(&mut self, input: impl AsRef<[u8]>) {
+        self.input.extend(input.as_ref());
     }
 }
 

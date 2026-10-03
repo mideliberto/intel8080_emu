@@ -1,0 +1,38 @@
+# H a b prints (a+b) and (a-b), mod 10000h (MONITOR_SPEC 6.6).
+> H 1234 0111
+1345 1123
+# The carry out of the add must not leak into the subtract.
+> H FFFF 0002
+0001 FFFD
+> H 0 1
+0001 FFFF
+> H0 0
+0000 0000
+
+# Digit edges: 0 9 A F a f are digits; / : @ G ` g are not.
+> H 9 0
+0009 0009
+> H A F
+0019 FFFB
+> h abcd f
+ABDC ABBE
+> H 1 /
+Invalid hex value
+> H 1 :
+Invalid hex value
+> H 1 @
+Invalid hex value
+> H 1 G
+Invalid hex value
+> H 1 `
+Invalid hex value
+> H 1 g
+Invalid hex value
+
+# Missing arguments.
+> H
+Invalid hex value
+> H 1
+Invalid hex value
+> H ZZ 1
+Invalid hex value

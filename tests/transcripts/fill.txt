@@ -1,0 +1,33 @@
+# F start end byte writes start..end inclusive (MONITOR_SPEC 6.4).
+> F 0100 02FF 00
+> F 0200 020F AA
+> D 01F1 021F
+01F1: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 AA  ................
+0201: AA AA AA AA AA AA AA AA  AA AA AA AA AA AA AA 00  ................
+0211: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+
+# end = start is one byte.
+> F 0220 0220 BB
+> D 0218 0218
+0218: 00 00 00 00 00 00 00 00  BB 00 00 00 00 00 00 00  ................
+
+# A byte argument may have leading zeros (MONITOR_SPEC 4.2).
+> F 0230 0230 00AA
+> D 0228 0228
+0228: 00 00 00 00 00 00 00 00  AA 00 00 00 00 00 00 00  ................
+
+# end = FFFF fills through FFFF and stops; 0000 is untouched.
+> F 0000 000F 22
+> F FFF0 FFFF 11
+> D 0000 000F
+0000: 22 22 22 22 22 22 22 22  22 22 22 22 22 22 22 22  """"""""""""""""
+
+# Missing or invalid arguments.
+> F
+Invalid hex value
+> F 0200
+Invalid hex value
+> F 0200 0300
+Invalid hex value
+> F ZZ 0300 11
+Invalid hex value

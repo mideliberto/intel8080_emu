@@ -1,0 +1,27 @@
+# C start end dest prints each mismatch as AAAA:XX BBBB:YY (MONITOR_SPEC 6.1).
+> F 0100 04FF 00
+> F 0200 0203 11
+> F 0300 0303 11
+# Identical ranges print nothing.
+> C 0200 0203 0300
+> F 0302 0302 22
+> F 0203 0203 33
+> C 0200 0203 0300
+0202:11 0302:22
+0203:33 0303:11
+# Both range edges: end stops at end, start begins at start.
+> C 0200 0202 0300
+0202:11 0302:22
+> C 0203 0203 0303
+0203:33 0303:11
+> C 0204 0210 0304
+
+# Missing or invalid arguments.
+> C
+Invalid hex value
+> C 0200
+Invalid hex value
+> C 0200 0210
+Invalid hex value
+> C ZZ 0210 0300
+Invalid hex value

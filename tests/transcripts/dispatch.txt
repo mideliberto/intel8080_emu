@@ -1,0 +1,21 @@
+# Command dispatch (MONITOR_SPEC 3). Format: tests/monitor_tests.rs header.
+
+# An empty line and a spaces-only line re-prompt with no message.
+>
+> \x20\x20\x20
+
+# Unrecognized first characters, including a byte above 7F.
+> Z
+Unknown command. Type ? for help.
+> z
+Unknown command. Type ? for help.
+> \xC1
+Unknown command. Type ? for help.
+
+# Leading spaces are skipped, the letter folds to uppercase, the space after
+# the letter is optional, and tokens after the last argument are ignored.
+> F 0200 020F 41
+>    d0200 020F
+0200: 41 41 41 41 41 41 41 41  41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
+> D   0200   020F   junk
+0200: 41 41 41 41 41 41 41 41  41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA

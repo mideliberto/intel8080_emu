@@ -1,0 +1,33 @@
+# READ_LINE (MONITOR_SPEC 2). `<` steps show the exact echo.
+
+# BS removes one character and echoes BS SP BS; BS on an empty line does nothing.
+< H 12\x0834 1\r
+H 12\x08 \x0834 1
+0135 0133
+< \x08\x08H 1 1\r
+H 1 1
+0002 0000
+
+# Control characters are ignored and not echoed.
+< H\x01 1\x1B 1\x09\x00\r
+H 1 1
+0002 0000
+
+# LF ends a line too. CR LF gives the line plus an empty line, which re-prompts.
+< H 2 1\n
+H 2 1
+0003 0001
+< H 2 1\r\n
+H 2 1
+0003 0001
+\x3E\x20
+
+# 79 characters fit; the 80th is discarded silently.
+> H 1                                                                           2
+0003 FFFF
+< H 1                                                                            2\r
+H 1                                                                           \x20
+Invalid hex value
+# A short line after a long one sees no leftovers.
+> H 2 1
+0003 0001

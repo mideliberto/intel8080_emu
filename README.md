@@ -15,7 +15,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Console device | ✅ |
 | Storage device (24-bit, 16MB) | ✅ |
 | Monitor ROM v0.3 (14 commands) | ✅ |
-| 204 tests (14 unit + 180 CPU + 10 integration) | ✅ |
+| 165 tests (8 unit + 123 CPU + 18 device + 16 monitor) | ✅ |
 | Intel HEX loader (Phase 5) | 🔲 Next |
 | Service Mailbox: time, HTTP, Claude (Phases 6-9) | 🔲 Future |
 
@@ -143,10 +143,10 @@ docs/
 └── archive/                 # Superseded docs, kept for history
 
 tests/
-├── cpu_tests.rs         # 180 CPU instruction tests
-├── monitor_tests.rs     # 10 integration tests
-└── common/
-    └── mod.rs           # Test utilities
+├── cpu_tests.rs         # CPU: reference-model flags, opcode cycle/length table, branches, wrap
+├── device_tests.rs      # Storage and mount at port level
+├── monitor_tests.rs     # Strict transcript harness: junk RAM, exact output to each prompt
+└── transcripts/         # Monitor transcripts (data; also meant for hardware over the Pi console)
 ```
 
 ## I/O Port Map

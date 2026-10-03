@@ -1,0 +1,32 @@
+# E: AAAA: XX- then keys (MONITOR_SPEC 6.3). Only one-digit entries here:
+# two digits advancing on their own is a tracked ROM bug (TODO.md Review findings).
+> F 0100 02FF 00
+> F 0201 0201 99
+
+# One digit is a value; CR stores and advances; CR alone advances; '.' exits.
+< E 0200\r5\r7\r\r.
+E 0200
+0200: 00-5
+0201: 99-7
+0202: 00-
+0203: 00-
+
+# Bare E resumes at the address shown when '.' was typed. BS removes a digit;
+# BS with no digit does nothing.
+< E\r\x081\x082\r.
+E
+0203: 00-1\x08 \x082
+0204: 00-
+
+# Non-hex keys (including '-') are ignored and not echoed; a lowercase digit
+# echoes as typed; '.' discards a pending digit.
+< E 0205\rzG-\x1Ba\r3.
+E 0205
+0205: 00-a
+0206: 00-3
+
+> D 01FF 01FF
+01FF: 00 05 07 00 02 00 0A 00  00 00 00 00 00 00 00 00  ................
+
+> E ZZ
+Invalid address

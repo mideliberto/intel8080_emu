@@ -1,0 +1,28 @@
+# I port and O port byte (MONITOR_SPEC 6.7, 6.10). Values per DEVICE_SPECS.
+# Console status with no input waiting; IN 01 with an empty FIFO reads 00.
+> I 02
+02
+> I 01
+00
+# An unassigned Pi-window port reads FF.
+> I 05
+FF
+# Storage address register round trip, and status 82 (not mounted, EOF).
+> O 08 34
+> I 08
+34
+> i 0c
+82
+> O 08 00
+> I 08
+00
+
+# Missing arguments.
+> I
+Invalid port/value
+> O
+Invalid port/value
+> O 08
+Invalid port/value
+> I ZZ
+Invalid port/value

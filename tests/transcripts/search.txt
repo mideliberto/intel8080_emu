@@ -1,0 +1,40 @@
+# S start end b1..b8 prints each address where the pattern matches (MONITOR_SPEC 6.11).
+> F 0100 07FF 00
+> F 0500 0502 41
+> S 0400 0600 41 41 41
+0500
+# start = end = the match.
+> S 0500 0500 41 41 41
+0500
+# A match at end, with the pattern running past end.
+> S 0400 0500 41 41 41
+0500
+# Starting just past the match: no match. (Ending just before it is a
+# tracked ROM bug: S also tests end+1, TODO.md Review findings.)
+> S 0501 0600 41 41 41
+# Overlapping matches all print, in ascending order.
+> S 0400 0600 41 41
+0500
+0501
+> S 0400 0600 41 41 41 41
+
+# 8 bytes is the longest pattern; a 9th token is ignored.
+> F 0600 0607 42
+> S 0400 0700 42 42 42 42 42 42 42 42
+0600
+> S 0400 0700 42 42 42 42 42 42 42 42 43
+0600
+
+# A match two past end, on end's page, is not reported.
+> F 0410 0410 41
+> S 0400 040E 41
+
+# Missing arguments or no pattern.
+> S
+Invalid hex value
+> S 0200
+Invalid hex value
+> S 0200 0300
+Invalid hex value
+> S ZZ 0300 41
+Invalid hex value

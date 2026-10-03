@@ -447,13 +447,13 @@ Console I/O debugging session:
 **Devices:**
 - Console (0x00-0x02), Storage (0x08-0x0C, 24-bit / 16MB), Storage Mount (0x0D-0x0F), System Control (0xFE-0xFF)
 
-**Testing (verified 2026-10-02 against GitHub HEAD):**
-- 14 unit + 180 CPU + 10 monitor integration = 204, all passing
+**Testing (verified 2026-10-03):**
+- 8 unit + 123 CPU + 18 device + 16 monitor = 165, all passing (strict transcript harness, reference-model CPU tests)
 
 ### In Progress
 
 - **Phase 5:** Intel HEX loader, parsed by the 8080 itself in ROM. All design decisions made 2026-10-02; build order in `TODO.md`. Not started.
-- **Review findings:** 2026-10-02 review found CPU flag bugs (AC on subtract, DCR, ANA, DAA; PSW bits; EI delay; HLT), ROM range and parse bugs, and vacuous tests. All are listed in `TODO.md` with repros. None are fixed yet.
+- **Review findings:** 2026-10-02 review found CPU flag bugs (AC on subtract, DCR, ANA, DAA; PSW bits; EI delay; HLT), ROM range and parse bugs, and vacuous tests. All are listed in `TODO.md` with repros. The vacuous tests are replaced; none of the bugs are fixed yet.
 
 ### Open Decisions
 
@@ -473,6 +473,13 @@ None. All closed 2026-10-02. The spec is the three normative docs: `docs/ARCHITE
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Tests That Test (step A)
+- Monitor tests are now a strict transcript harness: junk RAM (76 = HLT), junk registers and flags, SP = 0000; each step runs to the prompt and must match exactly; budget or HLT = failure. Transcripts are data in `tests/transcripts/`, meant to drive hardware too.
+- CPU tests rebuilt around an exhaustive reference model, a 244-opcode cycle/length table, a branch table and RST/IN/OUT/wrap/reset/overlay tests; 72 vacuous, duplicate or now-redundant tests deleted. New `tests/device_tests.rs` tests storage and mount at port level; the private-access unit tests in `storage_mount.rs` went.
+- Mutation: ROM hand mutants 59/65 killed (was 9/65), cargo-mutants `cpu.rs` 647/752 (was 544), storage + mount 74/80. Every survivor is equivalent, unobservable, or a tracked bug.
+- What bit us: A5 junk is ANA L, a NOP slide into F000 that boots without the overlay; HLT fixed it. The adversarial review found five real ROM mutants surviving on transcript ordering (L without OUT 0A, W without OUT 09, W default 0101, addr24 high nibble, S end check); fixed by setting each address byte from scratch and adding six-digit addresses.
+- Found a new ROM bug: S tests the candidate at end+1. Logged in TODO, test ships with the fix.
 
 ### 2026-10-02 (part 4): Hardware Alignment and a Real CPU Reference
 - An 11-agent hardware-alignment workflow (CPU timing, Pi interface, memory and glue, power and build, software fit), with each specialist adversarially verified. Then 19 decisions, all accepted.

@@ -1,0 +1,116 @@
+# X, L, W (MONITOR_SPEC 6.8, 6.12, 6.13) against the storage device (DEVICE_SPECS 6, 7).
+> F 0100 05FF 00
+> F 0200 02FF 5A
+> F 0200 0200 A0
+> F 0201 0201 A1
+> F 0202 0202 A2
+> F 0203 0203 A3
+
+# Nothing mounted.
+> L 0 0200
+No storage mounted
+> W 0200 0
+No storage mounted
+> X
+No storage mounted
+
+# Mount; a mount resets the storage address; the name ends at a space.
+> O 08 55
+> X TEST.BIN junk
+Mounted
+> I 08
+00
+> X
+Mounted
+
+# 24-bit storage address, explicit counts, both edges of the destination.
+> W 0200 010002 3
+Written
+> L 010003 0300 2
+Loaded
+> D 02FF 02FF
+02FF: 5A A1 A2 00 00 00 00 00  00 00 00 00 00 00 00 00  Z...............
+> I 0A
+01
+> I 09
+00
+> I 08
+05
+
+# The default count is 0100.
+> W 0200 0
+Written
+> I 09
+01
+> I 08
+00
+> L 0 0400
+Loaded
+> D 04F8 04F8
+04F8: 5A 5A 5A 5A 5A 5A 5A 5A  00 00 00 00 00 00 00 00  ZZZZZZZZ........
+> I 09
+01
+> I 08
+00
+
+# A count above FF: storage 0100-010F (zeros) lands at 0500-050F; 0510 is untouched.
+> W 0100 0100 10
+Written
+> F 0500 0520 EE
+> L 0 0400 110
+Loaded
+> D 0501 0501
+0501: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 EE  ................
+> I 09
+01
+> I 08
+10
+
+# Six-digit storage addresses; every address byte is set by each command.
+> W 0200 123456 1
+Written
+> I 0A
+12
+> I 09
+34
+> I 08
+57
+> L 010002 0300 1
+Loaded
+> I 0A
+01
+> I 09
+00
+> I 08
+03
+# I 0B reads like any port, so it advances the storage address (MONITOR_SPEC 6.7).
+> I 0B
+A1
+> I 08
+04
+
+# Missing or invalid arguments while mounted.
+> L
+Invalid hex value
+> L 0
+Invalid hex value
+> W
+Invalid hex value
+> W 0200
+Invalid hex value
+> X BAD/NAME
+Invalid filename
+
+# Unmount. "Unmounted" exists only in a current monitor.bin (the stale-bin guard).
+> X -
+Unmounted
+> X
+No storage mounted
+> I 08
+00
+> L 0 0200
+No storage mounted
+> W 0200 0
+No storage mounted
+> X -anything
+Unmounted
