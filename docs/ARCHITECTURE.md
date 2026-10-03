@@ -295,7 +295,7 @@ ROM_WE  = MEMW AND A15..A12 = 1111 AND JP_WE      ; JP_WE = jumper JP-WE fitted 
 - **Pins.** Tie ROM /CE low. ROM /WE has a pull-up and reaches the write-enable gate only through JP-WE (6.10), so with JP-WE open the 8080 can never write the ROM. ROM_OE drives only ROM /OE. An 8 KB ROM part has A12 tied low. RAM /CE comes from address bits only. RAM_OE drives RAM /OE and RAM_WE drives RAM /WE. No signal gated by MEMR may drive a /CE.
 - **Read timing** (no memory wait states). Address is valid by 329 ns. MEMR arrives by 787 ns (DBIN 757 + 8228 tRR 30). Data must be on the system bus by 905 ns: tDS2 is 150 ns before phi2 of T3, less 8228 tRD 30. That gives 118 ns from MEMR to data and 576 ns from address to data. Memory /OE access plus the MEMR gate MUST fit in 118 ns. Timing a /CE access from MEMR misses the deadline (AT28C64B tCE 150).
 - **Logic levels.** The 8228 drives the system data bus and MEMR/MEMW/I/OR/I/OW at TTL levels (VOH 2.4 V min at -1 mA, VOL 0.45 V). Every input on those nets MUST accept VIH <= 2.4 V: 74HCT/ACT, ATF22V10C, AT28C64B, 74LVC at 3.3 V, AS6C62256. Parts with CMOS thresholds MUST NOT be on those nets: 74HC, and AS6C1008/AS6C4008 (VIH 0.7 VCC). 8080A inputs need VIH 3.3 V. They are driven only by the 8224 (READY, RESET), the 8228 CPU-side D0-D7, and HCT outputs.
-- **Bus loading.** Every load on the 8080A address pins and CPU-side data pins is CMOS, because 8080A IOL is 1.9 mA. There are no address or data buffers beyond the 8228. The status taps (D4, D6) are on the CPU side of the 8228.
+- **Bus loading.** Every load on the 8080A address pins and CPU-side data pins is CMOS, because 8080A IOL is 1.9 mA. There are no address or data buffers beyond the 8228. The status taps (D4, D6) are on the CPU side of the 8228. The address pins also carry the 10 kohm pull-ups of 6.13; the CPU-side data pins carry none.
 
 ### 6.3 Port Address Decode
 
@@ -387,7 +387,7 @@ One 74HCT74 half; the other half is the WAIT flip-flop (6.4). /PRE = NOT RESET: 
 - **HOLD** (pin 13) to GND. 8080A HLDA (pin 21) goes to 8228 HLDA (pin 2). There is no DMA.
 - **8228 BUSEN** (pin 22) to GND. A floating bipolar input reads high and tri-states the 8228.
 - Any driver of an 8080A input MUST be a CMOS/HCT output. 74LS is not allowed there.
-- An 8080A output MAY drive only CMOS inputs, the 8224/8228 and an analyzer probe (6.12). It MUST NOT drive an LED or a TTL input: it sources 150 uA at VOH 3.7 V and sinks 1.9 mA at VOL 0.45 V (reference 3.2). The status LEDs (6.11) therefore hang on 74HCT08 buffers.
+- An 8080A output MAY drive only CMOS inputs, the 8224/8228, an analyzer probe (6.12) and, on A0-A15, the 10 kohm pull-ups (6.13). It MUST NOT drive an LED or a TTL input: it sources 150 uA at VOH 3.7 V and sinks 1.9 mA at VOL 0.45 V (reference 3.2). The status LEDs (6.11) therefore hang on 74HCT08 buffers.
 
 ### 6.8 What Is Local and What Is the Pi
 
@@ -401,6 +401,7 @@ One 74HCT74 half; the other half is the WAIT flip-flop (6.4). /PRE = NOT RESET: 
 | ROM write-enable gate and jumper JP-WE (6.10) | |
 | Status LEDs (6.11) | |
 | Logic-analyzer headers (6.12) | |
+| Bus pull-ups (6.13) | |
 
 The console transport between the terminal and the Pi (UART with RTS/CTS, USB gadget serial, or TCP) is Pi configuration and is invisible to the 8080. Console behavior, including input flow control toward the terminal: `DEVICE_SPECS.md` (Console).
 
@@ -410,7 +411,7 @@ The console transport between the terminal and the Pi (UART with RTS/CTS, USB ga
 
   | Rail (all +/-5%) | Load |
   |------------------|------|
-  | +5 V | 8080A 80 mA, 8224 115 mA, 8228 190 mA, plus memory, glue and the status LEDs (<= 15 mA, 6.11): about 0.8 A total (est) |
+  | +5 V | 8080A 80 mA, 8224 115 mA, 8228 190 mA, plus memory, glue, the status LEDs (<= 15 mA, 6.11) and the bus pull-ups (<= 13 mA, 6.13): about 0.8 A total (est) |
   | +12 V | 8080A 70 mA, 8224 12 mA, 8228 INTA strap 5 mA: 87 mA total |
   | -5 V | 8080A 1 mA |
 
@@ -525,6 +526,43 @@ Each header has 16 signals on pins 1-16 in channel order and GND on pins 17-20. 
    - **DC load.** <= 10 uA, inside the 8080A's 150 uA source (reference 3.2).
    - **Capacitance.** The 8080A address and data pins are specified into 100 pF, and SYNC, DBIN, /WR, WAIT and HLDA into 50 pF. Above that, add 0.6 ns per pF (reference 3.3, note 4c). With the analyzer attached the load is (est, <= 10 pF per CMOS input from SCLS063G 4.4, SCLS171F 5.4, AT28C64B DS 13 and ATF22V10C, plus 5-10 pF of trace): address pins <= about 75 pF (A15 is the heaviest, with the GAL, RAM /CE, 74HCT14, 74HCT138 and the probe); control pins <= about 45 pF (WAIT is the heaviest, with two 74HCT08 inputs and the probe).
 4. **The board MUST meet all of section 6 with the analyzer attached.** Bring-up runs with it attached (`HARDWARE_BUILD.md` 3). A board that passes only without the analyzer fails.
+
+### 6.13 Bus Pull-Ups
+
+Decided 2026-10-03 (Mike). 10 kohm pull-up SIPs hold the address bus and the system data bus when nothing drives them. The 8080A floats A0-A15 and D0-D7 in the halt state (reference 9), during RESET (reference 10) and in hold (reference 8; HOLD is tied low in v1, 6.7). Without pull-ups every CMOS input on those nets then floats: RAM, ROM, the 74HCT138 and 74HCT14, and the 74LVC245As to the Pi. No strobe is active, so nothing goes wrong, but floating inputs cost supply current and let decode outputs toggle.
+
+| Net | Pull-up | Part |
+|-----|---------|------|
+| A0-A15, at the 8080A pins | 10 kohm to +5 V | two 9-pin bused SIPs (A0-A7, A8-A15) |
+| System DB0-DB7 (8228 side) | 10 kohm to +5 V | one 9-pin bused SIP, in a socket (Bring-up below) |
+| CPU-side D0-D7 | none: it MUST NOT have a pull-up | |
+
+**Sources.** 8080A and 8228 from reference 3.2, 3.3, 12.6 and 12.7 (MCS-80 UM p.5-15, 5-17 and 5-11 / PDF p.77, 79 and 73). AS6C62256: Alliance datasheet v1.0 (Feb 2007), DC and test-load tables, p.3. AT28C64B DS 8 (p.5) and 12 (p.7). ATF22V10C: Atmel 0735U-PLD-7/10, 4.1 (p.4) and 8 (p.8). TI SCLS005E (SN74HCT374) 5.4 p.5, SCLS069G (SN74HCT125) 5.4 p.5, SCAS218X (SN74LVC245A) 7.3 p.5 and 7.5 p.6. A 10 kohm 2% pull-up passes at most (5.25 - 0.45 V) / 9.8 kohm = 0.49 mA into a low output. Worst case unless marked (est).
+
+**Address bus (A0-A15).**
+- The 8080A sinks 1.9 mA at VOL 0.45 V and sources 150 uA at VOH 3.7 V (reference 3.2).
+- Low: the pull-up's 0.49 mA plus at most about 45 uA of input leakage on the heaviest line (GAL 10, ROM 10, 74LVC245A 10, analyzer 10 (6.12 rule 3), the RAMs and HCT inputs 1 each) is 0.54 mA. That leaves 1.36 mA of the 1.9 mA.
+- High: the pull-up supplies current toward VCC, so it adds to the 150 uA source instead of using it.
+
+**System data bus (DB0-DB7).**
+- Drivers and their guaranteed sink: the 8228 system side 10 mA at 0.45 V (writes); AS6C62256 2 mA at 0.4 V; AT28C64B 2.1 mA at 0.40 V; 74HCT374 (IN latch) and 74HCT125 (DB0) 6 mA at 0.33 V (-40 to 85 °C).
+- Low: the pull-up's 0.49 mA, the 8228 DB input's 0.25 mA (IF, "all other inputs", reference 12.7) and the off-state leakage of the idle parts, at most 32 uA (ROM 10, 74LVC245A 10, 74HCT374 and 74HCT125 5 each, each RAM 1), total 0.77 mA. The weakest driver, the SRAM, keeps 1.23 mA of its 2 mA.
+- High: the pull-up only helps. It lifts the 8228's TTL high (VOH 2.4 V at -1 mA) toward VCC, which adds margin against the AS6C62256 VIH of 2.4 V (`HARDWARE_BUILD.md` 6).
+
+**Why not CPU-side D0-D7.**
+- **No pull-up value fits the budget.** On a read the 8228 drives the CPU side against the 8080A's active pull-up: IDL up to 2.0 mA while DBIN is high and the line is above 0.8 V (reference 3.2 note 2, p.5-15). The 8228 guarantees VOL 0.45 V only at IOL 2 mA (reference 12.7). A 10 kohm pull-up adds 0.45 mA at 0.8 V, so a bit going from 1 to 0 under DBIN would need 2.45 mA from a part rated for 2. Any larger resistor still adds current to a budget with zero margin, so the net is excluded instead of given a weaker pull-up.
+- **Nothing there needs it.** Its only CMOS inputs are the GAL's D4 and D6, and the ATF22V10C holds every input and I/O pin with a pin-keeper (0735U 8). The 8228's D inputs are bipolar. The analyzer sits behind 1 kohm (6.12).
+
+**Timing.**
+- **Driven edges.** On a falling edge the driver also sinks the pull-up's current (<= 0.49 mA). That is less than the DC load each part's own A.C. figures are measured with: 8080A about 1.8 mA (2.1 kohm and a diode to +5 V, p.5-17 note 2), 8228 system side 500 ohm to VCC (p.5-11 note 2), AT28C64B 1.8 kohm to 5 V (DS 12), AS6C62256 one TTL load at 2 mA (p.3). The 74HCT374 and 74HCT125 sink 0.77 mA of their 6 mA (est: TI specifies their delays into 50 pF only). Rising edges gain the pull-up's current. tDA, tDD, the 118 ns read budget (6.2) and the 6.10 write timing all stand.
+- **Undriven lines** rise with tau = 10 kohm x C: about 0.75 us on the address bus (<= 75 pF, 6.12 rule 3) and 0.8 us on DB (est, about 80 pF: 8228 15, ROM 12, two RAMs 16, the 374, 125 and 245 about 25, trace 10). From 0.45 V a line crosses 2.0 V after about 0.4 tau and reaches 4.5 V after about 2.2 tau (est). A floated bus therefore reads FFFF or FF within about 2 us.
+- **Slow ramps.** Through the 74LVC245A input threshold that ramp is about 200 ns/V (est), outside the part's 10 ns/V input transition rate (SCAS218X 7.3). That is not new: DB is undriven between bus cycles in normal operation, whenever no memory, write cycle, IN latch or overlay read drives it, and without a pull-up it drifts slower still and can stop at the threshold. The Pi never uses a 245 output then: it reads only while REQ is high, when the address and, on OUT, DB are driven (6.4). On A12-A15 the same ramp (halt, RESET, hold) is also slower than the 74HCT138's 500 ns maximum input transition time (est, 10-90 % is 2.2 tau, about 1.65 us; SCLS171F 5.2). That is harmless: /G2A is /MEMW, inactive then, so every 138 output stays high (6.10), and without the pull-ups those inputs would float and could stop at the threshold, which is worse. The 74HCT14 on A15 is a Schmitt input and has no such limit.
+
+**Consequences.**
+- In halt, RESET and hold the address bus reads FFFF and DB reads FF. Nothing samples them then: no strobe is active, the WAIT set needs /STSTB low and NOT RESET (6.4 rule 1), and port FF is outside the Pi window.
+- An undriven DB drifts to FF. An `IN` from a port nothing drives (70-FD, FE) needs its data on DB about 1 us after the memory released DB in the instruction's M2 (est), so it reads FF in practice. This is informative only. `DEVICE_SPECS.md` 2.4 still says the value is undefined, and software MUST NOT depend on FF.
+- **Bring-up.** The DB SIP and the 2.2 kohm bring-up pull-down (`HARDWARE_BUILD.md` 3, step 2) MUST NOT be fitted together. The pull-down alone holds an undriven DB line at <= 0.55 V (the 8228's 0.25 mA IF into 2.2 kohm). With the 10 kohm pull-up added it sits at about 1.4 V (est), above the 8228's minimum threshold of 0.8 V, so the free-run no longer reads NOPs. The DB SIP is therefore socketed: out for step 2 and for any CPU screened that way, in from step 3 on. The address SIPs stay fitted throughout.
+- **Power.** All 24 lines low draw at most 13 mA from +5 V: 24 x 5.25 V / 9.8 kohm, with the low at 0 V (6.9).
 
 ---
 

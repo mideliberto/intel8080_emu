@@ -63,6 +63,17 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-03: Board Choices Signed Off; Bus Pull-Ups
+**Decision:** Mike signed off on every choice flagged in "`pi8080d --sim`, the RAM Test Build, Board Debug Aids", as built:
+- **RAM build:** at D000, guard top D000, user area 0100-CFFF under it; `IMG_GUARD` on F/M/L in the RAM build only (E and A unguarded); the ` RAM` banner suffix; `rom/monitor_ram.hex` committed beside `.bin`/`.sym`, named by the CLAUDE.md ROM rule; every transcript but `hex` and `search` runs on it.
+- **`--sim`:** `SimBoard` and `Bridge` live in the library (`src/pi/sim.rs`), reversing PI_DAEMON 2's "test code only"; no RESET under `--sim`; a systemd drop-in.
+- **Board:** JP-WE writes F000-FFFF only (no OVL term), through a 74HCT138 (not a GAL pin), with JP-WE in series with a pull-up at ROM /WE; the docs say F000 writes have no effect with JP-WE open (the default); the AT28C64B is programmed with SDP off; HALT LED = WAIT AND /Q AND /I/OR AND /I/OW; the analyzer taps CPU-side D0-D7 through 1 kohm; three headers.
+- **Analyzer:** Mike plans a 32-channel unit (sigrok, >= 24 MS/s, 5 V tolerant), enough for LA-A + LA-B at once (HARDWARE_BUILD 3.1). Its input current still gets checked against ARCHITECTURE 6.12 rule 3 before first attach.
+- **Bus pull-ups:** Mike chose 10 kohm pull-up SIPs on the address and data buses, to hold the lines the 8080A floats in halt, RESET and hold. Built as A0-A15 and the system DB0-DB7 (ARCHITECTURE 6.13). The CPU-side D0-D7 get none: on a read the 8228 is rated for IOL 2 mA, exactly the 8080A's active pull-up (IDL 2.0 mA), so any pull-up there breaks a zero-margin budget, and the GAL pin-keepers already hold its only CMOS inputs. The DB SIP is socketed and never fitted with the 2.2 kohm bring-up pull-down (together they hold an idle line at about 1.4 V, above the 8228's 0.8 V threshold). BUS-RESISTORS in HARDWARE_BUILD 1 is revised. DEVICE_SPECS 2.4 still says an `IN` from an unmapped port is undefined; it gains only an informative note that the pull-ups make it FF in practice.
+
+**Rationale:** Everything flagged was built the way it was meant to be used, and the alternatives were new code or worse tests. The pull-ups end floating CMOS inputs for three SIPs and no chips; every driver keeps at least 1.2 mA of sink margin with them, and each part's own A.C. test load is heavier than 10 kohm (the HCT drivers est), so no timing figure moves.
+**Mantra check:** declined: bus-hold parts, a pull-up on the CPU-side bus at a "safer" value (no value is safe there), and a contract change for unmapped `IN`.
+
 ### 2026-10-03: `pi8080d --sim`, the RAM Test Build, Board Debug Aids
 **Decision:** Mike decided to add four things, and to correct the MONITOR_SPEC 6.17 U cost to the measurement (descriptive, not behavior: about 4,450-5,600 cycles a line).
 - **`pi8080d --sim FILE`** (PI_DAEMON 16): the daemon runs the emulator's 8080 (CPU model, ROM image, the test `Bridge`) on the simulated board instead of GPIO, so the TCP console, the unit, storage, the TIME clock and the trace run on a Pi or any Linux/macOS box before the board exists. Only the `Gpio` implementation differs.
@@ -549,7 +560,7 @@ Console I/O debugging session:
 
 ### Open Decisions
 
-Open: the choices flagged while building `--sim`, the RAM test build and the board debug aids (`TODO.md`, Open Decisions, "2026-10-03 additions"), and whether the halted 8080's floating buses want bus-hold or pulls. The MONITOR_SPEC 6.17 U cost figure was corrected to the measurement 2026-10-03. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon and Phase 7 sets closed 2026-10-03 too. The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
+None open. The choices flagged while building `--sim`, the RAM test build and the board debug aids, and the halted 8080's floating buses (10 kohm pull-ups, ARCHITECTURE 6.13), closed 2026-10-03; see Key Decisions. The MONITOR_SPEC 6.17 U cost figure was corrected to the measurement 2026-10-03. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon and Phase 7 sets closed 2026-10-03 too. The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
 
 ### Blocked/Deferred
 
