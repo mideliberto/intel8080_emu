@@ -8,7 +8,8 @@
 - Phase 4 complete (24-bit storage, 16MB). Phase 5 next: Intel HEX loader, parsed in ROM by the 8080.
 - 204 tests passing (14 unit + 180 CPU + 10 monitor integration)
 - Monitor ROM v0.3, 14 commands, ~1.6KB ROM headroom
-- Open decisions and live task list: `TODO.md`
+- Spec solidified 2026-10-02: three normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC). No open decisions.
+- Live task list: `TODO.md`
 
 ## Roles
 - **Claude writes the implementation code** (Rust and ROM), including multi-agent ultracode runs. Mike owns architecture, decisions, and review.
@@ -32,8 +33,10 @@
 ## Key Files
 - `docs/COLLABORATION_LOG.md` - history, decisions, lessons. Read Current State first.
 - `docs/IMPLEMENTATION_ROADMAP.md` - phases and success criteria
-- `docs/DEVICE_SPECS.md` - I/O port protocols
-- `docs/ARCHITECTURE.md` - memory map, boot sequence, ROM overlay
+- `docs/ARCHITECTURE.md` - spec: memory map, boot, overlay, CPU contract, hardware interface, host-side conveniences
+- `docs/DEVICE_SPECS.md` - spec: every I/O port protocol
+- `docs/MONITOR_SPEC.md` - spec: monitor commands, line input, messages, HEX loader
+- `docs/QUICK_REFERENCE.md` - cheat sheet pointing at the three specs
 - `docs/reference/` - 8080 instruction set and I/O references
 - `rom/monitor.asm` - monitor ROM source
 

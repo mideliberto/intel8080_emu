@@ -1,17 +1,16 @@
 # TODO
 
 ## Open Decisions (Mike decides before anyone codes against them)
-- [ ] `Q` collision. Q = ask Claude (decided 2026-10-02), but QUICK_REFERENCE's old future list had Q = Quit emulator. Quitting is emulator-only; it probably belongs with the Phase 10 emulator-command prefix, not the ROM.
-- [ ] Mount filename buffer resync. The buffer is cleared only by Mount (`src/io/devices/storage_mount.rs:103`); NUL is ignored (`:93`). An aborted name send leaks into the next mount: `JUNK`, unmount, `A.BIN`, mount mounts `JUNKA.BIN`. Option: NUL clears the buffer and the ROM sends NUL first (protocol change).
-- [ ] Filename case. The ROM passes names verbatim, so `test.bin` and `TEST.BIN` are the same file on macOS and different files on a Pi's ext4. Option: the device uppercases before open.
-- [ ] Phase 10 emulator-command prefix (`:` now belongs to Intel HEX). Not needed until Phase 10.
-- [ ] Hardware build: console chip and flow control (6850 + RTS/CTS vs Pi-side FIFO console). Phase 5 assumes sender pacing. Note: the ROM does no UART init at boot (`rom/monitor.asm:79-102`); a 6850 or 8251 needs one.
+- None. All closed 2026-10-02; see COLLABORATION_LOG Key Decisions. The specs are docs/ARCHITECTURE.md, docs/DEVICE_SPECS.md, docs/MONITOR_SPEC.md.
 
 ## Current
 - [x] Apply alignment package (archived: docs/archive/HANDOFF_2026-10.md)
 - [x] Untrack build artifacts: `git rm --cached rom/monitor.lst rom/monitor.p`
 - [x] Spec/state review (2026-10-02). Decisions in COLLABORATION_LOG Key Decisions.
 - [x] Rebuild stale `rom/monitor.bin` (it predated `X -` unmount)
+- [x] Close open decisions; solidify spec into 3 normative docs (2026-10-02)
+- [ ] Code review: emulator + ROM against the new specs
+- [ ] Hardware-alignment pass: verify ARCHITECTURE hardware section (WAIT-set timing vs 8080A/8224/8228 datasheets, GPIO count, IN latch)
 
 ## Next (Phase 5 - Intel HEX Loader), build order
 Budget: ~250 bytes of the 1585 free (a working sketch came in at 176).
@@ -25,12 +24,25 @@ Budget: ~250 bytes of the 1585 free (a working sketch came in at 176).
 8. [ ] Integration tests: multi-record paste with CRLF, bad checksum mid-stream, 34-byte record OK, 35-byte rejected, page-00 and EFxx rejected, types 02-05 rejected.
 9. [ ] Rebuild `monitor.bin`, record size, update docs.
 
-## Decided, to implement (small; not Phase 5)
-- [ ] G pushes a WARM entry (`WARM: LXI SP,STACK_TOP`, falls into MAIN_LOOP) before PCHL, so programs exit with RET (`rom/monitor.asm:876-885`)
-- [ ] Delete `src/io/devices/timer.rs` and its hooks in `src/cpu.rs` (ports 0x30-0x32, `handle_interrupt`, tick at ~:947)
+## Decided, to implement (from the specs; small, not Phase 5)
+Emulator:
+- [ ] Delete `src/io/devices/timer.rs` and its port hooks in `src/cpu.rs` (ports 0x30-0x32, tick at ~:947). Keep a CPU interrupt input `interrupt(rst)` with 8080A acceptance (EI delay, HLT wake, 11 cycles); tests only.
+- [ ] HLT: `execute_one` fetches nothing while halted; `run()` returns on halt; main.rs prints `HLT at PC=xxxx`, restores the terminal, exits; `perform_hlt` stops printing.
+- [ ] Host input pump + Ctrl-C quit in the emulator run loop (today input is read only inside IN 02, `console.rs:43-53`); host key map per ARCHITECTURE (`console.rs:81-84`)
+- [ ] Console output 8-bit transparent: `console.rs:68` prints `value as char`, so bytes 80-FF go out as 2 UTF-8 bytes
+- [ ] `IoBus::map_port` panics on 0xFE/0xFF (CPU-owned ports) instead of silently never being called
 - [ ] Port 0xFE: any write disables overlay; drop 0xFF cold reset (`src/cpu.rs:758-769`). Overlay writes go through to RAM (`src/cpu.rs:212`)
-- [ ] Storage: names >12 chars return 0x02 (`storage_mount.rs:95` truncates, so the `:49` check never fires); a failed mount unmounts the previous file; a past-EOF read still advances the address (`storage.rs:72-82`)
-- [ ] ROM: drop the dead "File not found" path (`rom/monitor.asm:1274-1277`, MSG_NOT_FOUND)
+- [ ] Storage: every IN/OUT 0B advances the address (mounted or not; `storage.rs:72-96`); any host I/O error unmounts; flush/unmount fsync; host file > 16 MB fails mount with 01; storage dir created at startup (else mount -> 01); not-mounted status 82
+- [ ] Mount: names > 12 chars -> 02 (`storage_mount.rs:95` truncates); failed mount unmounts previous; every OUT 0E (any value) clears the name buffer; uppercase before validate/open; 0F reads 01 at power-on
+ROM:
+- [ ] G pushes WARM (`WARM: LXI SP,STACK_TOP` before MAIN_LOOP) before PCHL (`rom/monitor.asm:876-885`)
+- [ ] CONOUT = `OUT 00h / RET` (drop the TX poll, `rom/monitor.asm:175-183`)
+- [ ] X: `OUT 0Eh,03h` before the name; 02 -> "Invalid filename", other nonzero -> "Mount failed"; drop "File not found" (`:1274-1277`, `:1496`)
+- [ ] L/W: read 0C after transfer (W after flush); bit 0 = 0 -> "Storage error"
+- [ ] Argument strictness per MONITOR_SPEC (Invalid range for end<start and count 0 incl. M; digit limits; byte args > FF; G garbage)
+- [ ] M copies backward when dst > src (memmove)
+- [ ] Delete unused `BUFFER_PTR` equate; add `ROM_END` label so `make size` reports used bytes
+- [ ] `monitor.asm` header (:1-12): fix the stale memory map (says 0000-00FF workspace, 0100-EFFF user) and state the routine-contract convention ("a register not listed as output or trashed is preserved")
 
 ## Review findings (2026-10-02)
 Every item was reproduced by a scratch test or confirmed by tracing the asm.
@@ -48,7 +60,6 @@ Every item was reproduced by a scratch test or confirmed by tracing the asm.
 
 ### Devices
 - [ ] `..` and `.` pass validation, mount fails with 0x01 instead of 0x02 (`storage_mount.rs:55`). Repro: name `..`, mount: status 01.
-- [ ] 8.3 not enforced (`storage_mount.rs:49-58`). Repro: `A.B.C` mounts. Docs now say "convention"; listed in case you want it enforced.
 - [ ] Flush and write errors are swallowed (`storage.rs:88`, flush has no fsync). W prints "Written" regardless.
 - [ ] `map_port` silently ineffective for 0x30-0x32, 0xFE and 0xFF: the CPU intercepts them first (`cpu.rs:758-782`). 0x30-0x32 goes away with the timer deletion.
 - [ ] Ctrl-C can't stop a program that doesn't poll the console (`console.rs:43-53, 76-80`). Repro: `G` into `JMP $`, then ^C: the process keeps running.
@@ -77,10 +88,11 @@ Every item was reproduced by a scratch test or confirmed by tracing the asm.
 - [ ] R command - needs register capture on return (Phase 10)
 
 ## Someday
-- [ ] Phase 6: Time (mailbox `TIME` + T)
+- [ ] Phase 6: Service Mailbox device (0x10-0x13), ROM mailbox client, `TIME` + T
 - [ ] Phase 7: Assembler/disassembler (mailbox `ASM`/`DIS`)
 - [ ] Phase 8: HTTP GET (mailbox `GET`)
 - [ ] Phase 9: Claude (mailbox `ASK`, Q command)
 - [ ] Phase 10: Debugger (breakpoints, single-step, R)
 - [ ] 8253 timer, TIMER_ISR, RST 7 vector: when something needs a periodic interrupt
-- [ ] Hardware prototype (Pi Zero + real 8080, READY wait-state on the Pi window 0x08-0x6F)
+- [ ] Hardware prototype (Pi + 8080A @ 2 MHz, READY wait-state on Pi window 0x00-0x6F, Pi sees RESET, INT via 8228 RST 7 unused in v1)
+- [ ] Interrupt tick source (Pi GPIO vs 8254) when something needs a periodic interrupt

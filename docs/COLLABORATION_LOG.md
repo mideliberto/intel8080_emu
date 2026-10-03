@@ -63,6 +63,42 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-02: Spec Solidified Into Three Normative Docs
+**Decision:** ARCHITECTURE.md covers memory, boot, overlay, the CPU contract, the hardware interface and host-side conveniences. DEVICE_SPECS.md covers every port protocol. The new MONITOR_SPEC.md covers commands, line input, messages and the HEX loader. QUICK_REFERENCE and README are cheat sheets that link to these. DESIGN_DECISIONS, VISION_UPDATED, CODE_TEMPLATES, CLAUDE_8080_SYSTEM_PROMPT and PROJECT_OVERVIEW moved to docs/archive/. MONITOR_IMPLEMENTATION_STATUS was deleted, replaced by MONITOR_SPEC.
+**Rationale:** One fact, one home. Archived docs restated facts that had become wrong ("RST 7 as breakpoint", a polling CONOUT template, the old memory map).
+**Method:** An ultracode workflow drafted the three docs, critiqued each through three lenses (consistency, hardware, testability and the mantra), revised, ran a completeness critic, then finalized and verified. 33 questions came back and Mike decided all of them.
+
+### 2026-10-02: Timer Hardware Later, Interrupt Pin Now
+**Decision:** v1 hardware has no timer. INT is wired through the 8228's single-level RST 7 and has no source. The emulator deletes the timer device but keeps a correct CPU interrupt input (`interrupt(rst)`: EI delay, HLT wake, 11 cycles), used only by tests. The tick source (Pi GPIO vs 8254) is decided when something needs it. With no source, HLT ends `run()`; the host prints `HLT at PC=xxxx` and exits.
+**Mike's input:** "Will the hardware version have a timer?"
+**Rationale:** Nothing in v1 needs a periodic interrupt. Wall time comes from the Pi, and delays are user busy-loops. But the INT pin is part of being an 8080A, so the emulator models the pin and not a fake device.
+
+### 2026-10-02: The Pi Sees RESET; Reset Means Power-On State
+**Decision:** RESET goes to a Pi GPIO input. The Pi drops any in-flight request without ACK and returns every device to power-on: storage unmounted, name buffer empty, mailbox idle, console FIFO flushed.
+**Rationale:** The hardware critic found the Pi needs RESET anyway. Without it, a late ACK for a pre-reset request releases the first post-reset access with stale data. Full reset makes one rule, needs zero ROM bytes, and stops stale type-ahead from running as commands.
+
+### 2026-10-02: Console Is a Pi FIFO Device
+**Decision:** The Pi is the console at ports 0x00-0x02, behind READY. The Pi window becomes 0x00-0x6F. No UART chip and no ROM UART init. CONOUT is a bare `OUT 00h`. OUT 00 never waits: with no terminal or a full buffer, the byte is discarded. The terminal connects to the Pi (UART, USB gadget or TCP; this is Pi configuration).
+**Supersedes:** 2026-10-02 "HEX Loader Paste Speed Is the Sender's Problem". The Pi buffers, so nothing paces.
+**Rationale:** Fewest parts, no overrun, no flow control. The emulator's unbounded queue already models it exactly.
+
+### 2026-10-02: Storage Errors Unmount; L/W Report Them
+**Decision:** Any host I/O error on a data read (not past EOF), a write or a flush unmounts the file. Flush and unmount fsync. L and W read 0x0C after the transfer and print "Storage error" if bit 0 = 0. Every IN/OUT 0x0B advances the address, mounted or not.
+**Rationale:** SD failure is real on the target. The error reuses an existing status bit, so the protocol gains no new flag.
+
+### 2026-10-02: Mount Hygiene
+**Decision:** Every OUT 0x0E (any value) clears the filename buffer. The device uppercases names before it validates and opens them. X sends `OUT 0Eh,03h` before the name. Status 02 prints "Invalid filename"; any other nonzero status prints "Mount failed".
+**Rationale:** Closes the silent wrong-file create. Zero protocol additions, and the same file on case-insensitive macOS and on a case-sensitive Pi.
+
+### 2026-10-02: Host-Side Quit and Debugger Entry
+**Decision:** Quit is Ctrl-C, handled in the emulator's run loop, and the 8080 never sees it. The Phase 10 debugger is entered with a host hotkey (Ctrl-E) to an emulator prompt. Nothing intercepts the 8080's input stream. Q stays ask-Claude.
+**Rationale:** On hardware, anything typed reaches the ROM. A prefix character would be stolen from the 8080 or would show up as an unknown command.
+
+### 2026-10-02: Strict Arguments
+**Decision:** end<start prints "Invalid range". More than 4 hex digits (6 for 24-bit) is an error. Byte arguments over FF are an error. G with a garbage argument is an error, while bare G defaults to 0100. A count of 0 or a garbage count is an error for L, W and M; an omitted count defaults to 0100. M with dst > src copies backward (memmove). Extra trailing tokens are ignored. CR and LF each end a line.
+**Rationale:** Kills the class of bugs where one typo wipes 64K.
+
+
 ### 2026-10-02: One Service Mailbox for All Pi Services
 **Decision:** HTTP, Claude, time, assembler and disassembler are text commands (`GET`, `ASK`, `TIME`, `ASM`, `DIS`) through one device at ports 0x10-0x13 (command char, control, status, response byte). The per-device register specs are superseded. Large results land in storage files. The device code is Rust behind `IoDevice`, written once: the emulator bus calls it, and on the Pi a GPIO front end calls the same code. Ports 0x08-0x6F are the Pi window.
 **Mike's input:** "Do we need to do HTTP on the emulator itself? Why not do more of that on the Pi?"
@@ -390,7 +426,7 @@ Console I/O debugging session:
 
 ### Open Decisions
 
-Live list in `TODO.md`. Nothing blocks Phase 5. Open: `Q` collision (ask Claude vs. quit emulator), mount filename buffer resync, filename case, Phase 10 prefix, console chip and flow control.
+None. All closed 2026-10-02. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
 
 ### Blocked/Deferred
 
@@ -406,6 +442,13 @@ Live list in `TODO.md`. Nothing blocks Phase 5. Open: `Q` collision (ask Claude 
 ---
 
 ## Recent Sessions
+
+### 2026-10-02 (part 2): Decisions Closed, Spec Solidified
+- Closed all 5 open decisions and the 33 questions the spec workflow raised. The big ones: the Pi FIFO console, the Pi seeing RESET with RESET meaning power-on state, the INT pin kept with the timer deferred, storage errors unmounting and L/W reporting them, strict arguments, and host-side quit and debugger.
+- Two ultracode workflows produced the specs. The first (16 agents) drafted ARCHITECTURE, DEVICE_SPECS and the new MONITOR_SPEC, critiqued them through three lenses, revised them and ran a completeness critic. The second (11 agents) finalized the docs to the decisions, verified them and fixed what it found.
+- Archived 6 non-normative docs and deleted MONITOR_IMPLEMENTATION_STATUS. QUICK_REFERENCE and README are now cheat sheets that link to the specs.
+- What bit us: the spec authors' Q-RESET-PI recommendations disagreed between docs, which a single ID was supposed to prevent. The completeness critic caught it. The clock arithmetic was also off: an 18.432 MHz crystal gives 2.048 MHz, not 2.0, with a ~488 ns T-state.
+- No code changes. Everything the specs require of the code is in TODO.md under "Decided, to implement" and "Review findings".
 
 ### 2026-10-02: Pre-Phase 5 Review
 - Four parallel audits: docs vs. code, CPU core, devices and hardware buildability, ROM/tests/Phase 5. Every finding was reproduced in scratch tests or traced in the asm before being kept.

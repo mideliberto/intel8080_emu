@@ -16,8 +16,8 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Storage device (24-bit, 16MB) | ✅ |
 | Monitor ROM v0.3 (14 commands) | ✅ |
 | 204 tests (14 unit + 180 CPU + 10 integration) | ✅ |
-| HTTP / Network | 🔲 Future |
-| Claude API integration | 🔲 Future |
+| Intel HEX loader (Phase 5) | 🔲 Next |
+| Service Mailbox: time, HTTP, Claude (Phases 6-9) | 🔲 Future |
 
 ## Monitor Commands
 
@@ -38,6 +38,8 @@ X [file | -]          - Mount/unmount storage
 ?                     - Help
 ```
 
+Coming: `:` Intel HEX records pasted at the prompt (Phase 5), then T (time), A/U (assemble/unassemble), N (HTTP GET), Q (ask Claude), R (registers). Full contract for every command, argument and message: [docs/MONITOR_SPEC.md](docs/MONITOR_SPEC.md).
+
 ## Storage System
 
 24-bit linear-addressed storage with 16MB address space. No sectors, no tracks—just bytes.
@@ -53,7 +55,7 @@ Written
 Unmounted
 ```
 
-Storage addresses support up to 6 hex digits (24-bit). The high byte acts as a bank/page selector for organizing data within a single large file.
+Storage addresses take up to 6 hex digits (24-bit). Mounting a missing file creates it. Protocol: [docs/DEVICE_SPECS.md](docs/DEVICE_SPECS.md).
 
 ## Building
 
@@ -79,6 +81,8 @@ Ready.
 > 
 ```
 
+Ctrl-C quits the emulator. Host key mapping: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## ROM Development
 
 The monitor ROM uses the AS macro assembler (Alfred Arnold).
@@ -90,14 +94,7 @@ make
 
 ## ROM Overlay Boot
 
-The emulator implements authentic S-100 style boot behavior:
-
-1. CPU starts at PC=0x0000 on reset
-2. ROM overlay makes 0x0000 mirror ROM at 0xF000
-3. ROM disables overlay via `OUT 0xFE, 0x00`
-4. Low memory becomes RAM
-
-This is how real Altair/IMSAI systems booted. One ROM, hardware bank switching. The same mechanism will work on real hardware with a 74LS74 flip-flop.
+S-100 style boot: RESET starts the CPU at 0x0000 with the ROM at 0xF000 mirrored there for reads. The ROM jumps into F000+, then any `OUT 0xFE` turns the mirror off and low memory becomes RAM. On hardware it is one 74LS74. Detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Project Structure
 
@@ -117,7 +114,7 @@ src/
         ├── storage.rs       # 24-bit linear storage
         ├── storage_mount.rs # File mounting service
         ├── test_console.rs  # Scripted testing
-        ├── timer.rs
+        ├── timer.rs         # Interim timer (deletion pending, TODO.md)
         └── null.rs
 
 rom/
@@ -125,7 +122,23 @@ rom/
 ├── monitor.asm          # Monitor ROM source
 └── monitor.bin          # Compiled ROM (4KB)
 
+examples/
+└── hello.asm            # Example 8080 program
+
+scripts/
+└── zip_source.sh
+
 storage/                 # Mounted storage files
+
+docs/
+├── ARCHITECTURE.md          # Normative: memory map, boot, overlay, CPU, hardware
+├── DEVICE_SPECS.md          # Normative: port protocols, READY
+├── MONITOR_SPEC.md          # Normative: monitor commands, HEX loader
+├── QUICK_REFERENCE.md       # Cheat sheet
+├── IMPLEMENTATION_ROADMAP.md
+├── COLLABORATION_LOG.md
+├── reference/               # 8080 instruction set, I/O references
+└── archive/                 # Superseded docs, kept for history
 
 tests/
 ├── cpu_tests.rs         # 180 CPU instruction tests
@@ -136,12 +149,7 @@ tests/
 
 ## I/O Port Map
 
-| Ports | Device |
-|-------|--------|
-| 0x00-0x02 | Console |
-| 0x08-0x0C | Storage (24-bit address, data, status) |
-| 0x0D-0x0F | Storage mount service |
-| 0xFE-0xFF | System control |
+Ports 0x00-0x6F are the Pi window: console 0x00-0x02, storage 0x08-0x0C, mount 0x0D-0x0F, Service Mailbox 0x10-0x13 (Phase 6). Every access waits on READY until the Pi completes it. 0xFE/0xFF are local overlay control and status. Register-level detail: [docs/DEVICE_SPECS.md](docs/DEVICE_SPECS.md).
 
 ## The End Goal
 
@@ -152,7 +160,7 @@ The same ROM runs on:
 The 8080 doesn't know the difference. It sends bytes to ports, gets bytes back. Behind those ports: file storage, HTTP, Claude API. The coprocessor handles the complexity.
 
 ```
-> A What instructions does the 8080 have?
+> Q What instructions does the 8080 have?
 The 8080 has 256 opcodes covering data transfer, arithmetic,
 logic, branching, stack operations, and I/O...
 ```
@@ -161,13 +169,16 @@ That's the vision. An 8080 that can ask questions.
 
 ## Documentation
 
-Detailed docs live in `docs/`:
-- `PROJECT_OVERVIEW.md` — Quick orientation
-- `ARCHITECTURE.md` — Memory map, boot sequence
-- `DEVICE_SPECS.md` — I/O device protocols
-- `QUICK_REFERENCE.md` — Cheat sheets
-- `IMPLEMENTATION_ROADMAP.md` — Phases and plans
-- `COLLABORATION_LOG.md` — History, decisions, lessons
+Normative specs (code that differs from them is tracked in `TODO.md`):
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Memory map, boot, overlay, CPU contract, hardware interface, host-side keys
+- [`docs/DEVICE_SPECS.md`](docs/DEVICE_SPECS.md) — I/O port protocols, READY contract
+- [`docs/MONITOR_SPEC.md`](docs/MONITOR_SPEC.md) — Monitor commands, line input, HEX loader, `G` return
+
+Working docs:
+- [`docs/QUICK_REFERENCE.md`](docs/QUICK_REFERENCE.md) — Cheat sheet
+- [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) — Phases and plans
+- [`docs/COLLABORATION_LOG.md`](docs/COLLABORATION_LOG.md) — History, decisions, lessons
+- [`TODO.md`](TODO.md) — Task list
 
 ## License
 
