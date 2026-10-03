@@ -28,20 +28,20 @@ Budget: ~250 bytes of the 1585 free (a working sketch came in at 176).
 
 ## Decided, to implement (from the specs; small, not Phase 5)
 Emulator:
-- [ ] Delete `src/io/devices/timer.rs` and its port hooks in `src/cpu.rs` (ports 0x30-0x32, tick at ~:947). Keep a CPU interrupt input `interrupt(rst)` with 8080A acceptance (EI delay, HLT wake, 11 cycles); tests only.
-- [ ] HLT: `execute_one` fetches nothing while halted; `run()` returns on halt; main.rs prints `HLT at PC=xxxx`, restores the terminal, exits; `perform_hlt` stops printing.
-- [ ] Host input pump + Ctrl-C quit in the emulator run loop (today input is read only inside IN 02, `console.rs:43-53`); host key map per ARCHITECTURE (`console.rs:81-84`)
+- [x] Delete `src/io/devices/timer.rs` and its port hooks in `src/cpu.rs` (ports 0x30-0x32, tick at ~:947). Keep a CPU interrupt input `interrupt(rst)` with 8080A acceptance (EI delay, HLT wake, 11 cycles); tests only.
+- [x] HLT: `execute_one` fetches nothing while halted; `run()` returns on halt; main.rs prints `HLT at PC=xxxx`, restores the terminal, exits; `perform_hlt` stops printing.
+- [ ] Host input pump + Ctrl-C quit in the emulator run loop (today input is read only inside IN 02, `console.rs:43-53`); host key map per ARCHITECTURE (`console.rs:81-84`); `run()` returns a quit/halted status (ARCHITECTURE 7.2; today it returns `()`)
 - [ ] Console output 8-bit transparent: `console.rs:68` prints `value as char`, so bytes 80-FF go out as 2 UTF-8 bytes
-- [ ] `IoBus::map_port` panics on 0xFE/0xFF (CPU-owned ports) instead of silently never being called
-- [ ] Power-on: `reset()` = RESET pin only (PC, INTE, halted, overlay, pending interrupt); `new()` calls `reset()`; no zeroed registers or preset SP; the harness fills RAM with junk (ARCHITECTURE 3.1). Harness side done: RAM and A-L = 76, flags = D7, SP = 0000 at boot
+- [x] `IoBus::map_port` panics on 0xFE/0xFF (CPU-owned ports) instead of silently never being called
+- [x] Power-on: `reset()` = RESET pin only (PC, INTE, halted, overlay, pending interrupt); `new()` calls `reset()`; no zeroed registers or preset SP; the harness fills RAM with junk (ARCHITECTURE 3.1). Harness side done: RAM and A-L = 76, flags = D7, SP = 0000 at boot
 - [ ] Merge Storage + StorageMount into one device serving 08-0F (drop the `Rc<RefCell<Storage>>`)
 - [ ] One Console (input VecDeque + output buffer, no crossterm); host polling, key map and Ctrl-C/E in main.rs; delete `test_console.rs`
-- [ ] `scripts/fetch_exercisers.sh` (pinned SHA-256) + `#[ignore]` `tests/exerciser.rs`. Write the CP/M shim in 8080 assembly, not Rust hooks, so the same bytes run on hardware: 0005 JMP to a print routine at <= EEFF; 0000 JMP to WARM (not HLT, which hangs hardware with no INT source). Goal: 8080EXM all PASS; the exercisers are also the chip-acceptance test
+- [x] `scripts/fetch_exercisers.sh` (pinned SHA-256) + `#[ignore]` `tests/exerciser.rs`. Write the CP/M shim in 8080 assembly, not Rust hooks, so the same bytes run on hardware: 0005 JMP to a print routine at <= EEFF; 0000 JMP to WARM (not HLT, which hangs hardware with no INT source). Goal: 8080EXM all PASS; the exercisers are also the chip-acceptance test. Done 2026-10-03: all four pass. The shim's 0000 jumps to F000 (cold start) until the ROM has WARM
 - [ ] Console: 2 MiB output cap, discard on full; clear output on reset
 - [ ] Device reset = rebuild the IoBus and devices from config (no `reset()` on IoDevice, no Send). Storage `Drop` does `File::sync_all`; flush uses `sync_all` (`File::flush` is a no-op, `storage.rs:61/100`)
 - [ ] One port-mapping function shared by main.rs and a future Pi daemon binary (one crate, two binaries)
 - [x] Strict monitor harness stores transcripts as data files, so the same files drive hardware conformance over the Pi TCP console (`tests/transcripts/*.txt`, format in the `tests/monitor_tests.rs` header)
-- [ ] Port 0xFE: any write disables overlay; drop 0xFF cold reset (`src/cpu.rs:758-769`). Overlay writes go through to RAM (`src/cpu.rs:212`)
+- [x] Port 0xFE: any write disables overlay; drop 0xFF cold reset (`src/cpu.rs:758-769`). Overlay writes go through to RAM (`src/cpu.rs:212`)
 - [ ] Storage: every IN/OUT 0B advances the address (mounted or not; `storage.rs:72-96`); any host I/O error unmounts; flush/unmount fsync; host file > 16 MB fails mount with 01. Already true, needs tests only: power-on 0C=82, storage dir created at startup (`main.rs:35`)
 - [ ] Mount: names > 12 chars -> 02 (`storage_mount.rs:95` truncates); failed mount unmounts previous; every OUT 0E (any value) clears the name buffer; uppercase before validate/open; 0F reads 01 at power-on
 ROM:
@@ -58,20 +58,20 @@ ROM:
 Every item was reproduced by a scratch test or confirmed by tracing the asm.
 
 ### CPU (`src/cpu.rs`)
-- [ ] AC inverted on SUB/SBB/CMP/SUI/SBI/CPI (:349, :356, :374, :613, :643, :750). Repro: `MVI A,10h; MVI B,01h; SUB B` sets AC=1, expected 0. `tests/cpu_tests.rs:317` and `:2853` assert the wrong value.
-- [ ] DCR AC inverted (:422). Repro: `MVI B,10h; DCR B` sets AC=1, expected 0. `tests/cpu_tests.rs:421` asserts the wrong value.
-- [ ] ANA/ANI always clear AC (:362, :622 via `update_flags_logical` :272). Repro: `MVI A,08h; MVI B,00h; ANA B` gives AC=0, expected 1 (8080: AC = bit 3 of A|operand).
-- [ ] DAA always clears AC (:712). Repro: `MVI A,0Ah; DAA` gives A=10h (correct) and AC=0, expected 1.
-- [ ] POP PSW keeps flag bits 3 and 5 (`set_psw` :89). Repro: FFh FFh on the stack, `POP PSW; PUSH PSW` pushes flags FFh, expected D7h. `tests/cpu_tests.rs:2605` is vacuous: it writes 00h at the wrong SP.
-- [ ] Undocumented aliases panic (:944). Repro: `CB 05 00` panics "Unknown opcode", expected JMP. Same for D9 (RET) and DD/ED/FD (CALL).
-- [ ] EI has no one-instruction delay (:805, interrupt check at the top of `execute_one`). Repro: pending interrupt, `EI; MVI A,1` is taken before MVI runs. Breaks `EI; RET` ISR epilogues.
-- [ ] HLT is terminal (`run` :284, `handle_interrupt` :290). An interrupt never clears `halted`; `execute_one` keeps executing past HLT. Repro: `76 3E 01 76`, execute_one x2 gives A=01, expected 00.
-- [ ] Interrupt acknowledge adds 0 cycles (`handle_interrupt` :290). Expected 11 for RST.
+- [x] AC inverted on SUB/SBB/CMP/SUI/SBI/CPI (:349, :356, :374, :613, :643, :750). Repro: `MVI A,10h; MVI B,01h; SUB B` sets AC=1, expected 0. `tests/cpu_tests.rs:317` and `:2853` assert the wrong value.
+- [x] DCR AC inverted (:422). Repro: `MVI B,10h; DCR B` sets AC=1, expected 0. `tests/cpu_tests.rs:421` asserts the wrong value.
+- [x] ANA/ANI always clear AC (:362, :622 via `update_flags_logical` :272). Repro: `MVI A,08h; MVI B,00h; ANA B` gives AC=0, expected 1 (8080: AC = bit 3 of A|operand).
+- [x] DAA always clears AC (:712). Repro: `MVI A,0Ah; DAA` gives A=10h (correct) and AC=0, expected 1.
+- [x] POP PSW keeps flag bits 3 and 5 (`set_psw` :89). Repro: FFh FFh on the stack, `POP PSW; PUSH PSW` pushes flags FFh, expected D7h. `tests/cpu_tests.rs:2605` is vacuous: it writes 00h at the wrong SP.
+- [x] Undocumented aliases panic (:944). Repro: `CB 05 00` panics "Unknown opcode", expected JMP. Same for D9 (RET) and DD/ED/FD (CALL).
+- [x] EI has no one-instruction delay (:805, interrupt check at the top of `execute_one`). Repro: pending interrupt, `EI; MVI A,1` is taken before MVI runs. Breaks `EI; RET` ISR epilogues.
+- [x] HLT is terminal (`run` :284, `handle_interrupt` :290). An interrupt never clears `halted`; `execute_one` keeps executing past HLT. Repro: `76 3E 01 76`, execute_one x2 gives A=01, expected 00.
+- [x] Interrupt acknowledge adds 0 cycles (`handle_interrupt` :290). Expected 11 for RST.
 
 ### Devices
 - [ ] `..` and `.` pass validation, mount fails with 0x01 instead of 0x02 (`storage_mount.rs:55`). Repro: name `..`, mount: status 01.
 - [ ] Flush and write errors are swallowed (`storage.rs:88`, flush has no fsync). W prints "Written" regardless.
-- [ ] `map_port` silently ineffective for 0x30-0x32, 0xFE and 0xFF: the CPU intercepts them first (`cpu.rs:758-782`). 0x30-0x32 goes away with the timer deletion.
+- [x] `map_port` silently ineffective for 0x30-0x32, 0xFE and 0xFF: the CPU intercepts them first (`cpu.rs:758-782`). 0x30-0x32 goes away with the timer deletion.
 - [ ] Ctrl-C can't stop a program that doesn't poll the console (`console.rs:43-53, 76-80`). Repro: `G` into `JMP $`, then ^C: the process keeps running.
 - [ ] Control keys mangled (`console.rs:81-84`). Repro: Ctrl-A arrives as 0x61, Ctrl-S as 0x73; Esc and Tab are dropped.
 
@@ -92,7 +92,7 @@ Every item was reproduced by a scratch test or confirmed by tracing the asm.
 ### Test gaps
 - [x] Vacuous: `test_search_finds_pattern` (`tests/monitor_tests.rs:85`) matches the echoed `F 0500` line; `test_io_read_status` (:107) matches "02" in the banner date; `test_compare_identical` (:95) only counts prompts.
 - [x] No monitor test maps storage, so L/W/X in the ROM are untested. This is how the stale bin slipped through.
-- [ ] Untested: interrupts (RST entry, EI delay, HLT wake, DI blocking), with the interrupt rework. Done 2026-10-02: cycle counts (all 244 documented opcodes), the overlay at CPU level (reads, IN FF, OUT FE 00), the E command (one-digit entries), every error path that is correct today, range edges. Still open, each with its fix: end < start, FFFF wrap, two-digit E entries, overlay write-through.
+- [ ] Untested: interrupts (RST entry, EI delay, HLT wake, DI blocking), with the interrupt rework. Done 2026-10-03: interrupts and overlay write-through. Done 2026-10-02: cycle counts (all 244 documented opcodes), the overlay at CPU level (reads, IN FF, OUT FE 00), the E command (one-digit entries), every error path that is correct today, range edges. Still open, each with its fix: end < start, FFFF wrap, two-digit E entries.
 
 ## Code Review (2026-10-02)
 Method: a 16-agent review workflow (CPU first, then ROM and devices) with every finding adversarially verified; real `cargo-mutants`; the four standard 8080 exercisers run under a CP/M shim. Only new findings are listed here; the items above still stand.
@@ -112,13 +112,13 @@ Method: a 16-agent review workflow (CPU first, then ROM and devices) with every 
 - [x] Monitor tests: `test_dump_rom` (`:42-50`) passes with wrong line length and format, and its "31" check tests ROM layout. `test_move_command`/`test_hex_math` ignore boundaries and format. C, S and I can each be undispatched with the suite green.
 - [x] Storage mount tests never check which file opened: ignoring `base_path` passes and writes NEW.BIN/TEST.BIN into the crate root (`storage_mount.rs:60` vs tests `:128-164`). Device protocols: 16 of 18 port-level mutants survive. Write port-level tests with no private-field access. Done 2026-10-02 (`tests/device_tests.rs`): cargo-mutants on storage + mount 74/80; the misses are flush (unobservable), `|` vs `^` on masked bytes (equivalent), and the 12-char truncation (tracked bug).
 - [x] `tests/common/mod.rs` is dead, a byte-identical copy of `cpu_tests.rs:1-33`.
-- [ ] Wanted: a table-driven reference-model flag test, a 256-opcode cycle/length table test, and an exerciser test (see Open Decisions). The scratch prototypes exist and run in under 1 s. Done 2026-10-02: the reference model (exhaustive ALU, INR/DCR, DAA, DAD, rotates; AC masked for the tracked AC family until its fix) and the cycle/length table for the 244 documented opcodes. Left: the 12 aliases (with the alias fix) and the exerciser.
+- [x] Wanted: a table-driven reference-model flag test, a 256-opcode cycle/length table test, and an exerciser test (see Open Decisions). The scratch prototypes exist and run in under 1 s. Done 2026-10-02: the reference model (exhaustive ALU, INR/DCR, DAA, DAD, rotates; AC masked for the tracked AC family until its fix) and the cycle/length table for the 244 documented opcodes. Done 2026-10-03: the aliases (all 256 opcodes in the table) and `tests/exerciser.rs` (all four pass).
 
 ### CPU (`src/cpu.rs`)
 - [x] Untested and mutant-proven: DAD never clearing CY (`:455`), ADC/ACI AC carry-in (`:343, :740`), the CY boundaries on ADC/ADI/SBB/SUI/SBI/DAD, S after logical ops (`:276`), and ORI (`test_ori` uses F0|0F, where OR = XOR).
-- [ ] Interrupt acknowledge is a hand-written CALL 0038 fused with the vector's first instruction in one step (`:290-303, :826-830`). Spec: acknowledge executes `RST n` as its own 11-cycle step. Use `perform_rst`.
-- [ ] Pattern: the ALU is implemented twice. 8 immediate functions (`:601-647, :736-754`) duplicate `perform_alu` (`:328-385`), which is why the AC bug has 6 copies. Use one `alu(op, v)` for 10AAASSS and 11AAA110. Also: three SZP flag helpers that are the same code, dead DAA carry re-set, and the push/pop sequence copied 8 times. A scratch refactor came out at +71/-455 lines with tests green.
-- [ ] Dead code: `disassemble_at` (decodes 19 of 256 opcodes), `trace`, `debug_state` (`:958-1080`); about 85% of `registers.rs` (`FLAG_BIT_3`/`FLAG_BIT_5` are constants equal to 0); the `Memory` trait with one impl forcing `&mut self` reads (`memory.rs`). Stale edit-marker comments.
+- [x] Interrupt acknowledge is a hand-written CALL 0038 fused with the vector's first instruction in one step (`:290-303, :826-830`). Spec: acknowledge executes `RST n` as its own 11-cycle step. Use `perform_rst`.
+- [x] Pattern: the ALU is implemented twice. 8 immediate functions (`:601-647, :736-754`) duplicate `perform_alu` (`:328-385`), which is why the AC bug has 6 copies. Use one `alu(op, v)` for 10AAASSS and 11AAA110. Also: three SZP flag helpers that are the same code, dead DAA carry re-set, and the push/pop sequence copied 8 times. A scratch refactor came out at +71/-455 lines with tests green.
+- [x] Dead code: `disassemble_at` (decodes 19 of 256 opcodes), `trace`, `debug_state` (`:958-1080`); about 85% of `registers.rs` (`FLAG_BIT_3`/`FLAG_BIT_5` are constants equal to 0); the `Memory` trait with one impl forcing `&mut self` reads (`memory.rs`). Stale edit-marker comments.
 
 ### ROM (`rom/monitor.asm`)
 - [ ] S: an invalid pattern token ends the pattern instead of erroring (`:1057-1061`). `S 0200 0210 AA ZZ` searches for AA. Strict parsing alone doesn't fix it.

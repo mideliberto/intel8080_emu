@@ -239,3 +239,15 @@ fn unassigned_port_reads_ff() {
     bus.write(0x05, 0x12);
     assert_eq!(bus.read(0x05), 0xFF);
 }
+
+#[test]
+#[should_panic(expected = "port FE belongs to the CPU")]
+fn map_port_rejects_fe() {
+    IoBus::new().map_port(0xFE, Rc::new(RefCell::new(Storage::new())));
+}
+
+#[test]
+#[should_panic(expected = "port FF belongs to the CPU")]
+fn map_port_rejects_ff() {
+    IoBus::new().map_port(0xFF, Rc::new(RefCell::new(Storage::new())));
+}

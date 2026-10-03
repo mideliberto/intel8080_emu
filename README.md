@@ -10,12 +10,12 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 
 | Component | Status |
 |-----------|--------|
-| CPU core (documented opcodes + undocumented NOPs, flags, stack, I/O; known bugs in TODO.md Review findings) | ✅ |
+| CPU core (all 256 opcodes, 8080A flags, interrupt input, HLT; passes TST8080, 8080PRE, CPUTEST, 8080EXM) | ✅ |
 | Memory subsystem with ROM overlay | ✅ |
 | Console device | ✅ |
 | Storage device (24-bit, 16MB) | ✅ |
 | Monitor ROM v0.3 (14 commands) | ✅ |
-| 165 tests (8 unit + 123 CPU + 18 device + 16 monitor) | ✅ |
+| 173 tests (8 unit + 129 CPU + 20 device + 16 monitor), plus 4 exercisers (`#[ignore]`) | ✅ |
 | Intel HEX loader (Phase 5) | 🔲 Next |
 | Service Mailbox: time, HTTP, Claude (Phases 6-9) | 🔲 Future |
 
@@ -62,6 +62,10 @@ Storage addresses take up to 6 hex digits (24-bit). Mounting a missing file crea
 ```bash
 cargo build
 cargo test
+
+# CPU exercisers (8080EXM takes about 20 s)
+scripts/fetch_exercisers.sh
+cargo test --release --test exerciser -- --ignored --nocapture
 ```
 
 ## Running
@@ -103,7 +107,6 @@ src/
 ├── main.rs              # Entry point
 ├── lib.rs               # Library exports
 ├── cpu.rs               # 8080 CPU emulation
-├── memory.rs            # Memory trait
 ├── registers.rs         # Register enums, flags
 └── io/
     ├── mod.rs
@@ -114,7 +117,6 @@ src/
         ├── storage.rs       # 24-bit linear storage
         ├── storage_mount.rs # File mounting service
         ├── test_console.rs  # Scripted testing
-        ├── timer.rs         # Interim timer (deletion pending, TODO.md)
         └── null.rs
 
 rom/
@@ -126,6 +128,7 @@ examples/
 └── hello.asm            # Example 8080 program
 
 scripts/
+├── fetch_exercisers.sh  # Downloads the exercisers to tests/data/exercisers (pinned SHA-256)
 └── zip_source.sh
 
 storage/                 # Mounted storage files
@@ -145,6 +148,7 @@ docs/
 tests/
 ├── cpu_tests.rs         # CPU: reference-model flags, opcode cycle/length table, branches, wrap
 ├── device_tests.rs      # Storage and mount at port level
+├── exerciser.rs         # TST8080, 8080PRE, CPUTEST, 8080EXM under a CP/M shim (#[ignore])
 ├── monitor_tests.rs     # Strict transcript harness: junk RAM, exact output to each prompt
 └── transcripts/         # Monitor transcripts (data; also meant for hardware over the Pi console)
 ```

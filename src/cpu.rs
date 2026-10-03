@@ -1,8 +1,5 @@
 // cpu.rs - Intel 8080 CPU emulator core
-use crate::memory::{Memory, FlatMemory};
 use crate::io::IoBus;
-use crate::io::devices::timer::Timer;
-use crate::io::IoDevice;
 use std::io;
 use std::path::Path;
 
@@ -21,82 +18,76 @@ pub struct Intel8080 {
     pub flags: u8,
     pub sp: u16,
     pub pc: u16,
-    
+
     // Memory and state
-    memory: Box<dyn Memory>,
+    ram: Vec<u8>,
     rom: Vec<u8>,                       // 4KB ROM at 0xF000
     pub rom_overlay_enabled: bool,      // When true, ROM visible at 0x0000 too
-    io_bus: IoBus, 
-    pub timer: Timer,
+    io_bus: IoBus,
 
     pub halted: bool,
-    pub interrupts_enabled: bool,
+    pub interrupts_enabled: bool,     // INTE
+    ei_delay: bool,                   // EI ran last step: no acceptance this step
+    pending_interrupt: Option<u8>,    // RST n latched by interrupt(n)
     pub cycles: u64,
 }
 
 impl Intel8080 {
+    /// Power-on. Registers, SP and RAM are undefined on a real 8080 (ARCHITECTURE 3.1);
+    /// here they start at 0, and everything RESET defines comes from reset().
     pub fn new() -> Self {
-        Intel8080 {
+        let mut cpu = Intel8080 {
             a: 0, b: 0, c: 0, d: 0, e: 0, h: 0, l: 0,
             flags: FLAG_BIT_1,
-            sp: 0xF000,
-            pc: 0x0000,             // 8080 starts at 0x0000 on reset
-            memory: Box::new(FlatMemory::new()),
+            sp: 0x0000,
+            pc: 0x0000,
+            ram: vec![0; 0x10000],
             rom: Vec::new(),
-            rom_overlay_enabled: false, // OFF by default, reset() enables it
+            rom_overlay_enabled: true,
             io_bus: IoBus::new(),
-            timer: Timer::new(),
             halted: false,
             interrupts_enabled: false,
+            ei_delay: false,
+            pending_interrupt: None,
             cycles: 0,
-        }
+        };
+        cpu.reset();
+        cpu
     }
-    
+
     pub fn io_bus_mut(&mut self) -> &mut IoBus {
         &mut self.io_bus
     }
+
     // ============================================
-    // LAYER 1: Direct register access
+    // REGISTERS
     // ============================================
-    
-    #[inline]
+
     pub fn get_bc(&self) -> u16 { ((self.b as u16) << 8) | (self.c as u16) }
-    #[inline]
-    pub fn set_bc(&mut self, val: u16) { 
-        self.b = (val >> 8) as u8; 
-        self.c = val as u8; 
+    pub fn set_bc(&mut self, val: u16) {
+        self.b = (val >> 8) as u8;
+        self.c = val as u8;
     }
-    
-    #[inline]
+
     pub fn get_de(&self) -> u16 { ((self.d as u16) << 8) | (self.e as u16) }
-    #[inline]
-    pub fn set_de(&mut self, val: u16) { 
-        self.d = (val >> 8) as u8; 
-        self.e = val as u8; 
+    pub fn set_de(&mut self, val: u16) {
+        self.d = (val >> 8) as u8;
+        self.e = val as u8;
     }
-    
-    #[inline]
+
     pub fn get_hl(&self) -> u16 { ((self.h as u16) << 8) | (self.l as u16) }
-    #[inline]
-    pub fn set_hl(&mut self, val: u16) { 
-        self.h = (val >> 8) as u8; 
-        self.l = val as u8; 
+    pub fn set_hl(&mut self, val: u16) {
+        self.h = (val >> 8) as u8;
+        self.l = val as u8;
     }
-    
-    #[inline]
+
     pub fn get_psw(&self) -> u16 { ((self.a as u16) << 8) | (self.flags as u16) }
-    #[inline]
-    pub fn set_psw(&mut self, val: u16) { 
-        self.a = (val >> 8) as u8; 
-        self.flags = (val as u8) | FLAG_BIT_1;
+    pub fn set_psw(&mut self, val: u16) {
+        self.a = (val >> 8) as u8;
+        self.flags = (val as u8 & 0xD5) | FLAG_BIT_1;  // bits 3 and 5 read as 0
     }
-    
-    // ============================================
-    // LAYER 2: Enum-based access
-    // ============================================
-    
-    #[inline]
-    pub fn get_reg(&mut self, reg: Register) -> u8 {
+
+    fn get_reg(&self, reg: Register) -> u8 {
         match reg {
             Register::A => self.a,
             Register::B => self.b,
@@ -105,12 +96,11 @@ impl Intel8080 {
             Register::E => self.e,
             Register::H => self.h,
             Register::L => self.l,
-            Register::M => self.read_byte(self.get_hl())    //memory[self.get_hl() as usize],
+            Register::M => self.read_byte(self.get_hl()),
         }
     }
-    
-    #[inline]
-    pub fn set_reg(&mut self, reg: Register, value: u8) {
+
+    fn set_reg(&mut self, reg: Register, value: u8) {
         match reg {
             Register::A => self.a = value,
             Register::B => self.b = value,
@@ -119,12 +109,11 @@ impl Intel8080 {
             Register::E => self.e = value,
             Register::H => self.h = value,
             Register::L => self.l = value,
-            Register::M => self.write_byte(self.get_hl() , value),//memory[self.get_hl() as usize] = val,
+            Register::M => self.write_byte(self.get_hl(), value),
         }
     }
-    
-    #[inline]
-    pub fn get_pair(&self, pair: RegisterPair) -> u16 {
+
+    fn get_pair(&self, pair: RegisterPair) -> u16 {
         match pair {
             RegisterPair::BC => self.get_bc(),
             RegisterPair::DE => self.get_de(),
@@ -132,9 +121,8 @@ impl Intel8080 {
             RegisterPair::SP => self.sp,
         }
     }
-    
-    #[inline]
-    pub fn set_pair(&mut self, pair: RegisterPair, val: u16) {
+
+    fn set_pair(&mut self, pair: RegisterPair, val: u16) {
         match pair {
             RegisterPair::BC => self.set_bc(val),
             RegisterPair::DE => self.set_de(val),
@@ -142,9 +130,8 @@ impl Intel8080 {
             RegisterPair::SP => self.sp = val,
         }
     }
-    
-    #[inline]
-    pub fn test_condition(&self, cond: Condition) -> bool {
+
+    fn test_condition(&self, cond: Condition) -> bool {
         match cond {
             Condition::NZ => (self.flags & FLAG_ZERO) == 0,
             Condition::Z  => (self.flags & FLAG_ZERO) != 0,
@@ -156,968 +143,419 @@ impl Intel8080 {
             Condition::M  => (self.flags & FLAG_SIGN) != 0,
         }
     }
-    
-    #[inline]
-    pub fn get_push_pop_pair(&self, pair: PushPopPair) -> u16 {
-        match pair {
-            PushPopPair::BC => self.get_bc(),
-            PushPopPair::DE => self.get_de(),
-            PushPopPair::HL => self.get_hl(),
-            PushPopPair::PSW => self.get_psw(),
-        }
-    }
-    
-    #[inline]
-    pub fn set_push_pop_pair(&mut self, pair: PushPopPair, val: u16) {
-        match pair {
-            PushPopPair::BC => self.set_bc(val),
-            PushPopPair::DE => self.set_de(val),
-            PushPopPair::HL => self.set_hl(val),
-            PushPopPair::PSW => self.set_psw(val),
-        }
-    }
+
     // ============================================
-    // MEMORY HELPERS
+    // MEMORY
     // ============================================
-    
-    #[inline]
-    pub fn read_byte(&mut self, addr: u16) -> u8 {
+
+    pub fn read_byte(&self, addr: u16) -> u8 {
         // Only apply ROM logic if ROM is loaded
         if !self.rom.is_empty() {
             if addr >= 0xF000 {
-                let rom_offset = (addr - 0xF000) as usize;
-                if rom_offset < self.rom.len() {
-                    return self.rom[rom_offset];
-                }
-                return 0xFF;
+                return *self.rom.get((addr - 0xF000) as usize).unwrap_or(&0xFF);
             }
             if addr < 0x1000 && self.rom_overlay_enabled {
-                let rom_offset = addr as usize;
-                if rom_offset < self.rom.len() {
-                    return self.rom[rom_offset];
-                }
-                return 0xFF;
+                return *self.rom.get(addr as usize).unwrap_or(&0xFF);
             }
         }
-        self.memory.read(addr)
+        self.ram[addr as usize]
     }
-    
-    #[inline]
+
     pub fn write_byte(&mut self, addr: u16, value: u8) {
-        // Only apply ROM protection if ROM is loaded
-        if !self.rom.is_empty() {
-            if addr >= 0xF000 {
-                return;  // ROM - ignore writes
-            }
-            if addr < 0x1000 && self.rom_overlay_enabled {
-                return;  // Overlay active - ignore writes
-            }
+        // ROM is selected on reads only: writes under the overlay reach RAM (ARCHITECTURE 4).
+        if !self.rom.is_empty() && addr >= 0xF000 {
+            return;
         }
-        self.memory.write(addr, value)
+        self.ram[addr as usize] = value;
     }
-    #[inline]
-    pub fn fetch_byte(&mut self) -> u8 {
+
+    fn fetch_byte(&mut self) -> u8 {
         let byte = self.read_byte(self.pc);
         self.pc = self.pc.wrapping_add(1);
         byte
     }
-    
-    #[inline]
-    pub fn fetch_word(&mut self) -> u16 {
+
+    fn fetch_word(&mut self) -> u16 {
         let low = self.fetch_byte() as u16;
         let high = self.fetch_byte() as u16;
         (high << 8) | low
     }
-    
-    #[inline]
-    pub fn read_word(&mut self, address: u16) -> u16 {
+
+    pub fn read_word(&self, address: u16) -> u16 {
         let low = self.read_byte(address) as u16;
         let high = self.read_byte(address.wrapping_add(1)) as u16;
         (high << 8) | low
     }
-    
-    #[inline]
+
     pub fn write_word(&mut self, address: u16, value: u16) {
         self.write_byte(address, value as u8);
         self.write_byte(address.wrapping_add(1), (value >> 8) as u8);
     }
-    
-    // ============================================
-    // FLAG HELPERS
-    // ============================================
-    
-        pub fn update_flags(&mut self, result: u8, carry: bool) {
 
-            self.flags = FLAG_BIT_1;
-            
-            if result == 0 { 
-                
-                self.flags |= FLAG_ZERO; 
-            }
-            if result & 0x80 != 0 { self.flags |= FLAG_SIGN; }
-            if result.count_ones() % 2 == 0 { self.flags |= FLAG_PARITY; }
-            if carry { self.flags |= FLAG_CARRY; }
-            
-        }
-            fn update_flags_arithmetic(&mut self, result: u8, carry: bool, aux_carry: bool) {
-            self.flags = FLAG_BIT_1;
-            
-            if result == 0 { self.flags |= FLAG_ZERO; }
-            if result & 0x80 != 0 { self.flags |= FLAG_SIGN; }
-            if result.count_ones() % 2 == 0 { self.flags |= FLAG_PARITY; }
-            if carry { self.flags |= FLAG_CARRY; }
-            if aux_carry { self.flags |= FLAG_AUX_CARRY; }
-        }
+    fn push(&mut self, value: u16) {
+        self.sp = self.sp.wrapping_sub(2);
+        self.write_word(self.sp, value);
+    }
 
-    fn update_flags_logical(&mut self, result: u8) {
+    fn pop(&mut self) -> u16 {
+        let value = self.read_word(self.sp);
+        self.sp = self.sp.wrapping_add(2);
+        value
+    }
+
+    // ============================================
+    // FLAGS
+    // ============================================
+
+    /// Sets every flag: S, Z, P from `result`, CY and AC as given.
+    fn set_flags(&mut self, result: u8, carry: bool, aux_carry: bool) {
         self.flags = FLAG_BIT_1;
-        
         if result == 0 { self.flags |= FLAG_ZERO; }
         if result & 0x80 != 0 { self.flags |= FLAG_SIGN; }
         if result.count_ones() % 2 == 0 { self.flags |= FLAG_PARITY; }
-        // Carry and aux carry are cleared
+        if carry { self.flags |= FLAG_CARRY; }
+        if aux_carry { self.flags |= FLAG_AUX_CARRY; }
     }
+
+    fn set_carry(&mut self, carry: bool) {
+        if carry {
+            self.flags |= FLAG_CARRY;
+        } else {
+            self.flags &= !FLAG_CARRY;
+        }
+    }
+
+    fn carry(&self) -> bool {
+        self.flags & FLAG_CARRY != 0
+    }
+
     // ============================================
-    // MAIN EXECUTION
+    // EXECUTION
     // ============================================
-    
+
+    /// Runs until the CPU halts.
     pub fn run(&mut self) {
         while !self.halted {
             self.execute_one();
         }
     }
-//
-    fn handle_interrupt(&mut self) {
-        // Disable interrupts (8080 does this automatically)
-        self.interrupts_enabled = false;
-        
-        // Push PC onto stack
-        self.sp = self.sp.wrapping_sub(2);
-        self.write_word(self.sp, self.pc);
-        
-        // Jump to interrupt vector (typically RST 7 = 0x0038)
-        self.pc = 0x0038;
-        
-        // Clear the interrupt
-        self.timer.interrupt_pending = false;
+
+    /// The INT input (ARCHITECTURE 5.7): latches RST n until the CPU accepts it.
+    /// A later call before acceptance replaces n.
+    pub fn interrupt(&mut self, n: u8) {
+        assert!(n < 8, "RST {} does not exist", n);
+        self.pending_interrupt = Some(n);
     }
 
-    pub fn perform_nop(&mut self) -> u8{
-        // Do nothing
-        4
+    /// One step: an interrupt acknowledge, a halted step, or one instruction.
+    /// Returns the cycles it took.
+    pub fn execute_one(&mut self) -> u8 {
+        let ei_delay = std::mem::replace(&mut self.ei_delay, false);
+        let cycles = match self.pending_interrupt {
+            Some(n) if self.interrupts_enabled && !ei_delay => {
+                // The acknowledge executes RST n in place of the next fetch.
+                self.pending_interrupt = None;
+                self.interrupts_enabled = false;
+                self.halted = false;
+                self.perform_rst(n << 3)
+            }
+            _ if self.halted => 4,
+            _ => {
+                let opcode = self.fetch_byte();
+                self.execute(opcode)
+            }
+        };
+        self.cycles += cycles as u64;
+        cycles
     }
 
-    pub fn perform_hlt(&mut self) -> u8{
-        println!("\r\n***SYSTEM HALTED*** at PC={:04X}", self.pc);
-        self.halted = true;
-        7
-    }
-
-    pub fn perform_mov(&mut self, opcode: u8) -> u8 {
+    fn perform_mov(&mut self, opcode: u8) -> u8 {
         let dest = Register::from_code((opcode >> 3) & 0x07);
         let src = Register::from_code(opcode & 0x07);
         let value = self.get_reg(src);
         self.set_reg(dest, value);
-        if dest == Register::M || src == Register::M {
-            7
-        } else {
-            5
+        if dest == Register::M || src == Register::M { 7 } else { 5 }
+    }
+
+    /// ADD ADC SUB SBB ANA XRA ORA CMP (op 0-7), for 10AAASSS and 11AAA110.
+    fn alu(&mut self, op: u8, value: u8) {
+        let cy = self.carry() as u8;
+        match op {
+            0 | 1 => {  // ADD, ADC
+                let ci = if op == 1 { cy } else { 0 };
+                let result = self.a as u16 + value as u16 + ci as u16;
+                let aux_carry = (self.a & 0x0F) + (value & 0x0F) + ci > 0x0F;
+                self.a = result as u8;
+                self.set_flags(self.a, result > 0xFF, aux_carry);
+            }
+            2 | 3 | 7 => {  // SUB, SBB, CMP: A + ~v + (1 - borrow in); AC is the carry out of bit 3
+                let bi = if op == 3 { cy } else { 0 };
+                let result = (self.a as i16) - (value as i16) - bi as i16;
+                let aux_carry = (self.a & 0x0F) + (!value & 0x0F) + (1 - bi) > 0x0F;
+                self.set_flags(result as u8, result < 0, aux_carry);
+                if op != 7 {
+                    self.a = result as u8;
+                }
+            }
+            4 => {
+                let aux_carry = (self.a | value) & 0x08 != 0;
+                self.a &= value;
+                self.set_flags(self.a, false, aux_carry);
+            }
+            5 => { self.a ^= value; self.set_flags(self.a, false, false); }
+            _ => { self.a |= value; self.set_flags(self.a, false, false); }
         }
     }
 
-    pub fn perform_alu(&mut self, opcode: u8) -> u8{
-        let operation = (opcode >> 3) & 0x07;
+    fn perform_alu(&mut self, opcode: u8) -> u8 {
         let src = Register::from_code(opcode & 0x07);
         let value = self.get_reg(src);
-        
-        match operation {
-            0 => {  // ADD
-                let result = self.a as u16 + value as u16;
-                let aux_carry = (self.a & 0x0F) + (value & 0x0F) > 0x0F;
-                self.a = result as u8;
-                self.update_flags_arithmetic(self.a, result > 0xFF, aux_carry);
-            }
-            1 => {  // ADC (add with carry)
-                let carry_in = if self.flags & FLAG_CARRY != 0 { 1 } else { 0 };
-                let result = self.a as u16 + value as u16 + carry_in;
-                let aux_carry = (self.a & 0x0F) + (value & 0x0F) + carry_in as u8 > 0x0F;
-                self.a = result as u8;
-                self.update_flags_arithmetic(self.a, result > 0xFF, aux_carry);
-            }
-            2 => {  // SUB
-                let result = (self.a as i16) - (value as i16);
-                let aux_borrow = (self.a & 0x0F) < (value & 0x0F);
-                self.a = result as u8;
-                self.update_flags_arithmetic(self.a, result < 0,aux_borrow);
-            }
-            3 => {  // SBB (subtract with borrow)
-                let carry = if self.flags & FLAG_CARRY != 0 { 1 } else { 0 };
-                let result = (self.a as i16) - (value as i16) - carry;
-                let aux_borrow = (self.a as i16 & 0x0F) - (value as i16 & 0x0F) - carry < 0;
-                self.a = result as u8;
-                self.update_flags_arithmetic(self.a, result < 0, aux_borrow);  
-            }
-            4 => {  // ANA (AND)
-                self.a &= value;
-                self.update_flags_logical(self.a);
-            }
-            5 => {  // XRA
-                self.a ^= value;
-                self.update_flags_logical(self.a);
-            }
-            6 => {  // ORA (OR)
-                self.a |= value;
-                self.update_flags_logical(self.a);
-            }
-            7 => {  // CMP (compare)
-                let result = (self.a as i16) - (value as i16);
-                let aux_borrow = (self.a & 0x0F) < (value & 0x0F);
-                self.update_flags_arithmetic(result as u8, result < 0, aux_borrow); 
-                // CMP doesn't change A, only flags
-            }
-            _ => unreachable!(),
-        }
-        if src == Register::M {
-            7
-        } else {
-            4
-        }
+        self.alu((opcode >> 3) & 0x07, value);
+        if src == Register::M { 7 } else { 4 }
     }
 
-    pub fn perform_mvi(&mut self, opcode: u8) -> u8{
+    fn perform_mvi(&mut self, opcode: u8) -> u8 {
         let reg = Register::from_code((opcode >> 3) & 0x07);
         let value = self.fetch_byte();
         self.set_reg(reg, value);
-        if reg == Register::M {
-            10
-        } else {
-            7
-        }
+        if reg == Register::M { 10 } else { 7 }
     }
 
-    pub fn perform_inr(&mut self, opcode: u8) -> u8{
+    fn perform_inr(&mut self, opcode: u8) -> u8 {
         let reg = Register::from_code((opcode >> 3) & 0x07);
         let value = self.get_reg(reg);
         let result = value.wrapping_add(1);
-        let aux_carry = (value & 0x0F) == 0x0F;  // Overflow from bit 3
-        
         self.set_reg(reg, result);
-        
-        // Preserve carry, set everything else
-        let carry = self.flags & FLAG_CARRY;
-        self.update_flags_arithmetic(result, false, aux_carry);
-        self.flags = (self.flags & !FLAG_CARRY) | carry;
-        
-        if reg == Register::M {
-            10
-        } else {
-            5
-        }
+        self.set_flags(result, self.carry(), (value & 0x0F) == 0x0F);
+        if reg == Register::M { 10 } else { 5 }
     }
 
-    pub fn perform_dcr(&mut self, opcode: u8) -> u8{
+    fn perform_dcr(&mut self, opcode: u8) -> u8 {
         let reg = Register::from_code((opcode >> 3) & 0x07);
         let value = self.get_reg(reg);
         let result = value.wrapping_sub(1);
-        let aux_borrow = (value & 0x0F) == 0x00;  // Borrow from bit 4
-        
         self.set_reg(reg, result);
-        
-        // Preserve carry, set everything else
-        let carry = self.flags & FLAG_CARRY;
-        self.update_flags_arithmetic(result, false, aux_borrow);
-        self.flags = (self.flags & !FLAG_CARRY) | carry;
-        
-        if reg == Register::M {
-            10
-        } else {
-            5
+        self.set_flags(result, self.carry(), (value & 0x0F) != 0x00);
+        if reg == Register::M { 10 } else { 5 }
+    }
+
+    fn perform_daa(&mut self) -> u8 {
+        let (lo, hi) = (self.a & 0x0F, self.a >> 4);
+        let mut correction = 0;
+        if lo > 9 || (self.flags & FLAG_AUX_CARRY) != 0 {
+            correction |= 0x06;
         }
-    }
-
-    pub fn perform_lxi(&mut self, opcode: u8) -> u8{
-        let pair = RegisterPair::from_code((opcode >> 4) & 0x03);
-        let value = self.fetch_word();
-        self.set_pair(pair, value);
-        10
-    }
-    
-    pub fn perform_dad(&mut self, opcode: u8) -> u8{
-        let pair = RegisterPair::from_code((opcode >> 4) & 0x03);
-        let value = self.get_pair(pair);
-        let hl = self.get_hl();
-        let result = hl as u32 + value as u32;
-        self.set_hl(result as u16);
-        // Set carry flag if overflow from 16 bits
-        if result > 0xFFFF {
-            self.flags |= FLAG_CARRY;
-        } else {
-            self.flags &= !FLAG_CARRY;
+        let carry = hi > 9 || self.carry() || (lo > 9 && hi >= 9);
+        if carry {
+            correction |= 0x60;
         }
-        10
+        self.a = self.a.wrapping_add(correction);
+        self.set_flags(self.a, carry, lo + (correction & 0x0F) > 0x0F);
+        4
     }
 
-    pub fn perform_inx(&mut self, opcode: u8) -> u8{
-        let pair = RegisterPair::from_code((opcode >> 4) & 0x03);
-        let value = self.get_pair(pair).wrapping_add(1);
-        self.set_pair(pair, value);
-        // INX doesn't affect flags
-        5
-    }
-
-    pub fn perform_dcx(&mut self, opcode: u8) -> u8{
-        let pair = RegisterPair::from_code((opcode >> 4) & 0x03);
-        let value = self.get_pair(pair).wrapping_sub(1);
-        self.set_pair(pair, value);
-        // DCX doesn't affect flags
-        5
-    }
-
-    pub fn perform_push(&mut self, opcode: u8) -> u8{
-        let pair = PushPopPair::from_code((opcode >> 4) & 0x03);
-        let value = self.get_push_pop_pair(pair);
-        self.sp = self.sp.wrapping_sub(2);
-        self.write_word(self.sp, value);
+    fn perform_rst(&mut self, opcode: u8) -> u8 {
+        self.push(self.pc);
+        self.pc = (opcode & 0x38) as u16;
         11
     }
 
-    pub fn perform_pop(&mut self, opcode: u8) -> u8{
-        let pair = PushPopPair::from_code((opcode >> 4) & 0x03);
-        let value = self.read_word(self.sp);
-        self.set_push_pop_pair(pair, value);
-        self.sp = self.sp.wrapping_add(2);
-        10
-    }
-
-    pub fn perform_conditional_jump(&mut self, opcode: u8) -> u8{
-        let condition = Condition::from_code((opcode >> 3) & 0x07);
+    fn perform_call(&mut self) -> u8 {
         let addr = self.fetch_word();
-        if self.test_condition(condition) {
-            self.pc = addr;
-            10
-        } else {
-            10
-        }
-    }
-    
-    pub fn perform_conditional_call(&mut self, opcode: u8) -> u8{
-        let condition = Condition::from_code((opcode >> 3) & 0x07);
-        let addr = self.fetch_word();
-        if self.test_condition(condition) {
-            self.sp = self.sp.wrapping_sub(2);
-            self.write_word(self.sp, self.pc);
-            self.pc = addr;
-            17
-        } else {
-            11
-        }
-    }
-
-    pub fn perform_conditional_return(&mut self, opcode: u8) -> u8{
-        let condition = Condition::from_code((opcode >> 3) & 0x07);
-        if self.test_condition(condition) {
-            self.pc = self.read_word(self.sp);
-            self.sp = self.sp.wrapping_add(2);
-            11
-        } else {
-            5
-        }
-    }
-
-    pub fn perform_rst(&mut self, opcode: u8) -> u8{
-        let n = (opcode >> 3) & 0x07;
-        let addr = n as u16 * 8;
-        self.sp = self.sp.wrapping_sub(2);
-        self.write_word(self.sp, self.pc);
-        self.pc = addr;
-        11
-    }
-
-    pub fn perform_jmp(&mut self) -> u8{
-        let addr = self.fetch_word();
-        self.pc = addr;
-        10
-    }
-
-    pub fn perform_call(&mut self) -> u8{
-        let addr = self.fetch_word();
-        self.sp = self.sp.wrapping_sub(2);
-        self.write_word(self.sp, self.pc);
+        self.push(self.pc);
         self.pc = addr;
         17
     }
 
-    pub fn perform_ret(&mut self) -> u8{
-        self.pc = self.read_word(self.sp);
-        self.sp = self.sp.wrapping_add(2);
-        10
-    }
-
-    pub fn perform_stax_b(&mut self) -> u8{
-        self.write_byte(self.get_bc(), self.a);
-        7
-    }
-
-    pub fn perform_stax_d(&mut self) -> u8{
-        self.write_byte(self.get_de(), self.a);
-        7
-    }
-
-    pub fn perform_ldax_b(&mut self) -> u8{
-        self.a = self.read_byte(self.get_bc());
-        7
-    }
-
-    pub fn perform_ldax_d(&mut self) -> u8{
-        self.a = self.read_byte(self.get_de());
-        7
-    }
-
-    pub fn perform_sta(&mut self) -> u8{
-        let addr = self.fetch_word();
-        self.write_byte(addr, self.a);
-        13
-    }
-
-    pub fn perform_lda(&mut self) -> u8{
-        let addr = self.fetch_word();
-        self.a = self.read_byte(addr);
-        13
-    }
-    
-    pub fn perform_shld(&mut self) -> u8{
-        let addr = self.fetch_word();
-        self.write_word(addr, self.get_hl());
-        16
-    }
-
-    pub fn perform_lhld(&mut self) -> u8{
-        let addr = self.fetch_word();
-        let value = self.read_word(addr);
-        self.set_hl(value);
-        16
-    }
-
-    pub fn perform_adi(&mut self) -> u8{
-        let data = self.fetch_byte();
-        let result = self.a as u16 + data as u16;
-        let aux_carry = (self.a & 0x0F) + (data & 0x0F) > 0x0F;
-        self.a = result as u8;
-        self.update_flags_arithmetic(self.a, result > 0xFF, aux_carry);
-        7
-    }
-
-    pub fn perform_sui(&mut self) -> u8{
-        let data = self.fetch_byte();
-        let result = (self.a as i16) - (data as i16);
-        let aux_borrow = (self.a & 0x0F) < (data & 0x0F);  // ← ADD THIS
-        self.a = result as u8;
-        self.update_flags_arithmetic(self.a, result < 0,aux_borrow);
-        7
-    }
-
-    pub fn perform_ani(&mut self) -> u8{
-        let data = self.fetch_byte();
-        self.a &= data;
-        self.update_flags_logical(self.a);  // ← Uses logical version
-        7
-    }
-
-    pub fn perform_xri(&mut self) -> u8{
-        let data = self.fetch_byte();
-        self.a ^= data;
-        self.update_flags_logical(self.a);  // ← Uses logical version
-        7
-    }
-
-    pub fn perform_ori(&mut self) -> u8{
-        let data = self.fetch_byte();
-        self.a |= data;
-        self.update_flags_logical(self.a);  // ← Uses logical version
-        7
-    }
-
-    pub fn perform_cpi(&mut self) -> u8{
-        let data = self.fetch_byte();
-        let result = (self.a as i16) - (data as i16);
-        let aux_borrow = (self.a & 0x0F) < (data & 0x0F);  // ← ADD
-        self.update_flags_arithmetic(result as u8, result < 0, aux_borrow); 
-        // CPI doesn't change A, only flags
-        7
-    }
-
-    pub fn perform_rlc(&mut self) -> u8{
-        let carry = (self.a & 0x80) != 0;
-        self.a = (self.a << 1) | if carry { 1 } else { 0 };
-        if carry {
-            self.flags |= FLAG_CARRY;
-        } else {
-            self.flags &= !FLAG_CARRY;
-        }
-        4
-    }
-
-    pub fn perform_rrc(&mut self) -> u8{
-        let carry = (self.a & 0x01) != 0;
-        self.a = (self.a >> 1) | if carry { 0x80 } else { 0 };
-        if carry {
-            self.flags |= FLAG_CARRY;
-        } else {
-            self.flags &= !FLAG_CARRY;
-        }
-        4
-    }
-
-    pub fn perform_ral(&mut self) -> u8{
-        let carry_in = if self.flags & FLAG_CARRY != 0 { 1 } else { 0 };
-        let carry_out = (self.a & 0x80) != 0;
-        self.a = (self.a << 1) | carry_in;
-        if carry_out {
-            self.flags |= FLAG_CARRY;
-        } else {
-            self.flags &= !FLAG_CARRY;
-        }
-        4
-    }
-
-    pub fn perform_rar(&mut self) -> u8{
-        let carry_in = if self.flags & FLAG_CARRY != 0 { 0x80 } else { 0 };
-        let carry_out = (self.a & 0x01) != 0;
-        self.a = (self.a >> 1) | carry_in;
-        if carry_out {
-            self.flags |= FLAG_CARRY;
-        } else {
-            self.flags &= !FLAG_CARRY;
-        }
-        4
-    }
-
-    pub fn perform_daa(&mut self) -> u8{
-        let mut correction = 0;
-        let mut carry = false;
-
-        // Check lower nibble
-        if (self.a & 0x0F) > 9 || (self.flags & FLAG_AUX_CARRY) != 0 {
-            correction |= 0x06;
-        }
-
-        // Check upper nibble
-        if (self.a >> 4) > 9 || (self.flags & FLAG_CARRY) != 0 || ((self.a & 0x0F) > 9 && (self.a >> 4) >= 9) {
-            correction |= 0x60;
-            carry = true;
-        }
-
-        let result = self.a.wrapping_add(correction);
-        self.a = result;
-        self.update_flags(result, carry);
-        if carry {
-            self.flags |= FLAG_CARRY;
-        } else {
-            self.flags &= !FLAG_CARRY;
-        }
-        4
-    }
-
-    pub fn perform_cma(&mut self) -> u8{
-        self.a = !self.a;
-        4
-    }
-
-    pub fn perform_stc(&mut self) -> u8{
-        self.flags |= FLAG_CARRY;
-        4
-    }
-
-    pub fn perform_cmc(&mut self) -> u8{
-        self.flags ^= FLAG_CARRY;
-        4
-    }
-
-    pub fn perform_aci(&mut self) -> u8{
-        let data = self.fetch_byte();
-        let carry_in = if self.flags & FLAG_CARRY != 0 { 1 } else { 0 };
-        let result = self.a as u16 + data as u16 + carry_in;
-        let aux_carry = (self.a & 0x0F) + (data & 0x0F) + carry_in as u8 > 0x0F;
-        self.a = result as u8;
-        self.update_flags_arithmetic(self.a, result > 0xFF, aux_carry);
-        7
-    }
-
-    pub fn perform_sbi(&mut self) -> u8{
-        let data = self.fetch_byte();
-        let carry = if self.flags & FLAG_CARRY != 0 { 1 } else { 0 };
-        let result = (self.a as i16) - (data as i16) - carry;
-        let aux_borrow = (self.a as i16 & 0x0F) - (data as i16 & 0x0F) - carry < 0;  // ← ADD THIS
-        self.a = result as u8;
-        self.update_flags_arithmetic(self.a, result < 0, aux_borrow);  
-        7
-    }
-
-    pub fn perform_out(&mut self) -> u8{
+    fn perform_out(&mut self) -> u8 {
         let port = self.fetch_byte();
-        if port >= 0x30 && port <= 0x32 {
-            self.timer.write(port, self.a);
-        } else if port == 0xFE {
-            // System control port
-            match self.a {
-                0x00 => self.rom_overlay_enabled = false,  // Disable overlay
-                0xFF => self.reset(),                       // Cold reset
-                _ => {}  // Other values ignored for now
-            }
+        if port == 0xFE {
+            self.rom_overlay_enabled = false;  // any value clears the overlay flip-flop
         } else {
             self.io_bus.write(port, self.a);
         }
         10
     }
 
-    pub fn perform_in(&mut self) -> u8{
+    fn perform_in(&mut self) -> u8 {
         let port = self.fetch_byte();
-        self.a = if port >= 0x30 && port <= 0x32 {
-            self.timer.read(port)
-        } else if port == 0xFF {
-            // System status port - bit 0 = overlay state
-            if self.rom_overlay_enabled { 0x01 } else { 0x00 }
+        self.a = if port == 0xFF {
+            self.rom_overlay_enabled as u8  // bit 0 = overlay
         } else {
             self.io_bus.read(port)
         };
         10
     }
 
-    pub fn perform_xthl(&mut self) -> u8{
-        let temp = self.read_word(self.sp);
-        self.write_word(self.sp, self.get_hl());
-        self.set_hl(temp);
-        18
-    }
-
-    pub fn perform_pchl(&mut self) -> u8{
-        self.pc = self.get_hl();
-        5
-    }
-
-    pub fn perform_xchg(&mut self) -> u8{
-        let temp = self.get_de();
-        self.set_de(self.get_hl());
-        self.set_hl(temp);
-        4
-    }
-
-    pub fn perform_ei(&mut self) -> u8{
-        self.interrupts_enabled = true;
-        4
-    }
-
-    pub fn perform_sphl(&mut self) -> u8{
-        self.sp = self.get_hl();
-        5
-    }
-
-    pub fn perform_di(&mut self) -> u8{
-        self.interrupts_enabled = false;
-        4
-    }
-
-    pub fn perform_nop_undoc(&mut self) -> u8{
-        // Do nothing
-        4
-    }
-    
-    pub fn execute_one(&mut self) -> u8 {
-        if self.interrupts_enabled && self.timer.interrupt_pending {
-            self.handle_interrupt();
-        }
-        
-        let opcode = self.fetch_byte();
-        let cycles = match opcode {
-            // ===== SPECIAL CASES FIRST =====
-            0x00 => self.perform_nop(),  // NOP
-            0x76 => self.perform_hlt(),  // HLT
-            
-            // ===== MOV FAMILY: 01DDDSSS (0x40-0x7F) =====
-            0x40..=0x7F => self.perform_mov(opcode),
-            
-            // ===== ARITHMETIC FAMILY: 10AAASSS (0x80-0xBF) =====
-            0x80..=0xBF => self.perform_alu(opcode),
-            
-            // ===== MVI FAMILY: 00RRR110 =====
-            b if (b & 0xC7) == 0x06 => self.perform_mvi(opcode),
-            
-            // ===== INR FAMILY: 00RRR100 =====
-            b if (b & 0xC7) == 0x04 => self.perform_inr(opcode),
-            
-            // ===== DCR FAMILY: 00RRR101 =====
-            b if (b & 0xC7) == 0x05 => self.perform_dcr(opcode),
-            
-            // ===== LXI FAMILY: 00RP0001 =====
-            b if (b & 0xCF) == 0x01 => self.perform_lxi(opcode),
-            
-            // ===== DAD FAMILY: 00RP1001 =====
-            b if (b & 0xCF) == 0x09 => self.perform_dad(opcode),
-            
-            // ===== INX FAMILY: 00RP0011 =====
-            b if (b & 0xCF) == 0x03 => self.perform_inx(opcode),
-            
-            // ===== DCX FAMILY: 00RP1011 =====
-            b if (b & 0xCF) == 0x0B => self.perform_dcx(opcode),
-            
-            // ===== PUSH FAMILY: 11RP0101 =====
-            b if (b & 0xCF) == 0xC5 => self.perform_push(opcode),
-            
-            // ===== POP FAMILY: 11RP0001 =====
-            b if (b & 0xCF) == 0xC1 => self.perform_pop(opcode),
-            
-            // ===== CONDITIONAL JUMPS: 11CCC010 =====
-            b if (b & 0xC7) == 0xC2 => self.perform_conditional_jump(opcode),
-            
-            // ===== CONDITIONAL CALLS: 11CCC100 =====
-            b if (b & 0xC7) == 0xC4 => self.perform_conditional_call(opcode),
-
-            // ===== CONDITIONAL RETURNS: 11CCC000 =====
-            b if (b & 0xC7) == 0xC0 => self.perform_conditional_return(opcode),
-            
-            // ===== RST FAMILY: 11NNN111 =====
-            b if (b & 0xC7) == 0xC7 => self.perform_rst(opcode),
-            
-            // ===== SINGLE INSTRUCTIONS =====
-            0xC3 => self.perform_jmp(),  // JMP
-            0xCD => self.perform_call(), // CALL
-            0xC9 => self.perform_ret(),  // RET
-
-    
-            // STAX/LDAX
-            0x02 => self.perform_stax_b(),   //memory[self.get_bc() as usize] = self.a,  // STAX B
-            0x12 => self.perform_stax_d(),   //memory[self.get_de() as usize] = self.a,  // STAX D
-            0x0A => self.perform_ldax_b(),    //self.memory[self.get_bc() as usize],  // LDAX B
-            0x1A => self.perform_ldax_d(),     //self.memory[self.get_de() as usize],  // LDAX D
-            
-            // Direct memory operations
-            0x32 => self.perform_sta(),  // STA //self.memory[addr as usize] = self.a;
-            
-            0x3A => self.perform_lda(), // LDA //self.a = self.memory[addr as usize];
-            0x22 => self.perform_shld(),  // SHLD
-            0x2A => self.perform_lhld(),  // LHLD
-            
-            // Immediate arithmetic
-            0xC6 => self.perform_adi(),  // ADI
-            0xD6 => self.perform_sui(), // SUI
-            0xE6 => self.perform_ani(),  // ANI
-            0xEE => self.perform_xri(),  // XRI
-            0xF6 => self.perform_ori(),  // ORI
-            0xFE => self.perform_cpi(),  // CPI
-
-            // ===== ROTATE INSTRUCTIONS =====
-            0x07 => self.perform_rlc(),  // RLC
-            0x0F => self.perform_rrc(),  // RRC     
-            0x17 => self.perform_ral(),  
-            0x1F => self.perform_rar(),  // RAR
-
-            // ===== ACCUMULATOR OPERATIONS =====
-            0x27 => self.perform_daa(),  // DAA - Decimal Adjust Accumulator
-
-            0x2F => self.perform_cma(),  // CMA - Complement Accumulator
-
-            0x37 => self.perform_stc(),  // STC - Set Carry
-            0x3F => self.perform_cmc(),  // CMC - Complement Carry
-
-            // ===== IMMEDIATE WITH CARRY =====
-            0xCE => self.perform_aci(),  // ACI - Add Immediate with Carry
-            0xDE => self.perform_sbi(),  // SBI - Subtract Immediate with Borrow
-
-
-            // ===== I/O INSTRUCTIONS =====
-            0xD3 => self.perform_out(),  // OUT
-            0xDB => self.perform_in(),   // IN
-
-            // ===== EXCHANGE INSTRUCTIONS =====
-            0xE3 => self.perform_xthl(),  // XTHL - Exchange Top of Stack with HL
-            0xE9 => self.perform_pchl(),  // PCHL - Load PC from HL
-            0xEB => self.perform_xchg(),  // XCHG - Exchange DE and HL  
-
-            // ===== STACK/INTERRUPT =====
-            0xF3 => self.perform_di(),  // DI - Disable Interrupts
-            0xF9 => self.perform_sphl(),  // SPHL - Load SP from HL 
-            0xFB => self.perform_ei(),  // EI - Enable Interrupts
-
-            // ===== UNDOCUMENTED NOPs =====
-            0x08 | 0x10 | 0x18 | 0x20 | 0x28 | 0x30 | 0x38 => self.perform_nop_undoc(),
-
-            _ => panic!("Unknown opcode: 0x{:02X} at PC: 0x{:04X}", 
-                       opcode, self.pc.wrapping_sub(1)),
-        };
-        self.timer.tick(cycles as u64);
-
-        self.cycles += cycles as u64;  // <-- ADD THIS
-
-        cycles
-    }
-    
-    // ============================================
-    // DEBUG UTILITIES
-    // ============================================
-    
-    pub fn disassemble_at(&mut self, addr: u16) -> (String, u8) {
-        let opcode = self.read_byte(addr);  //self.memory[addr as usize];
-        
+    fn execute(&mut self, opcode: u8) -> u8 {
         match opcode {
-            0x00 => ("NOP".to_string(), 1),
-            0x01 => {
-                let word = self.read_word(addr.wrapping_add(1));
-                (format!("LXI B,{:04X}h", word), 3)
-            }
-            0x06 => {
-                let byte = self.read_byte(addr.wrapping_add(1));
-                //let byte = self.memory[addr.wrapping_add(1) as usize];
-                (format!("MVI B,{:02X}h", byte), 2)
-            }
-            0x21 => {
-                let word = self.read_word(addr.wrapping_add(1));
-                (format!("LXI H,{:04X}h", word), 3)
-            }
-            0x22 => {
-                let word = self.read_word(addr.wrapping_add(1));
-                (format!("SHLD {:04X}h", word), 3)
-            }
-            0x2A => {
-                let word = self.read_word(addr.wrapping_add(1));
-                (format!("LHLD {:04X}h", word), 3)
-            }
-            0x32 => {
-                let word = self.read_word(addr.wrapping_add(1));
-                (format!("STA {:04X}h", word), 3)
-            }
-            0x3A => {
-                let word = self.read_word(addr.wrapping_add(1));
-                (format!("LDA {:04X}h", word), 3)
-            }
-            0x3E => {
-                let byte = self.read_byte(addr.wrapping_add(1));
-                //let byte = self.memory[addr.wrapping_add(1) as usize];
-                (format!("MVI A,{:02X}h", byte), 2)
-            }
-            0x76 => ("HLT".to_string(), 1),
-            0x77 => ("MOV M,A".to_string(), 1),
-            0x78 => ("MOV A,B".to_string(), 1),
-            0x7E => ("MOV A,M".to_string(), 1),
-            0x80 => ("ADD B".to_string(), 1),
-            0xC1 => ("POP B".to_string(), 1),
-            0xC3 => {
-                let word = self.read_word(addr.wrapping_add(1));
-                (format!("JMP {:04X}h", word), 3)
-            }
-            0xC5 => ("PUSH B".to_string(), 1),
-            _ => (format!("DB {:02X}h", opcode), 1),
-        }
-    }
-    
-    pub fn trace(&mut self) {
-        let (mnemonic, _) = self.disassemble_at(self.pc);
-        println!("{:04X}: {:<12} | A={:02X} BC={:04X} DE={:04X} HL={:04X} SP={:04X} [{}{}{}{}{}]",
-                 self.pc, mnemonic, self.a, 
-                 self.get_bc(), self.get_de(), self.get_hl(), self.sp,
-                 if self.flags & 0x80 != 0 { "S" } else { "-" },
-                 if self.flags & 0x40 != 0 { "Z" } else { "-" },
-                 if self.flags & 0x10 != 0 { "A" } else { "-" },
-                 if self.flags & 0x04 != 0 { "P" } else { "-" },
-                 if self.flags & 0x01 != 0 { "C" } else { "-" });    
-        }
-    
-    pub fn debug_state(&mut self) {
-        println!("\r\n========== CPU STATE ==========");
-        
-        // Main registers
-        println!("A:{:02X}  B:{:02X}  C:{:02X}  D:{:02X}  E:{:02X}  H:{:02X}  L:{:02X}",
-                 self.a, self.b, self.c, self.d, self.e, self.h, self.l);
-        
-        // Register pairs and pointers
-        println!("BC:{:04X}  DE:{:04X}  HL:{:04X}  SP:{:04X}  PC:{:04X}",
-                 self.get_bc(), self.get_de(), self.get_hl(), self.sp, self.pc);
-        
-        // Flags
-        println!("FLAGS:{:02X} [{}{}{}{}{}]",
-                 self.flags,
-                 if self.flags & 0x80 != 0 { "S" } else { "-" },  // Sign
-                 if self.flags & 0x40 != 0 { "Z" } else { "-" },  // Zero
-                 if self.flags & 0x10 != 0 { "A" } else { "-" },  // Aux carry
-                 if self.flags & 0x04 != 0 { "P" } else { "-" },  // Parity
-                 if self.flags & 0x01 != 0 { "C" } else { "-" }); // Carry
-        
-        // Next instruction
-        let (mnemonic, _size) = self.disassemble_at(self.pc);
-        println!("\r\nNext: [{:04X}] {}", self.pc, mnemonic);
-        
-        // Memory dump around PC
-        println!("\r\nMemory at PC:");
-        for offset in (0..16).step_by(8) {
-            let addr = self.pc.wrapping_add(offset);
-            print!("  {:04X}: ", addr);
-            for i in 0..8 {
-                print!("{:02X} ", self.read_byte(addr.wrapping_add(i)));
+            0x00 | 0x08 | 0x10 | 0x18 | 0x20 | 0x28 | 0x30 | 0x38 => 4,  // NOP and undocumented NOPs
+            0x76 => { self.halted = true; 7 }  // HLT
 
-            }
-            print!(" |");
-            for i in 0..8 {
-                let byte = self.read_byte(addr.wrapping_add(i));
+            // MOV 01DDDSSS, ALU 10AAASSS
+            0x40..=0x7F => self.perform_mov(opcode),
+            0x80..=0xBF => self.perform_alu(opcode),
 
-                let ch = if byte >= 0x20 && byte <= 0x7E { byte as char } else { '.' };
-                print!("{}", ch);
+            // MVI 00RRR110, INR 00RRR100, DCR 00RRR101
+            b if (b & 0xC7) == 0x06 => self.perform_mvi(opcode),
+            b if (b & 0xC7) == 0x04 => self.perform_inr(opcode),
+            b if (b & 0xC7) == 0x05 => self.perform_dcr(opcode),
+
+            // LXI 00RP0001, DAD 00RP1001, INX 00RP0011, DCX 00RP1011
+            b if (b & 0xCF) == 0x01 => {
+                let value = self.fetch_word();
+                self.set_pair(RegisterPair::from_code(b >> 4), value);
+                10
             }
-            println!("|");
-        }
-        
-        // Stack preview
-        if self.sp < 0xFFFC && self.sp > 0 {
-            println!("\r\nStack (top 3 words):");
-            for i in 0..3 {
-                let addr = self.sp.wrapping_add(i * 2);
-                if addr < 0xFFFE {
-                    let word = self.read_word(addr);
-                    println!("  [{:04X}] = {:04X}", addr, word);
+            b if (b & 0xCF) == 0x09 => {
+                let result = self.get_hl() as u32 + self.get_pair(RegisterPair::from_code(b >> 4)) as u32;
+                self.set_hl(result as u16);
+                self.set_carry(result > 0xFFFF);
+                10
+            }
+            b if (b & 0xCF) == 0x03 => {
+                let pair = RegisterPair::from_code(b >> 4);
+                self.set_pair(pair, self.get_pair(pair).wrapping_add(1));
+                5
+            }
+            b if (b & 0xCF) == 0x0B => {
+                let pair = RegisterPair::from_code(b >> 4);
+                self.set_pair(pair, self.get_pair(pair).wrapping_sub(1));
+                5
+            }
+
+            // PUSH 11RP0101, POP 11RP0001
+            b if (b & 0xCF) == 0xC5 => {
+                let value = match PushPopPair::from_code(b >> 4) {
+                    PushPopPair::BC => self.get_bc(),
+                    PushPopPair::DE => self.get_de(),
+                    PushPopPair::HL => self.get_hl(),
+                    PushPopPair::PSW => self.get_psw(),
+                };
+                self.push(value);
+                11
+            }
+            b if (b & 0xCF) == 0xC1 => {
+                let value = self.pop();
+                match PushPopPair::from_code(b >> 4) {
+                    PushPopPair::BC => self.set_bc(value),
+                    PushPopPair::DE => self.set_de(value),
+                    PushPopPair::HL => self.set_hl(value),
+                    PushPopPair::PSW => self.set_psw(value),
+                }
+                10
+            }
+
+            // Jcc 11CCC010, Ccc 11CCC100, Rcc 11CCC000
+            b if (b & 0xC7) == 0xC2 => {
+                let addr = self.fetch_word();
+                if self.test_condition(Condition::from_code(b >> 3)) {
+                    self.pc = addr;
+                }
+                10
+            }
+            b if (b & 0xC7) == 0xC4 => {
+                if self.test_condition(Condition::from_code(b >> 3)) {
+                    self.perform_call()
+                } else {
+                    self.pc = self.pc.wrapping_add(2);
+                    11
                 }
             }
+            b if (b & 0xC7) == 0xC0 => {
+                if self.test_condition(Condition::from_code(b >> 3)) {
+                    self.pc = self.pop();
+                    11
+                } else {
+                    5
+                }
+            }
+
+            // ALU immediate 11AAA110, RST 11NNN111
+            b if (b & 0xC7) == 0xC6 => {
+                let value = self.fetch_byte();
+                self.alu((b >> 3) & 0x07, value);
+                7
+            }
+            b if (b & 0xC7) == 0xC7 => self.perform_rst(opcode),
+
+            // JMP, CALL, RET and their undocumented aliases (ARCHITECTURE 5.4)
+            0xC3 | 0xCB => { self.pc = self.fetch_word(); 10 }
+            0xCD | 0xDD | 0xED | 0xFD => self.perform_call(),
+            0xC9 | 0xD9 => { self.pc = self.pop(); 10 }
+
+            0x02 => { self.write_byte(self.get_bc(), self.a); 7 }  // STAX B
+            0x12 => { self.write_byte(self.get_de(), self.a); 7 }  // STAX D
+            0x0A => { self.a = self.read_byte(self.get_bc()); 7 }  // LDAX B
+            0x1A => { self.a = self.read_byte(self.get_de()); 7 }  // LDAX D
+            0x32 => { let addr = self.fetch_word(); self.write_byte(addr, self.a); 13 }   // STA
+            0x3A => { let addr = self.fetch_word(); self.a = self.read_byte(addr); 13 }   // LDA
+            0x22 => { let addr = self.fetch_word(); self.write_word(addr, self.get_hl()); 16 }  // SHLD
+            0x2A => { let addr = self.fetch_word(); let v = self.read_word(addr); self.set_hl(v); 16 }  // LHLD
+
+            0x07 => { let cy = self.a & 0x80 != 0; self.a = self.a.rotate_left(1); self.set_carry(cy); 4 }  // RLC
+            0x0F => { let cy = self.a & 0x01 != 0; self.a = self.a.rotate_right(1); self.set_carry(cy); 4 } // RRC
+            0x17 => { let cy = self.a & 0x80 != 0; self.a = (self.a << 1) | self.carry() as u8; self.set_carry(cy); 4 }        // RAL
+            0x1F => { let cy = self.a & 0x01 != 0; self.a = (self.a >> 1) | (self.carry() as u8) << 7; self.set_carry(cy); 4 } // RAR
+
+            0x27 => self.perform_daa(),
+            0x2F => { self.a = !self.a; 4 }             // CMA
+            0x37 => { self.flags |= FLAG_CARRY; 4 }     // STC
+            0x3F => { self.flags ^= FLAG_CARRY; 4 }     // CMC
+
+            0xD3 => self.perform_out(),
+            0xDB => self.perform_in(),
+
+            0xE3 => {  // XTHL
+                let top = self.read_word(self.sp);
+                self.write_word(self.sp, self.get_hl());
+                self.set_hl(top);
+                18
+            }
+            0xE9 => { self.pc = self.get_hl(); 5 }      // PCHL
+            0xEB => {                                   // XCHG
+                let de = self.get_de();
+                self.set_de(self.get_hl());
+                self.set_hl(de);
+                4
+            }
+            0xF3 => { self.interrupts_enabled = false; 4 }  // DI
+            0xF9 => { self.sp = self.get_hl(); 5 }          // SPHL
+            0xFB => { self.interrupts_enabled = true; self.ei_delay = true; 4 }  // EI
+
+            _ => unreachable!("all 256 opcodes are decoded above"),
         }
-        
-        println!("==============================");
     }
-    
+
     // ============================================
-    // PUBLIC UTILITIES
+    // LOADING AND RESET
     // ============================================
-    
-pub fn load_program(&mut self, program: &[u8], start_address: u16) {
-    for (i, &byte) in program.iter().enumerate() {
-        // Write directly to memory, bypassing ROM protection
-        self.memory.write(start_address.wrapping_add(i as u16), byte);
+
+    /// Writes `program` at `start_address`, bypassing the ROM and the overlay, and sets PC there.
+    pub fn load_program(&mut self, program: &[u8], start_address: u16) {
+        for (i, &byte) in program.iter().enumerate() {
+            self.ram[start_address.wrapping_add(i as u16) as usize] = byte;
+        }
+        self.pc = start_address;
     }
-    self.pc = start_address;
-}
 
-pub fn load_program_from_file(&mut self, path: &Path, start_address: u16) -> io::Result<usize> {
-    let program = std::fs::read(path)?;
-    self.load_program(&program, start_address);
-    Ok(program.len())
-}
+    /// The RESET pin (ARCHITECTURE 3.1). Registers, flags, SP and RAM are left alone.
+    pub fn reset(&mut self) {
+        self.pc = 0x0000;
+        self.interrupts_enabled = false;
+        self.ei_delay = false;
+        self.pending_interrupt = None;
+        self.halted = false;
+        self.rom_overlay_enabled = true;
+    }
 
-/// Reset CPU to power-on state
-pub fn reset(&mut self) {
-    self.a = 0; self.b = 0; self.c = 0; self.d = 0;
-    self.e = 0; self.h = 0; self.l = 0;
-    self.flags = FLAG_BIT_1;
-    self.sp = 0xF000;
-    self.pc = 0x0000;  // 8080 starts at 0x0000
-    self.halted = false;
-    self.interrupts_enabled = false;
-    self.rom_overlay_enabled = true;  // ROM visible at 0x0000 on reset
-    // Note: ROM data and memory contents preserved across reset
-}
+    /// Load ROM data (mapped at 0xF000, and at 0x0000 while the overlay is set)
+    pub fn load_rom(&mut self, rom_data: &[u8]) {
+        self.rom = rom_data.to_vec();
+    }
 
-/// Load ROM data (will be mapped at 0xF000, and 0x0000 when overlay enabled)
-pub fn load_rom(&mut self, rom_data: &[u8]) {
-    self.rom = rom_data.to_vec();
-}
-
-/// Load ROM from file
-pub fn load_rom_from_file(&mut self, path: &Path) -> io::Result<usize> {
-    self.rom = std::fs::read(path)?;
-    Ok(self.rom.len())
-}
+    pub fn load_rom_from_file(&mut self, path: &Path) -> io::Result<usize> {
+        self.rom = std::fs::read(path)?;
+        Ok(self.rom.len())
+    }
 }

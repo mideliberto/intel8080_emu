@@ -433,11 +433,11 @@ Console I/O debugging session:
 
 ## Current State
 
-**Last Updated:** October 2, 2026
+**Last Updated:** October 3, 2026
 
 ### Completed
 
-**CPU Core:** All 256 opcodes, full flag system (S, Z, P, AC, C), stack, I/O port system, interrupts
+**CPU Core:** All 256 opcodes (5 undocumented aliases decoded), flags match ARCHITECTURE 5.1-5.3 including AC, 8080A interrupt input (EI delay, HLT wake), reset() = RESET pin. All four exercisers pass, 8080EXM included
 
 **Monitor ROM v0.3:**
 - 14 commands: D, E, F, M, S, C, H, G, I, O, L, W, X, ?
@@ -448,12 +448,13 @@ Console I/O debugging session:
 - Console (0x00-0x02), Storage (0x08-0x0C, 24-bit / 16MB), Storage Mount (0x0D-0x0F), System Control (0xFE-0xFF)
 
 **Testing (verified 2026-10-03):**
-- 8 unit + 123 CPU + 18 device + 16 monitor = 165, all passing (strict transcript harness, reference-model CPU tests)
+- 8 unit + 129 CPU + 20 device + 16 monitor = 173, all passing (strict transcript harness, reference-model CPU tests)
+- 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 
 ### In Progress
 
 - **Phase 5:** Intel HEX loader, parsed by the 8080 itself in ROM. All design decisions made 2026-10-02; build order in `TODO.md`. Not started.
-- **Review findings:** 2026-10-02 review found CPU flag bugs (AC on subtract, DCR, ANA, DAA; PSW bits; EI delay; HLT), ROM range and parse bugs, and vacuous tests. All are listed in `TODO.md` with repros. The vacuous tests are replaced; none of the bugs are fixed yet.
+- **Review findings:** 2026-10-02 review found CPU flag bugs (AC on subtract, DCR, ANA, DAA; PSW bits; EI delay; HLT), ROM range and parse bugs, and vacuous tests. All are listed in `TODO.md` with repros. The vacuous tests are replaced and the CPU bugs are fixed (2026-10-03); the ROM bugs are open.
 
 ### Open Decisions
 
@@ -473,6 +474,14 @@ None. All closed 2026-10-02. The spec is the three normative docs: `docs/ARCHITE
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: CPU Fixed, Exercisers Green (step B)
+- AC fixed for SUB/SBB/CMP, DCR, ANA/ANI and DAA; POP PSW gives `(v&D5)|02`; aliases CB/D9/DD/ED/FD decoded, so no opcode panics. Reference-model tests lost their AC masks and now compare every flag. 8080EXM passes all 25 groups.
+- Refactor: one `alu()` for register and immediate forms, push/pop helpers, dead code gone. `cpu.rs` 1122 -> 561 lines, `registers.rs` 312 -> 45, `memory.rs` and `timer.rs` deleted.
+- Timer deleted; `interrupt(n)` input with 8080A acceptance (EI delay, HLT wake, 11 cycles). HLT fetches nothing, `run()` returns on halt, main.rs prints `HLT at PC=xxxx`.
+- reset() = RESET pin only; `OUT FE` clears the overlay (no cold reset); writes under the overlay go to RAM; `map_port` panics on FE/FF.
+- Exerciser shim is 8080 code (BDOS 2/9 via OUT 00), so the same bytes can run on hardware. cargo-mutants `cpu.rs`: every viable non-equivalent mutant killed.
+- What bit us: nothing new. Logged that `run()` returns `()` where ARCHITECTURE 7.2 says a status; it lands with the run-loop quit work.
 
 ### 2026-10-03: Tests That Test (step A)
 - Monitor tests are now a strict transcript harness: junk RAM (76 = HLT), junk registers and flags, SP = 0000; each step runs to the prompt and must match exactly; budget or HLT = failure. Transcripts are data in `tests/transcripts/`, meant to drive hardware too.

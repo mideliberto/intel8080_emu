@@ -55,13 +55,10 @@ fn main() {
     cpu.load_rom_from_file(std::path::Path::new("rom/monitor.bin"))
         .expect("Failed to load ROM");
     
-    // Reset enables overlay and sets PC=0x0000
-    // ROM code will disable overlay after jumping to 0xF000+ address space
-    cpu.reset();
+    // new() left the CPU in its RESET state: PC=0000, ROM overlay set.
     cpu.run();
-    
-    println!("\r\nProgram finished!\r");
-    println!("A={:02X} B={:02X} C={:02X}\r", cpu.a, cpu.b, cpu.c);
-    disable_raw_mode().expect("Failed to disable raw mode");
 
+    // v1 has no interrupt source, so a halt is final (ARCHITECTURE 7.2).
+    disable_raw_mode().expect("Failed to disable raw mode");
+    println!("\nHLT at PC={:04X}", cpu.pc);
 }

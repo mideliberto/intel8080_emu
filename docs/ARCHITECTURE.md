@@ -88,8 +88,8 @@ There is no software reset.
 **Emulator:**
 - `reset()` models the RESET pin and nothing else. It sets PC=0, INTE=0, halted=false, overlay=1, clears any pending interrupt, and leaves A-L, flags, SP and RAM alone.
 - `Intel8080::new()` builds the struct and calls `reset()`, so there is one home for power-on state.
-- Registers, SP and RAM start at values the ROM can't get lucky with. Test harnesses fill RAM with a non-zero junk byte before boot, so a ROM that relies on zeroed RAM or a preset SP fails its tests. (Decided 2026-10-02.)
-- Today `reset()` zeroes A-L and sets SP=F000 (`cpu.rs:1101-1111`), `new()` leaves the overlay clear (`cpu.rs:46`), and RAM is 00 (`memory.rs:12`). Emulator change pending, TODO.md. Devices are created in their power-on state at process start, which is the emulator's only RESET. Any future host-side reset (Phase 10) MUST reset the devices as well as the CPU.
+- Test harnesses start registers, SP and RAM at values the ROM can't get lucky with. They fill RAM with a non-zero junk byte before boot, so a ROM that relies on zeroed RAM or a preset SP fails its tests. (Decided 2026-10-02.)
+- `new()` starts A-L, SP and RAM at 00 and flags at 02; the monitor harness overwrites them with junk before boot. Devices are created in their power-on state at process start, which is the emulator's only RESET. Any future host-side reset (Phase 10) MUST reset the devices as well as the CPU.
 
 ### 3.2 Boot Sequence
 
@@ -129,7 +129,7 @@ Requirements:
 - The ROM is selected on MEMR only (decode in 6.2). Writes always go to RAM, or have no visible effect at F000-FFFF.
 - Test: with the overlay set, write 0x55 to 0x0100. A read of 0x0100 returns ROM byte 0xF100. After `OUT 0FEH`, a read of 0x0100 returns 0x55.
 - Only RESET sets the flip-flop. Any `OUT 0FEH`, whatever the value in A, clears it. There is no soft reset. The circuit is in 6.5; port semantics are in `DEVICE_SPECS.md` (System Control).
-- **Emulator:** a CPU with no ROM loaded treats all 64 KB as RAM, and the overlay has no effect. Current code drops writes to 0000-0FFF while the overlay is set (`cpu.rs:212`) and treats `OUT FE` with 00 as clear and FF as cold reset (`cpu.rs:760-766`); emulator change pending, TODO.md.
+- **Emulator:** a CPU with no ROM loaded treats all 64 KB as RAM, and the overlay has no effect.
 
 ---
 
@@ -170,7 +170,7 @@ A and v are the operand values before the operation, and CY is the carry flag be
 | POP PSW | - | from stack | from stack | from stack (masked as in 5.1) |
 | everything else (including CMA, INX, DCX, MOV, MVI, LXI, loads, stores, branches, I/O, EI, DI) | - | unchanged | unchanged | unchanged |
 
-Reference vectors (each fails in the current code; TODO.md, Review findings):
+Reference vectors (tested in `tests/cpu_tests.rs`):
 
 | Sequence | Expected |
 |----------|----------|
@@ -220,14 +220,13 @@ The emulator CPU has one interrupt input, `interrupt(rst)`, callable from the ho
   - EI delay: pending `RST 7`, INTE = 0, PC at `EI; MVI A,01h; NOP`. Step 1 runs EI and step 2 runs MVI (A = 01). Step 3 is the acknowledge: PC = 0038, the pushed address is the NOP's, cycles += 11. Same shape with `EI; RET`: RET completes before the acknowledge.
   - HLT wake: `HLT` at 0100 with INTE = 1, then `interrupt(7)`. The next step leaves PC = 0038, halted = false, pushed address 0101, cycles += 11.
   - Blocked: `DI`, `interrupt(7)`, 10 steps of NOPs: no acknowledge. `HLT` with INTE = 0 stays halted with an interrupt pending.
-- **Current code:** the interim timer (`src/io/devices/timer.rs`, port hooks at `cpu.rs:758-759`, `:775-776`, tick at `:947`) and `handle_interrupt` (`cpu.rs:290`, acceptance check at `:826`) are to be deleted and replaced by the above. Today EI has no delay, the acknowledge adds 0 cycles, and an interrupt does not end a halt. All are current bugs (emulator change pending, TODO.md).
 
 ### 5.8 HLT
 
 - `HLT` costs 7 cycles, leaves PC at the next instruction, and sets the halt state.
 - While halted, a step fetches nothing, changes no register or memory, and adds 4 cycles, unless an accepted interrupt (5.7) ends the halt.
 - Test: `76 3E 01 76` followed by two steps leaves A unchanged and PC = 0001.
-- `run()` returns when the CPU halts. The CPU core prints nothing (`perform_hlt` prints today, `cpu.rs:311`; emulator change pending, TODO.md). Host handling of the halt is in section 7.
+- `run()` returns when the CPU halts. The CPU core prints nothing. Host handling of the halt is in section 7.
 
 ---
 
@@ -273,7 +272,7 @@ Port assignments and the values returned by unassigned and unmapped ports are in
 
 During IN and OUT the 8080A drives the port number on both A0-A7 and A8-A15 (MCS-80 p.5-7). Glue MAY decode either copy. The Pi reads A0-A6. A7 is always 0 inside the window.
 
-**Emulator:** the CPU model handles `OUT 0xFE` and `IN 0xFF` itself and never passes them to the IoBus. Every other access goes through the IoBus. `IoBus::map_port` MUST panic when given 0xFE or 0xFF. Test: mapping a device to 0xFE panics. (Today `map_port` accepts them silently, `io/bus.rs:16-18`; emulator change pending, TODO.md.)
+**Emulator:** the CPU model handles `OUT 0xFE` and `IN 0xFF` itself and never passes them to the IoBus. Every other access goes through the IoBus. `IoBus::map_port` MUST panic when given 0xFE or 0xFF. Test: mapping a device to 0xFE panics.
 
 ### 6.4 Pi Window and READY
 
@@ -413,10 +412,10 @@ On hardware the Pi passes every byte the terminal sends; the key map does not ex
 |-------------|----------|
 | **Host input pump** | The host run loop reads pending host keyboard input at least once every 10,000 executed steps and puts the mapped bytes (7.1) into the console input FIFO in arrival order. The key source is injectable, so tests can script it. (Today input is read only inside `IN 02`, `console.rs:43-53`; emulator change pending, TODO.md.) |
 | **Ctrl-C quits** | When the pump reads Ctrl-C, nothing goes into the FIFO. The run loop returns a quit status, and `main.rs` restores the terminal mode and exits. This works whatever the 8080 is doing, including `JMP $`. Test: script Ctrl-C while the CPU runs `JMP $`; the run loop returns quit within 10,000 steps, and `IN 01` never returns 03. |
-| **Halt** | `run()` returns a halted status when the CPU halts (5.8); v1 has no interrupt source that could wake it. `main.rs` prints `HLT at PC=xxxx` to host stdout, where xxxx is PC (the address after the HLT), restores the terminal, and exits. |
+| **Halt** | `run()` returns a halted status when the CPU halts (5.8; current code: `run()` returns `()` on halt, status lands with the run-loop quit work in `TODO.md`); v1 has no interrupt source that could wake it. `main.rs` prints `HLT at PC=xxxx` to host stdout, where xxxx is PC (the address after the HLT), restores the terminal, and exits. |
 | **Debugger hotkey** (Phase 10) | Ctrl-E opens an emulator-side prompt. Designed in Phase 10. Any reset it offers resets the devices too (3.1). |
 | **Host banner and exit lines** | "8080 Emulator", the build timestamp, and any exit message go to host stdout from `main.rs`, never from the CPU core or from a device the 8080 can see. |
-| **Test harness** | Allowed only on the host side: `TestConsole` (scripted input and captured output); test `IoDevice`s mapped with `map_port`, for example one that records every port access; `load_program` (writes that bypass the ROM and the overlay, `cpu.rs:1086`); a CPU with no ROM loaded; `interrupt(rst)` (5.7); direct access to the registers, memory, `cycles`, `halted` and `interrupts_enabled`; and `trace`, `debug_state` and `disassemble_at`. |
+| **Test harness** | Allowed only on the host side: `TestConsole` (scripted input and captured output); test `IoDevice`s mapped with `map_port`, for example one that records every port access; `load_program` (writes that bypass the ROM and the overlay); a CPU with no ROM loaded; `interrupt(rst)` (5.7); direct access to the registers, memory, `cycles`, `halted` and `interrupts_enabled`. Trace and disassembly come with the debugger. |
 | **No throttle** | The emulator runs at host speed. `cycles` counts T-states only. |
 
 ### 7.3 Port Trace Format

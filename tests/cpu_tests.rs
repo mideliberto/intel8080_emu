@@ -326,7 +326,7 @@ fn test_sub_aux_carry() {
     run_until_halt(&mut cpu);
     
     assert_eq!(cpu.a, 0x0F);
-    assert_eq!(cpu.flags & FLAG_AUX_CARRY, FLAG_AUX_CARRY, "Borrow from bit 4");
+    assert_eq!(cpu.flags & FLAG_AUX_CARRY, 0, "8080 AC is the inverted borrow: 0 when bit 4 borrows");
 }
 
 #[test]
@@ -429,7 +429,7 @@ fn test_dcr_aux_carry() {
     run_until_halt(&mut cpu);
     
     assert_eq!(cpu.b, 0x0F);
-    assert_eq!(cpu.flags & FLAG_AUX_CARRY, FLAG_AUX_CARRY);
+    assert_eq!(cpu.flags & FLAG_AUX_CARRY, 0, "DCR AC = (x & 0F) != 0");
 }
 
 #[test]
@@ -1351,21 +1351,6 @@ fn test_push_pop_psw_preserves_bit1() {
 }
 
 #[test]
-fn test_push_pop_psw_clears_bits_3_5() {
-    let mut cpu = setup_cpu(&[
-        0x31, 0x00, 0xF0,
-        0x3E, 0xFF,
-        0xF5,              // PUSH PSW
-        0xF1,              // POP PSW
-        0x76,
-    ]);
-    run_until_halt(&mut cpu);
-    
-    assert_eq!(cpu.flags & 0b00001000, 0, "Bit 3 always clear");
-    assert_eq!(cpu.flags & 0b00100000, 0, "Bit 5 always clear");
-}
-
-#[test]
 fn test_push_pop_all_pairs() {
     let mut cpu = setup_cpu(&[
         0x31, 0x00, 0xF0,  // LXI SP, F000h
@@ -1515,21 +1500,33 @@ fn test_memory_access_at_ffff() {
 
 #[test]
 fn test_pop_psw_enforces_fixed_bits() {
-    let mut cpu = setup_cpu(&[
-        0x31, 0x00, 0xF0,
-        0xF1,              // POP PSW (stack has garbage)
-        0x76,
-    ]);
-    // Put garbage on stack
-    cpu.write_byte(0xEFFE, 0x00); // Low byte (A)
-    cpu.write_byte(0xEFFF, 0x00); // High byte (
+    // ARCHITECTURE 5.1: flags = (popped & D5) | 02.
+    for (popped, flags) in [(0xFFu8, 0xD7u8), (0x00, 0x02)] {
+        let mut cpu = setup_cpu(&[0xF1, 0xF5]);  // POP PSW; PUSH PSW
+        cpu.sp = 0x8000;
+        cpu.write_byte(0x8000, popped);
+        cpu.write_byte(0x8001, 0xA5);
+        cpu.execute_one();
+        assert_eq!((cpu.a, cpu.flags), (0xA5, flags), "POP PSW of {:02X}", popped);
+        cpu.execute_one();
+        assert_eq!((cpu.sp, cpu.read_byte(0x8000), cpu.read_byte(0x8001)), (0x8000, flags, 0xA5), "PUSH PSW after popping {:02X}", popped);
+    }
+}
 
-    
-    run_until_halt(&mut cpu);
-    
-    assert_eq!(cpu.flags & FLAG_BIT_1, FLAG_BIT_1, "Bit 1 forced set");
-    assert_eq!(cpu.flags & 0b00001000, 0, "Bit 3 forced clear");
-    assert_eq!(cpu.flags & 0b00100000, 0, "Bit 5 forced clear");
+#[test]
+fn test_architecture_5_2_reference_vectors() {
+    // (program, A, B, flags & (AC|CY|Z))
+    let cases: [(&[u8], u8, u8, u8); 4] = [
+        (&[0x3E, 0x10, 0x06, 0x01, 0x90, 0x76], 0x0F, 0x01, 0),                           // SUB B
+        (&[0x06, 0x10, 0x05, 0x76], 0x00, 0x0F, 0),                                       // DCR B (A untouched)
+        (&[0x3E, 0x08, 0x06, 0x00, 0xA0, 0x76], 0x00, 0x00, FLAG_AUX_CARRY | FLAG_ZERO),  // ANA B
+        (&[0x3E, 0x0A, 0x27, 0x76], 0x10, 0x00, FLAG_AUX_CARRY),                          // DAA
+    ];
+    for (prog, a, b, f) in cases {
+        let mut cpu = setup_cpu(prog);
+        run_until_halt(&mut cpu);
+        assert_eq!((cpu.a, cpu.b, cpu.flags & (FLAG_AUX_CARRY | FLAG_CARRY | FLAG_ZERO)), (a, b, f), "{:02X?}", prog);
+    }
 }
 
 // ===========================================
@@ -1663,8 +1660,8 @@ fn test_cmp_h_aux_carry() {
     ]);
     run_until_halt(&mut cpu);
     
-    // 0x00 - 0x01: lower nibble 0 - 1 requires borrow
-    assert_eq!(cpu.flags & FLAG_AUX_CARRY, FLAG_AUX_CARRY, "Borrow from bit 4");
+    // 0x00 - 0x01: lower nibble 0 - 1 borrows, so AC (the inverted borrow) is 0
+    assert_eq!(cpu.flags & FLAG_AUX_CARRY, 0, "Borrow from bit 4 clears AC");
 }
 
 #[test]
@@ -1858,8 +1855,6 @@ fn test_in_out_reach_the_mapped_port() {
 // ===========================================
 // REFERENCE MODEL (ARCHITECTURE 5.2, 5.3)
 // ===========================================
-// AC is not compared for SUB SBB CMP ANA (and immediates), DCR and DAA: tracked
-// bugs, TODO.md Review findings (CPU). The fixes remove the masks.
 
 fn szp(r: u8) -> u8 {
     let mut f = FLAG_BIT_1;
@@ -1896,10 +1891,6 @@ fn ref_alu(op: u8, a: u8, v: u8, cy: bool) -> (u8, u8) {
     }
 }
 
-fn alu_mask(op: u8) -> u8 {
-    if matches!(op, 2 | 3 | 4 | 7) { !FLAG_AUX_CARRY } else { 0xFF }
-}
-
 #[test]
 fn test_alu_against_reference_model() {
     let mut cpu = Intel8080::new();
@@ -1921,8 +1912,7 @@ fn test_alu_against_reference_model() {
                         cpu.flags = rest | cy as u8;
                         cpu.execute_one();
                         let (ea, ef) = ref_alu(op, a, v, cy);
-                        let m = alu_mask(op);
-                        if (cpu.a, cpu.flags & m) != (ea, ef & m) {
+                        if (cpu.a, cpu.flags) != (ea, ef) {
                             panic!("{:02X} A={:02X} v={:02X} CY={}: got A={:02X} F={:02X}, expected A={:02X} F={:02X}",
                                 prog[0], a, v, cy as u8, cpu.a, cpu.flags, ea, ef);
                         }
@@ -1945,8 +1935,7 @@ fn test_alu_reads_every_source_register() {
             cpu.flags = FLAG_BIT_1 | FLAG_CARRY;
             cpu.execute_one();
             let (ea, ef) = ref_alu(op, 0x6B, values[r as usize], true);
-            let m = alu_mask(op);
-            assert_eq!((cpu.a, cpu.flags & m), (ea, ef & m), "opcode {:02X}", 0x80 | op << 3 | r);
+            assert_eq!((cpu.a, cpu.flags), (ea, ef), "opcode {:02X}", 0x80 | op << 3 | r);
         }
     }
 }
@@ -1957,7 +1946,6 @@ fn test_inr_dcr_against_reference_model() {
         for (base, inr) in [(0x04u8, true), (0x05, false)] {
             let mut cpu = setup_cpu(&[base | reg << 3]);
             cpu.set_hl(0x2000);
-            let mask = if inr { 0xFF } else { !FLAG_AUX_CARRY };
             for x in 0..=255u8 {
                 for f0 in [FLAG_BIT_1, 0xD7] {
                     cpu.pc = 0;
@@ -1971,7 +1959,7 @@ fn test_inr_dcr_against_reference_model() {
                                           4 => cpu.h, 5 => cpu.l, 6 => cpu.read_byte(hl), _ => cpu.a };
                     let (r, ac) = if inr { (x.wrapping_add(1), x & 0xF == 0xF) } else { (x.wrapping_sub(1), x & 0xF != 0) };
                     let ef = szp(r) | (f0 & FLAG_CARRY) | bit(ac, FLAG_AUX_CARRY);
-                    assert_eq!((got, cpu.flags & mask), (r, ef & mask), "opcode {:02X} x={:02X} F0={:02X}", base | reg << 3, x, f0);
+                    assert_eq!((got, cpu.flags), (r, ef), "opcode {:02X} x={:02X} F0={:02X}", base | reg << 3, x, f0);
                 }
             }
         }
@@ -1994,8 +1982,8 @@ fn test_daa_against_reference_model() {
                 let ncy = hi > 9 || cy || (hi >= 9 && lo > 9);
                 if ncy { corr |= 0x60; }
                 let r = a.wrapping_add(corr);
-                let ef = szp(r) | bit(ncy, FLAG_CARRY);
-                assert_eq!((cpu.a, cpu.flags & !FLAG_AUX_CARRY), (r, ef), "DAA A={:02X} CY={} AC={}", a, cy as u8, ac as u8);
+                let ef = szp(r) | bit(ncy, FLAG_CARRY) | bit(lo + (corr & 0xF) > 0xF, FLAG_AUX_CARRY);
+                assert_eq!((cpu.a, cpu.flags), (r, ef), "DAA A={:02X} CY={} AC={}", a, cy as u8, ac as u8);
             }
         }
     }
@@ -2045,19 +2033,20 @@ fn test_dad_rotates_and_carry_ops_against_reference_model() {
 }
 
 // ===========================================
-// OPCODE TABLE: CYCLES, LENGTH, FIXED FLAG BITS (ARCHITECTURE 5.1, 5.6)
+// OPCODE TABLE: CYCLES, LENGTH, FIXED FLAG BITS (ARCHITECTURE 5.1, 5.4, 5.6)
 // ===========================================
-// The 12 undocumented opcodes (ARCHITECTURE 5.4) are tested with the alias fix.
 
-/// The 244 documented opcodes from the reference: (opcode, bytes, cycles not taken, cycles taken).
-fn documented_opcodes() -> Vec<(u8, u16, u64, u64)> {
+/// All 256 opcodes: (opcode, bytes, cycles not taken, cycles taken). The 244 documented
+/// ones and the 7 undocumented NOPs come from the reference; the 5 branch aliases from
+/// ARCHITECTURE 5.4.
+fn all_opcodes() -> Vec<(u8, u16, u64, u64)> {
     let txt = std::fs::read_to_string("docs/reference/Complete_Intel_8080_Instruction_Set_Reference.txt").unwrap();
     let mut table: Vec<(u8, u16, u64, u64)> = Vec::new();
     for line in txt.lines().filter(|l| l.starts_with("| 0x")) {
         let cols: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
         let op = u8::from_str_radix(&cols[1][2..], 16).unwrap();
-        if cols[3].ends_with('*') || table.iter().any(|t| t.0 == op) {
-            continue; // undocumented, or listed twice
+        if table.iter().any(|t| t.0 == op) {
+            continue; // listed twice
         }
         let (nt, tk) = match cols[6].split_once('/') {
             Some((x, y)) => (x.parse().unwrap(), y.parse().unwrap()),
@@ -2065,7 +2054,9 @@ fn documented_opcodes() -> Vec<(u8, u16, u64, u64)> {
         };
         table.push((op, cols[5].parse().unwrap(), nt, tk));
     }
-    assert_eq!(table.len(), 244);
+    table.extend([(0xCB, 3, 10, 10), (0xD9, 1, 10, 10), (0xDD, 3, 17, 17), (0xED, 3, 17, 17), (0xFD, 3, 17, 17)]);
+    assert_eq!(table.len(), 256);
+    assert!((0..=255u8).all(|op| table.iter().any(|t| t.0 == op)), "an opcode is missing");
     table
 }
 
@@ -2075,8 +2066,8 @@ fn condition_holds(op: u8, flags: u8) -> bool {
 }
 
 #[test]
-fn test_all_documented_opcodes_cycles_and_length() {
-    for (op, bytes, nt, tk) in documented_opcodes() {
+fn test_all_opcodes_cycles_and_length() {
+    for (op, bytes, nt, tk) in all_opcodes() {
         for flags in [FLAG_BIT_1, 0xD7] {
             let mut cpu = Intel8080::new();
             cpu.load_program(&[op, 0x34, 0x12], 0x1000);
@@ -2089,8 +2080,8 @@ fn test_all_documented_opcodes_cycles_and_length() {
             let conditional = matches!(op & 0xC7, 0xC0 | 0xC2 | 0xC4);
             let taken = conditional && condition_holds(op, flags);
             let (cycles, pc) = match op {
-                0xC3 | 0xCD => (tk, 0x1234),
-                0xC9 => (tk, 0x4321),
+                0xC3 | 0xCB | 0xCD | 0xDD | 0xED | 0xFD => (tk, 0x1234),
+                0xC9 | 0xD9 => (tk, 0x4321),
                 0xE9 => (tk, 0x2000),
                 _ if op & 0xC7 == 0xC7 => (tk, (op & 0x38) as u16),
                 _ if taken && op & 0xC7 == 0xC0 => (tk, 0x4321),
@@ -2104,11 +2095,8 @@ fn test_all_documented_opcodes_cycles_and_length() {
 }
 
 #[test]
-fn test_fixed_flag_bits_after_every_documented_opcode() {
-    for (op, _, _, _) in documented_opcodes() {
-        if op == 0xF1 {
-            continue; // POP PSW keeps bits 3 and 5: tracked bug, TODO.md Review findings
-        }
+fn test_fixed_flag_bits_after_every_opcode() {
+    for (op, _, _, _) in all_opcodes() {
         for f0 in [FLAG_BIT_1, 0xD7] {
             for a in [0x00u8, 0x99, 0xFF] {
                 let mut cpu = Intel8080::new();
@@ -2182,28 +2170,172 @@ fn test_word_accesses_wrap_at_ffff() {
 }
 
 // ===========================================
+// INTERRUPTS AND HLT (ARCHITECTURE 5.7, 5.8)
+// ===========================================
+
+/// `program` at 0100, SP = 8000, INTE = 0, nothing pending.
+fn irq_cpu(program: &[u8]) -> Intel8080 {
+    let mut cpu = Intel8080::new();
+    cpu.load_program(program, 0x0100);
+    cpu.sp = 0x8000;
+    cpu
+}
+
+/// Runs one step and asserts it was the acknowledge of RST n, pushing `pushed`.
+fn assert_acknowledge(cpu: &mut Intel8080, n: u16, pushed: u16) {
+    let c0 = cpu.cycles;
+    let sp = cpu.sp;
+    cpu.execute_one();
+    assert_eq!((cpu.pc, cpu.sp, cpu.read_word(cpu.sp), cpu.cycles - c0), (n * 8, sp.wrapping_sub(2), pushed, 11),
+        "acknowledge: (PC, SP, pushed, cycles)");
+    assert!(!cpu.interrupts_enabled, "acknowledge clears INTE");
+    assert!(!cpu.halted, "acknowledge ends the halt");
+}
+
+#[test]
+fn test_ei_takes_effect_after_the_next_instruction() {
+    // EI; MVI A,01h; NOP
+    let mut cpu = irq_cpu(&[0xFB, 0x3E, 0x01, 0x00]);
+    cpu.interrupt(7);
+    cpu.execute_one();
+    assert_eq!((cpu.pc, cpu.interrupts_enabled), (0x0101, true), "EI runs, no acknowledge yet");
+    cpu.execute_one();
+    assert_eq!((cpu.pc, cpu.a), (0x0103, 0x01), "MVI runs before the acknowledge");
+    assert_acknowledge(&mut cpu, 7, 0x0103);
+
+    // EI; RET: the RET completes first, so an ISR epilogue returns before the next interrupt.
+    let mut cpu = irq_cpu(&[0xFB, 0xC9]);
+    cpu.write_word(0x8000, 0x1234);
+    cpu.interrupt(7);
+    cpu.execute_one();
+    cpu.execute_one();
+    assert_eq!((cpu.pc, cpu.sp), (0x1234, 0x8002), "RET runs before the acknowledge");
+    assert_acknowledge(&mut cpu, 7, 0x1234);
+}
+
+#[test]
+fn test_interrupt_vectors_latch_and_vector_instruction() {
+    for n in 0..8u8 {
+        let mut cpu = irq_cpu(&[0x00]);
+        cpu.load_program(&[0x3E, 0x42], n as u16 * 8);  // MVI A,42h at the vector
+        cpu.pc = 0x0100;
+        cpu.interrupts_enabled = true;
+        cpu.interrupt((n + 1) % 8);
+        cpu.interrupt(n);  // replaces the earlier request
+        assert_acknowledge(&mut cpu, n as u16, 0x0100);
+        assert_ne!(cpu.a, 0x42, "the vector's instruction runs on the following step, not in the acknowledge");
+        cpu.execute_one();
+        assert_eq!(cpu.a, 0x42, "RST {}: the vector's instruction", n);
+        // The acknowledge cleared the latch: re-enabling takes no second interrupt.
+        cpu.interrupts_enabled = true;
+        cpu.execute_one();
+        assert_eq!(cpu.pc, n as u16 * 8 + 3, "RST {}: a second acknowledge from a cleared latch", n);
+    }
+}
+
+#[test]
+fn test_hlt_wakes_on_interrupt() {
+    let mut cpu = irq_cpu(&[0x76]);
+    cpu.interrupts_enabled = true;
+    let c0 = cpu.cycles;
+    cpu.execute_one();
+    assert_eq!((cpu.halted, cpu.pc, cpu.cycles - c0), (true, 0x0101, 7), "HLT: (halted, PC, cycles)");
+    cpu.execute_one();
+    assert!(cpu.halted, "no interrupt, still halted");
+    cpu.interrupt(7);
+    assert_acknowledge(&mut cpu, 7, 0x0101);
+
+    // EI; HLT: the HLT is the instruction after EI, so the interrupt wakes it.
+    let mut cpu = irq_cpu(&[0xFB, 0x76]);
+    cpu.interrupt(2);
+    cpu.execute_one();
+    cpu.execute_one();
+    assert!(cpu.halted, "EI; HLT halts");
+    assert_acknowledge(&mut cpu, 2, 0x0102);
+}
+
+#[test]
+fn test_interrupts_blocked_while_disabled() {
+    // DI, then 10 NOPs with RST 7 pending: no acknowledge.
+    let mut program = vec![0xF3];
+    program.extend([0x00; 10]);
+    let mut cpu = irq_cpu(&program);
+    cpu.interrupts_enabled = true;
+    cpu.execute_one();
+    cpu.interrupt(7);
+    for _ in 0..10 {
+        cpu.execute_one();
+    }
+    assert_eq!((cpu.pc, cpu.sp), (0x010B, 0x8000), "DI blocks the acknowledge");
+
+    // HLT with INTE = 0 stays halted with the interrupt pending.
+    let mut cpu = irq_cpu(&[0x76]);
+    cpu.interrupt(7);
+    cpu.execute_one();
+    for _ in 0..10 {
+        cpu.execute_one();
+    }
+    assert_eq!((cpu.halted, cpu.pc, cpu.sp), (true, 0x0101, 0x8000), "HLT with INTE = 0");
+    cpu.interrupts_enabled = true;
+    assert_acknowledge(&mut cpu, 7, 0x0101);
+}
+
+#[test]
+fn test_halted_step_fetches_nothing() {
+    // HLT; MVI A,01h; HLT
+    let mut cpu = setup_cpu(&[0x76, 0x3E, 0x01, 0x76]);
+    cpu.a = 0x99;
+    cpu.execute_one();
+    let c0 = cpu.cycles;
+    cpu.execute_one();
+    assert_eq!((cpu.a, cpu.pc, cpu.halted, cpu.cycles - c0), (0x99, 0x0001, true, 4), "halted step: (A, PC, halted, cycles)");
+}
+
+#[test]
+fn test_run_returns_on_halt() {
+    // MVI A,01h; HLT; MVI A,02h
+    let mut cpu = setup_cpu(&[0x3E, 0x01, 0x76, 0x3E, 0x02]);
+    cpu.run();
+    assert_eq!((cpu.a, cpu.pc, cpu.halted), (0x01, 0x0003, true));
+}
+
+// ===========================================
 // RESET AND ROM OVERLAY (ARCHITECTURE 3.1, 4)
 // ===========================================
 
 #[test]
 fn test_reset_state() {
     let mut cpu = Intel8080::new();
+    assert_eq!((cpu.pc, cpu.halted, cpu.interrupts_enabled, cpu.rom_overlay_enabled), (0, false, false, true), "new()");
+
     cpu.load_rom(&[0u8; 4096]);
-    cpu.pc = 0x1234;
-    cpu.halted = true;
+    cpu.load_program(&[0x76], 0x1234);  // HLT
+    cpu.execute_one();
+    (cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.flags, cpu.sp) = (1, 2, 3, 4, 5, 6, 7, 0x83, 0x5678);
+    cpu.write_byte(0x2000, 0x99);
     cpu.interrupts_enabled = true;
     cpu.rom_overlay_enabled = false;
+    cpu.interrupt(7);
     cpu.reset();
-    assert_eq!((cpu.pc, cpu.halted, cpu.interrupts_enabled, cpu.rom_overlay_enabled), (0, false, false, true));
+    assert_eq!((cpu.pc, cpu.halted, cpu.interrupts_enabled, cpu.rom_overlay_enabled), (0, false, false, true), "reset()");
+    assert_eq!((cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.flags, cpu.sp), (1, 2, 3, 4, 5, 6, 7, 0x83, 0x5678),
+        "reset() leaves registers, flags and SP alone");
+    assert_eq!(cpu.read_byte(0x2000), 0x99, "reset() leaves RAM alone");
+
+    // reset() cleared the pending interrupt: enabling takes nothing.
+    cpu.load_program(&[0x00], 0x2000);
+    cpu.interrupts_enabled = true;
+    cpu.execute_one();
+    assert_eq!((cpu.pc, cpu.sp), (0x2001, 0x5678), "an interrupt survived reset()");
 }
 
 #[test]
 fn test_overlay_maps_rom_low_until_out_fe() {
     let rom: Vec<u8> = (0..4096u32).map(|i| (i as u8) ^ 0xA5).collect();
     let mut cpu = Intel8080::new();
-    cpu.load_program(&[0x55], 0x0100);
     cpu.load_program(&[0x77], 0x1000);
-    cpu.load_program(&[0xDB, 0xFF, 0xAF, 0xD3, 0xFE, 0xDB, 0xFF], 0x2000); // IN FF; XRA A; OUT FE; IN FF
+    // IN FF; MVI A,FFh; OUT FE; IN FF. FF also proves OUT FE is not a reset.
+    cpu.load_program(&[0xDB, 0xFF, 0x3E, 0xFF, 0xD3, 0xFE, 0xDB, 0xFF], 0x2000);
     cpu.load_rom(&rom);
     cpu.reset();
     for addr in [0x0000u16, 0x0100, 0x0FFF] {
@@ -2216,13 +2348,18 @@ fn test_overlay_maps_rom_low_until_out_fe() {
     cpu.write_byte(0xF123, 0x00);
     assert_eq!(cpu.read_byte(0xF123), rom[0x123], "a write to ROM had an effect");
 
+    // ARCHITECTURE 4 test vector: a write under the overlay goes through to RAM.
+    cpu.write_byte(0x0100, 0x55);
+    assert_eq!(cpu.read_byte(0x0100), rom[0x100], "overlay read after the write");
+
     cpu.pc = 0x2000;
     cpu.execute_one();
     assert_eq!(cpu.a, 0x01, "IN FF with the overlay set");
     cpu.execute_one();
     cpu.execute_one();
+    assert_eq!(cpu.pc, 0x2006, "OUT FE with FF reset the CPU");
     cpu.execute_one();
     assert_eq!(cpu.a, 0x00, "IN FF after OUT FE");
-    assert_eq!(cpu.read_byte(0x0100), 0x55, "0100 is RAM after OUT FE");
+    assert_eq!(cpu.read_byte(0x0100), 0x55, "0100 is RAM after OUT FE, holding the write made under the overlay");
     assert_eq!(cpu.read_byte(0xF100), rom[0x100], "F000-FFFF is still ROM");
 }

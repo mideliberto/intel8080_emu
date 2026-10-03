@@ -13,7 +13,10 @@ impl IoBus {
         }
     }
     
+    /// Panics on FE and FF: the CPU owns them (overlay control and status) and
+    /// would never pass them to a device.
     pub fn map_port(&mut self, port: u8, device: Rc<RefCell<dyn IoDevice>>) {
+        assert!(port < 0xFE, "port {:02X} belongs to the CPU", port);
         self.ports[port as usize] = Some(device);
     }
     

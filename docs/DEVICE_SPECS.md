@@ -38,8 +38,6 @@ Normative. Every I/O port the 8080 can see, at register level. Where the emulato
 
 **The Pi window is 00-6F.** The console is a Pi FIFO device, so the window starts at 00. The Pi serves every port in the window, assigned or not, under READY (section 3). Ports 70-FF are local logic.
 
-Ports 30-32 are part of the unassigned Pi window. The emulator still intercepts them for the interim timer (`src/cpu.rs:758`, `:775`); that device is deleted (emulator change pending, TODO.md).
-
 ---
 
 ## 2. Rules Common to All Ports
@@ -47,7 +45,7 @@ Ports 30-32 are part of the unassigned Pi window. The emulator still intercepts 
 1. **Reading a write-only register** (`IN` 00, 0D, 0E, 10, 11) returns FF and has no side effect.
 2. **Writing a read-only register** (`OUT` 01, 02, 0F, 12, 13) is ignored.
 3. **Unassigned Pi-window ports** (03-07, 14-6F): `IN` returns FF and `OUT` is ignored. The Pi still completes the READY handshake, so the access never hangs.
-4. **Unmapped ports outside the Pi window** (70-FD, `IN` FE, `OUT` FF): `OUT` is ignored. The value `IN` returns is undefined on hardware, because nothing drives the bus. Software MUST NOT depend on it. The emulator returns FF (`src/io/bus.rs:23`). (`IN` FF is the system status port, section 5.)
+4. **Unmapped ports outside the Pi window** (70-FD, `IN` FE, `OUT` FF): `OUT` is ignored. The value `IN` returns is undefined on hardware, because nothing drives the bus. Software MUST NOT depend on it. The emulator returns FF (`src/io/bus.rs:26`). (`IN` FF is the system status port, section 5.)
 5. **Reads with side effects:** only `IN 01` (pops the console FIFO), `IN 0B` (advances the storage address) and `IN 13` in the AVAIL state (pops the mailbox response). Every other `IN` has no side effect and can be repeated. The monitor's `I` command triggers the same side effects.
 6. **Undefined values** written to a command or control register (0C, 0E, 11) change nothing, with one exception: every write to 0E, whatever the value, clears the filename buffer (section 7).
 7. **No device raises an interrupt.** Hardware v1 has no interrupt source. The interrupt input and its future tick source are in `ARCHITECTURE.md` (Interrupts).
@@ -154,7 +152,7 @@ This is local glue logic, not a Pi port, so it adds no READY wait. The circuit i
 | FE | W | Any value: disable the ROM overlay |
 | FF | R | Bit 0 = overlay flip-flop (1 = enabled). Bits 1-7 are undefined and software MUST mask them. The emulator returns 0 in bits 1-7 |
 
-- **OUT FE** with any value 00-FF clears the overlay flip-flop. Writing it again has no further effect. The emulator acts only on 00 and treats FF as a cold reset (`src/cpu.rs:760-766`; emulator change pending, TODO.md).
+- **OUT FE** with any value 00-FF clears the overlay flip-flop. Writing it again has no further effect.
 - **Re-enabling:** only RESET sets the flip-flop. Software cannot re-enable it.
 - There is **no halt command** (use `HLT`) and **no software reset** (use the reset line).
 - **IN FE and OUT FF** are unmapped (rule 2.4).

@@ -4,3 +4,4 @@
 rom/*.lst
 rom/*.p
 .DS_Store
+/tests/data/exercisers
