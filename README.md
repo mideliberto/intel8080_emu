@@ -94,7 +94,7 @@ make
 
 ## ROM Overlay Boot
 
-S-100 style boot: RESET starts the CPU at 0x0000 with the ROM at 0xF000 mirrored there for reads. The ROM jumps into F000+, then any `OUT 0xFE` turns the mirror off and low memory becomes RAM. On hardware it is one 74LS74. Detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+S-100 style boot: RESET starts the CPU at 0x0000 with the ROM at 0xF000 mirrored there for reads. The ROM jumps into F000+, then any `OUT 0xFE` turns the mirror off and low memory becomes RAM. On hardware it is one 74HCT74 half. Detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Project Structure
 
@@ -135,9 +135,11 @@ docs/
 ├── DEVICE_SPECS.md          # Normative: port protocols, READY
 ├── MONITOR_SPEC.md          # Normative: monitor commands, HEX loader
 ├── QUICK_REFERENCE.md       # Cheat sheet
+├── HARDWARE_BUILD.md         # Build plan: BOM, bring-up, Pi service
 ├── IMPLEMENTATION_ROADMAP.md
 ├── COLLABORATION_LOG.md
 ├── reference/               # 8080 instruction set, I/O references
+│   └── 8080_HARDWARE.md     # 8080A/8224/8228 pins, levels, bus timing
 └── archive/                 # Superseded docs, kept for history
 
 tests/
@@ -176,6 +178,8 @@ Normative specs (code that differs from them is tracked in `TODO.md`):
 
 Working docs:
 - [`docs/QUICK_REFERENCE.md`](docs/QUICK_REFERENCE.md) — Cheat sheet
+- [`docs/HARDWARE_BUILD.md`](docs/HARDWARE_BUILD.md) — Hardware build plan: BOM, bring-up, sourcing, Pi service (non-normative)
+- [`docs/reference/8080_HARDWARE.md`](docs/reference/8080_HARDWARE.md) — 8080A, 8224, 8228 hardware reference (MCS-80 User's Manual)
 - [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) — Phases and plans
 - [`docs/COLLABORATION_LOG.md`](docs/COLLABORATION_LOG.md) — History, decisions, lessons
 - [`TODO.md`](TODO.md) — Task list

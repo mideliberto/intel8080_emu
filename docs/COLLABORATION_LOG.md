@@ -63,6 +63,21 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-02: Hardware Alignment: Buildable, One Hard Fix
+**Decision:** Accept the hardware-alignment pass. The changes that matter:
+- The WAIT flip-flop is set from the 8224 STSTB, AND NOT RESET, AND D4/D6, AND the port window, not from SYNC.
+- REQ = WAIT-FF Q AND the 8080 WAIT pin, so the Pi only sees REQ in T_W, after OUT data is valid.
+- DIR = 8228 /I/OR, which deletes the status latch.
+- After ACK, the Pi reads ACK back and blanks for at least 500 ns.
+- 20 Pi GPIOs (A7 is redundant). Glue is an ATF22V10C GAL plus 74HCT74/14/08/125.
+- Parts: AT28C64B ROM and 2x AS6C62256 RAM. Pololu 12 V boost, ICL7660 and a VBB clamp, with the Pi on its own supply. DS1813 reset supervisor. One 2-layer PCB.
+- Pi side: Pi 4B busy-polling /dev/gpiomem, console over TCP with a 2 MiB output buffer. On RESET the Pi abandons the in-flight request at assertion and rebuilds devices at release. Device reset means rebuilding the IoBus.
+- Port-trace line format: `IN pp vv` / `OUT pp vv` / `RESET`. No hardware single-step in v1.
+
+**Problem:** SYNC has max-only delays, so it isn't a valid-status window. A memory write with D4/D6 set, to an address whose low byte is 00-6F, could phantom-set WAIT. REQ rose about 460 ns before OUT data, so the Pi would have latched status byte 10h.
+**Evidence:** Four of five specialists found the SYNC hazard independently, and the new MCS-80 reference (docs/reference/8080_HARDWARE.md) found it separately. Datasheet budgets: RDYIN is low by STSTB+75..130 ns against the 8224's 167 ns deadline.
+**Mantra:** Rejected: a status latch, a DIR flip-flop, an RP2040 front end, hardware single-step, bus buffers, and a 1 µs software delay. The fix removes parts.
+
 ### 2026-10-02: Emulator Shape Follows the Hardware
 **Decision:**
 - `reset()` models only the RESET pin: PC, INTE, halt, overlay and the pending interrupt. `new()` calls `reset()`. Test harnesses fill RAM with junk.
@@ -458,6 +473,13 @@ None. All closed 2026-10-02. The spec is the three normative docs: `docs/ARCHITE
 ---
 
 ## Recent Sessions
+
+### 2026-10-02 (part 4): Hardware Alignment and a Real CPU Reference
+- An 11-agent hardware-alignment workflow (CPU timing, Pi interface, memory and glue, power and build, software fit), with each specialist adversarially verified. Then 19 decisions, all accepted.
+- Wrote docs/reference/8080_HARDWARE.md from the 1975 MCS-80 User's Manual. Every number was read from the page images, and the doc was independently verified. It caught the same SYNC hazard and OUT-data race the workflow found.
+- What bit us: the spec's WAIT-set was wrong by datasheet. It's caught on paper, before any board exists.
+- New docs/HARDWARE_BUILD.md: BOM (about 20 ICs) and a 9-step bring-up plan.
+- Next: code. Start with the scratch prototypes (strict harness, exhaustive CPU tables, exerciser shim, CPU refactor diff).
 
 ### 2026-10-02 (part 3): Code Review, Exercisers, Debugger Pulled Forward
 - A 16-agent review (CPU, then ROM and devices), with every finding adversarially verified. Ran `cargo-mutants` for real and the four 8080 exercisers under a CP/M shim.

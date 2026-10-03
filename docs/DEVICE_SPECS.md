@@ -4,7 +4,7 @@ Normative. Every I/O port the 8080 can see, at register level. Where the emulato
 
 **Scope (one fact, one home):**
 - This file covers the port map, what every register returns and does, and the READY contract as software sees it.
-- `ARCHITECTURE.md` covers port-range ownership, the memory map, reset and boot, CPU behavior (including interrupts), the circuits (WAIT flip-flop and handshake, Pi data path, overlay 74LS74, decode, reset wiring, level translation, clock) and host-side emulator conveniences, including the host key map.
+- `ARCHITECTURE.md` covers port-range ownership, the memory map, reset and boot, CPU behavior (including interrupts), the circuits (WAIT flip-flop and handshake, Pi data path, overlay 74HCT74, decode, reset wiring, level translation, clock, power) and host-side emulator conveniences, including the host key map.
 - `MONITOR_SPEC.md` covers monitor commands, messages, line input and the HEX loader. This file names a ROM routine only where it is the reference client of a protocol.
 
 **Conventions:** Port numbers and values are hex. "R" means `IN` and "W" means `OUT`. "Ignored" means no state changes. All decisions in this file were made by Mike on or before 2026-10-02 and are binding.
@@ -53,8 +53,8 @@ Ports 30-32 are part of the unassigned Pi window. The emulator still intercepts 
 7. **No device raises an interrupt.** Hardware v1 has no interrupt source. The interrupt input and its future tick source are in `ARCHITECTURE.md` (Interrupts).
 8. **RESET** (power-on or the reset button) returns the whole machine to its power-on state, RAM excepted:
    - It clears the WAIT flip-flop, so READY is high and no Pi request is pending, and it sets the overlay flip-flop (section 5). Circuit: `ARCHITECTURE.md` (Reset).
-   - The Pi sees RESET on a GPIO input. It drops any request in flight without raising ACK for it. The next request it serves is a new access.
-   - Every Pi device returns to its power-on state: storage unmounted (flushed durably and closed, address 000000), filename buffer empty, mount status 01, mailbox IDLE with the command buffer and response cleared and any running request aborted, console input FIFO empty.
+   - The Pi sees RESET on an edge-latched GPIO input. It drops any request in flight without raising ACK, and returns devices to their power-on state when RESET is released. The next request it serves is a new access.
+   - Every Pi device returns to its power-on state: storage unmounted (flushed durably and closed, address 000000), filename buffer empty, mount status 01, mailbox IDLE with the command buffer and response cleared and any running request aborted, console input FIFO empty, console output buffer empty.
    - An access cut off by RESET may or may not have taken effect. Its device state is then reset as above.
    - No ROM code is involved.
    - **Emulator:** RESET happens only at process start, when every device is created in its power-on state. Any future host-side reset (Phase 10) MUST also return every device to its power-on state.
@@ -73,14 +73,26 @@ The circuit is in `ARCHITECTURE.md` (Pi Window and READY). This section is the c
 3. **Pi obligations:**
    - Release an access only after the operation has completed.
    - Sense pending requests by level, so that an access already waiting when the device service starts is still serviced.
-   - On RESET, drop any request in flight without raising ACK (rule 2.8).
+   - Sample port, direction and OUT data from a GPIO read in which REQ is high (`ARCHITECTURE.md`, Pi Window and READY).
+   - After raising ACK, read it back high and wait at least 500 ns before treating REQ as a new access. Never wait for REQ to go low.
+   - Separate dependent GPIO steps (drive data, LATCH, ACK) with a read-back of the GPIO level register.
+   - On RESET, drop any request in flight without raising ACK. Check for a latched RESET immediately before every ACK (rule 2.8; `ARCHITECTURE.md`, Reset).
    - Do only bounded local work under READY: console byte transfer, storage address, data and control operations (including fsync and filling a past-EOF gap), and mount commands (open, create, fsync or close a local file). "Bounded" means the operation always finishes. It does not mean it is fast: an fsync, or a write at FFFFFF in an empty file, can hold READY for seconds.
    - Never wait on the network, an external service or user input while holding READY. Unbounded work (anything behind the mailbox) runs in the background and reports through mailbox status (section 8).
-4. **No timeout.** The 8080 waits as long as the access is pending. A dead Pi stalls the 8080 until RESET. Until the Pi's device service is running, the first Pi-window access stalls and then completes once the Pi services it. At boot that access is the banner's first `OUT 00`. The stalled access MUST NOT complete with a floating bus (`ARCHITECTURE.md`, Pi Window and READY, rule 3 and Bring-up). No ROM code handles the stall.
-5. **Timing:** on hardware every Pi-window access adds at least one wait state, and its length depends on the Pi. Software MUST NOT depend on how long an `IN` or `OUT` takes. The emulator models no wait states: `IN` and `OUT` take 10 T-states, and device effects are applied within the instruction.
+4. **No timeout.** The 8080 waits as long as the access is pending. A dead Pi stalls the 8080 until RESET. Until the Pi's device service is running, the first Pi-window access stalls and then completes once the Pi services it. At boot that access is the banner's first `OUT 00`. The stalled access MUST NOT complete with a floating bus (`ARCHITECTURE.md`, Pi Window and READY, rule 3 and Power and boot independence). No ROM code handles the stall.
+5. **Timing:** on hardware every Pi-window access costs 10 T-states plus at least one wait state. T3 starts 0.4-0.9 us after the Pi's ACK, and the Pi's service time comes on top (on the order of microseconds on a busy-polling Pi 4, est). Software MUST NOT depend on how long an `IN` or `OUT` takes. The emulator models no wait states: `IN` and `OUT` take 10 T-states, and device effects are applied within the instruction.
 6. **Hardware is the target.** No protocol in this file may rely on emulator-only timing or behavior.
 
-Hardware conformance test: back-to-back `OUT 0Bh` and `IN 0Bh` loops, with the Pi under load, lose and duplicate no bytes.
+Hardware conformance test (monitor only, with stress-ng loading the Pi's other cores):
+
+1. `X CONF.BIN`
+2. `W F000 0 1000`
+3. `I 0A`, `I 09`, `I 08` print 00 10 00.
+4. `L 0 2000 1000`
+5. `I 0A`, `I 09`, `I 08` print 00 10 00.
+6. `C F000 FFFF 2000` prints nothing.
+
+A lost or repeated `OUT 0B` or `IN 0B` moves the final address. Stale OUT data, such as the 10h status byte, shows up as a C mismatch.
 
 ---
 
@@ -108,13 +120,13 @@ The console is a Pi FIFO device behind READY. The terminal connects to the Pi; t
 
 ### Behavior
 
-- **OUT 00:** the byte goes to the terminal unchanged: 8-bit transparent, no translation, no CR/LF insertion. `OUT 00` never waits on the terminal. When no terminal is attached, or the Pi's output buffer is full, the byte is discarded. The emulator re-encodes bytes 80-FF as UTF-8 (`src/io/devices/console.rs:68`; emulator change pending, TODO.md).
+- **OUT 00:** the byte goes to the terminal unchanged: 8-bit transparent, no translation, no CR/LF insertion. `OUT 00` never waits on the terminal. When no terminal is attached, or the Pi's output buffer is full, the byte is discarded. The Pi's output buffer holds at least 2 MiB, more than any single monitor command prints (`C 0000 FFFF` prints up to 1,114,112 bytes). Bytes are discarded only when it is full. The emulator re-encodes bytes 80-FF as UTF-8 (`src/io/devices/console.rs:68`; emulator change pending, TODO.md).
 - **IN 01 with input waiting** returns the oldest byte and removes it from the FIFO. A byte is "waiting" from the moment it reaches the Pi. Arrival never depends on whether the 8080 has read `IN 02`.
 - **IN 01 with the FIFO empty** returns 00 and changes nothing.
 - **Input bytes** are delivered in arrival order and unchanged, including control characters (00-1F, 7F) and bytes 80-FF. The device delivers every byte the terminal sends.
 - **No echo:** the device never echoes input. 8080 software does all echoing (`MONITOR_SPEC.md`, Line Input (READ_LINE)).
 - **Input FIFO:** MUST NOT drop bytes. Its capacity is a Pi implementation detail. When the FIFO is full, the Pi stops the terminal with out-of-band flow control: RTS/CTS, or the transport's own (USB, TCP). In-band XON/XOFF is forbidden, because 11 and 13 are data.
-- **Power-on and RESET:** the FIFO is empty and status reads 02. Bytes typed before a RESET are discarded, so the ROM needs no input drain at boot.
+- **Power-on and RESET:** the input FIFO is empty, status reads 02, and console output not yet sent to the terminal is discarded. Bytes received before RESET is released are discarded, so the ROM needs no input drain at boot.
 - **Emulator:** host keys become FIFO bytes through `ARCHITECTURE.md` (Host Key Map), the only home for host-reserved keys.
 
 ### Reference client
@@ -429,4 +441,4 @@ Superseded on 2026-10-02 (see COLLABORATION_LOG Key Decisions):
 | Console 00-02 | `src/io/devices/console.rs` (crossterm); `src/io/devices/test_console.rs` (test harness, same protocol) | Pi, with the terminal connected to the Pi |
 | Storage 08-0C, Mount 0D-0F | `src/io/devices/storage.rs`, `src/io/devices/storage_mount.rs` (std::fs) | Pi: the same Rust code, files on its SD card |
 | Service Mailbox 10-13 | Rust `IoDevice` (Phase 6) | Pi: the same Rust code behind GPIO |
-| System control FE-FF | `src/cpu.rs` | 74LS74 and decode (`ARCHITECTURE.md`, Overlay Glue) |
+| System control FE-FF | `src/cpu.rs` | 74HCT74 and decode (`ARCHITECTURE.md`, Overlay Glue) |

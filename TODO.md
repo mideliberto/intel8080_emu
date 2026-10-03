@@ -11,7 +11,8 @@
 - [x] Close open decisions; solidify spec into 3 normative docs (2026-10-02)
 - [ ] Code review: emulator + ROM against the new specs
 - [ ] Spec the debugger (ARCHITECTURE Host-Side Conveniences), then build it before Phase 5: core + watchpoints + I/O break/trace + trace ring + ROM symbols; line prompt + script mode
-- [ ] Hardware-alignment pass: verify ARCHITECTURE hardware section (WAIT-set timing vs 8080A/8224/8228 datasheets, GPIO count, IN latch)
+- [x] Hardware-alignment pass (2026-10-02): design buildable with one hard fix (WAIT set via STSTB, not SYNC). Spec edits in ARCHITECTURE section 6 and DEVICE_SPECS; BOM and bring-up in docs/HARDWARE_BUILD.md
+- [x] 8080A/8224/8228 hardware reference: docs/reference/8080_HARDWARE.md
 
 ## Next (Phase 5 - Intel HEX Loader), build order
 Budget: ~250 bytes of the 1585 free (a working sketch came in at 176).
@@ -35,13 +36,17 @@ Emulator:
 - [ ] Power-on: `reset()` = RESET pin only (PC, INTE, halted, overlay, pending interrupt); `new()` calls `reset()`; no zeroed registers or preset SP; the harness fills RAM with junk (ARCHITECTURE 3.1)
 - [ ] Merge Storage + StorageMount into one device serving 08-0F (drop the `Rc<RefCell<Storage>>`)
 - [ ] One Console (input VecDeque + output buffer, no crossterm); host polling, key map and Ctrl-C/E in main.rs; delete `test_console.rs`
-- [ ] `scripts/fetch_exercisers.sh` (pinned SHA-256) + `#[ignore]` `tests/exerciser.rs` CP/M shim. Goal: 8080EXM all PASS
+- [ ] `scripts/fetch_exercisers.sh` (pinned SHA-256) + `#[ignore]` `tests/exerciser.rs`. Write the CP/M shim in 8080 assembly, not Rust hooks, so the same bytes run on hardware: 0005 JMP to a print routine at <= EEFF; 0000 JMP to WARM (not HLT, which hangs hardware with no INT source). Goal: 8080EXM all PASS; the exercisers are also the chip-acceptance test
+- [ ] Console: 2 MiB output cap, discard on full; clear output on reset
+- [ ] Device reset = rebuild the IoBus and devices from config (no `reset()` on IoDevice, no Send). Storage `Drop` does `File::sync_all`; flush uses `sync_all` (`File::flush` is a no-op, `storage.rs:61/100`)
+- [ ] One port-mapping function shared by main.rs and a future Pi daemon binary (one crate, two binaries)
+- [ ] Strict monitor harness stores transcripts as data files, so the same files drive hardware conformance over the Pi TCP console
 - [ ] Port 0xFE: any write disables overlay; drop 0xFF cold reset (`src/cpu.rs:758-769`). Overlay writes go through to RAM (`src/cpu.rs:212`)
 - [ ] Storage: every IN/OUT 0B advances the address (mounted or not; `storage.rs:72-96`); any host I/O error unmounts; flush/unmount fsync; host file > 16 MB fails mount with 01. Already true, needs tests only: power-on 0C=82, storage dir created at startup (`main.rs:35`)
 - [ ] Mount: names > 12 chars -> 02 (`storage_mount.rs:95` truncates); failed mount unmounts previous; every OUT 0E (any value) clears the name buffer; uppercase before validate/open; 0F reads 01 at power-on
 ROM:
 - [ ] G pushes WARM (`WARM: LXI SP,STACK_TOP` before MAIN_LOOP) before PCHL (`rom/monitor.asm:876-885`)
-- [ ] CONOUT = `OUT 00h / RET` (drop the TX poll, `rom/monitor.asm:175-183`)
+- [ ] CONOUT = `OUT 00h / RET` (drop the TX poll, `rom/monitor.asm:175-183`). Must land before the board exists: until then the first Pi access after reset is IN 02, not OUT 00
 - [ ] X: `OUT 0Eh,03h` before the name; 02 -> "Invalid filename", other nonzero -> "Mount failed"; drop "File not found" (`:1274-1277`, `:1496`)
 - [ ] L/W: read 0C after transfer (W after flush); bit 0 = 0 -> "Storage error"
 - [ ] Argument strictness per MONITOR_SPEC (Invalid range for end<start and count 0 incl. M; digit limits; byte args > FF; G garbage)
@@ -144,5 +149,7 @@ Method: a 16-agent review workflow (CPU first, then ROM and devices) with every 
 - [ ] Phase 9: Claude (mailbox `ASK`, Q command)
 - [ ] Phase 10: Debugger (breakpoints, single-step, R)
 - [ ] 8253 timer, TIMER_ISR, RST 7 vector: when something needs a periodic interrupt
-- [ ] Hardware prototype (Pi + 8080A @ 2 MHz, READY wait-state on Pi window 0x00-0x6F, Pi sees RESET, INT via 8228 RST 7 unused in v1)
+- [ ] Hardware prototype: see docs/HARDWARE_BUILD.md (BOM, 9-step bring-up)
+- [ ] Pi daemon binary (busy-poll /dev/gpiomem, TCP console, shared device code)
+- [ ] Pi-assisted hardware single-step (needs A8-A15 on the Pi; not in v1)
 - [ ] Interrupt tick source (Pi GPIO vs 8254) when something needs a periodic interrupt

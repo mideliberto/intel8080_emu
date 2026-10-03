@@ -37,6 +37,7 @@
 - `docs/DEVICE_SPECS.md` - spec: every I/O port protocol
 - `docs/MONITOR_SPEC.md` - spec: monitor commands, line input, messages, HEX loader
 - `docs/QUICK_REFERENCE.md` - cheat sheet pointing at the three specs
+- `docs/HARDWARE_BUILD.md` - hardware build plan (non-normative): decisions, BOM, bring-up, sourcing, Pi service
 - `docs/reference/` - 8080 instruction set (`Complete_Intel_8080_Instruction_Set_Reference.txt`) and hardware (`8080_HARDWARE.md`: 8080A/8224/8228 pins, electrical, timing, cited to the MCS-80 manual)
 - `rom/monitor.asm` - monitor ROM source
 

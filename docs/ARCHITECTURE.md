@@ -233,12 +233,13 @@ The emulator CPU has one interrupt input, `interrupt(rst)`, callable from the ho
 
 ## 6. Hardware Interface
 
-The circuits the hardware build must contain. The software-visible behavior of every port is in `DEVICE_SPECS.md`. The hardware build itself is Someday; this section is the contract it must meet. Timing marked **[verify]** is checked against the 8080A, 8224 and 8228 datasheets in the hardware-alignment pass (TODO.md).
+The circuits the hardware build must contain. The software-visible behavior of every port is in `DEVICE_SPECS.md`. The hardware build itself is Someday; this section is the contract it must meet. Timing in this section was checked in the 2026-10 hardware-alignment pass against the MCS-80 User's Manual 98-153D (Oct 1977: 8080A p.6-3..6-5, 8224 p.6-21..6-25, 8228 p.6-32..6-36) and the TI/Nexperia 74HCT and 74LVC datasheets. Figures are datasheet worst case at tCY = 488.28 ns, with t = 0 at phi1 rising in T1, unless marked (est). Items marked **[bench]** can only be closed by measurement on the built board. Pins, levels and cycle timing of the 8080A, 8224 and 8228: `reference/8080_HARDWARE.md` (98-153B, Sep 1975 edition; its page numbers differ from 98-153D).
 
 ### 6.1 Clock and CPU Support
 
-- CPU: 8080A at 2.048 MHz (18.432 MHz / 9 from the 8224; one T-state ≈ 488 ns, within the 8080A's 480 ns minimum tCY). Nominally "2 MHz". All timing analysis uses 488 ns.
-- Clock and reset: 8224 with an 18.432 MHz crystal.
+- CPU: 8080A at 2.048 MHz (18.432 MHz / 9 from the 8224). tCY = 488.28 ns, 1.7% above the 8080A minimum of 480 ns. Nominally "2 MHz". All timing analysis uses 488.28 ns, which is exactly where Intel characterizes the 8224 (p.6-25). At that tCY every phi1/phi2 width and delay meets the 8080A minimums with at least 16 ns of margin.
+- Clock and reset: 8224 with an 18.432 MHz series-resonant fundamental-mode crystal (Intel 8801 equivalent). Fit 510 ohm from XTAL1 to GND and from XTAL2 to GND (8224 datasheet note 1, required at 18 MHz). TANK and OSC are unconnected. There is no trim capacitor (3.2 req. 6). phi1/phi2 are not short-circuit protected.
+- The clock runs continuously. The 8080A is dynamic, so tCY must not exceed 2.0 us. Waits (READY) and RESET may last indefinitely only because the clock keeps running through them. Any hardware single-step uses READY, never the clock.
 - System controller: 8228 (MEMR, MEMW, I/OR, I/OW strobes; INTA handling in 6.7).
 - The ROM stays timing-independent (3.2, requirement 6).
 
@@ -246,13 +247,19 @@ The circuits the hardware build must contain. The software-visible behavior of e
 
 ```
 OVL     = overlay flip-flop Q (6.5)
-ROM_OE  = MEMR AND ( A15..A12 = 1111  OR  ( OVL AND A15..A12 = 0000 ) )
-RAM_OE  = MEMR AND NOT ROM_OE
+ROM_SEL = A15..A12 = 1111  OR  ( OVL AND A15..A12 = 0000 )   ; address only
+ROM_OE  = MEMR AND ROM_SEL
+RAM_OE  = MEMR AND NOT ROM_SEL
 RAM_WE  = MEMW
 ```
 
-- RAM_WE has no address term. A write to F000-FFFF goes to RAM if RAM is fitted there and to no device otherwise. Either way it has no visible effect, because reads of F000-FFFF always select ROM (section 4).
-- RAM is static and covers at least 0000-EFFF. It MUST keep its contents with no CPU activity for unlimited time (READY waits, RESET held), so DRAM that needs CPU-driven refresh is excluded.
+- OVL changes only during an I/O write (OUT FE) or RESET, never while MEMR is active.
+- RAM covers all of 0000-FFFF. RAM_WE has no address term, so a write to F000-FFFF lands in the RAM under the ROM and is never read back: reads of F000-FFFF always select ROM (section 4).
+- RAM is static. It MUST keep its contents with no CPU activity for unlimited time (READY waits, RESET held), so DRAM that needs CPU-driven refresh is excluded.
+- **Pins.** Tie ROM /CE low and ROM /WE to VCC, so the 8080 can never write the ROM. ROM_OE drives only ROM /OE. An 8 KB ROM part has A12 tied low. RAM /CE comes from address bits only. RAM_OE drives RAM /OE and RAM_WE drives RAM /WE. No signal gated by MEMR may drive a /CE.
+- **Read timing** (no memory wait states). Address is valid by 329 ns. MEMR arrives by 787 ns (DBIN 757 + 8228 tRR 30). Data must be on the system bus by 905 ns: tDS2 is 150 ns before phi2 of T3, less 8228 tRD 30. That gives 118 ns from MEMR to data and 576 ns from address to data. Memory /OE access plus the MEMR gate MUST fit in 118 ns. Timing a /CE access from MEMR misses the deadline (AT28C64B tCE 150).
+- **Logic levels.** The 8228 drives the system data bus and MEMR/MEMW/I/OR/I/OW at TTL levels (VOH 2.4 V min at -1 mA, VOL 0.45 V). Every input on those nets MUST accept VIH <= 2.4 V: 74HCT/ACT, ATF22V10C, AT28C64B, 74LVC at 3.3 V, AS6C62256. Parts with CMOS thresholds MUST NOT be on those nets: 74HC, and AS6C1008/AS6C4008 (VIH 0.7 VCC). 8080A inputs need VIH 3.3 V. They are driven only by the 8224 (READY, RESET), the 8228 CPU-side D0-D7, and HCT outputs.
+- **Bus loading.** Every load on the 8080A address pins and CPU-side data pins is CMOS, because 8080A IOL is 1.9 mA. There are no address or data buffers beyond the 8228. The status taps (D4, D6) are on the CPU side of the 8228.
 
 ### 6.3 Port Address Decode
 
@@ -264,62 +271,86 @@ RAM_WE  = MEMW
 
 Port assignments and the values returned by unassigned and unmapped ports are in `DEVICE_SPECS.md` (Port Map, Rules Common to All Ports).
 
+During IN and OUT the 8080A drives the port number on both A0-A7 and A8-A15 (MCS-80 p.5-7). Glue MAY decode either copy. The Pi reads A0-A6. A7 is always 0 inside the window.
+
 **Emulator:** the CPU model handles `OUT 0xFE` and `IN 0xFF` itself and never passes them to the IoBus. Every other access goes through the IoBus. `IoBus::map_port` MUST panic when given 0xFE or 0xFF. Test: mapping a device to 0xFE panics. (Today `map_port` accepts them silently, `io/bus.rs:16-18`; emulator change pending, TODO.md.)
 
 ### 6.4 Pi Window and READY
 
 Every Pi-window access holds READY low until the Pi releases it. The software contract that results (one instruction is one access, no byte-level busy polling, no timeout) is in `DEVICE_SPECS.md` (READY Contract).
 
-**WAIT flip-flop.** Its Q output is the Pi's REQ line; its inverted output drives the 8224's RDYIN (READY low while Q = 1).
+**WAIT flip-flop.** One 74HCT74 half; the other half is the overlay flip-flop (6.5). Its /Q drives the 8224 RDYIN, so READY is low while Q = 1. Q ANDed with the 8080A WAIT output is the Pi's REQ.
 
-1. **Set** asynchronously during T1 when SYNC is high, the status on the CPU-side data bus shows INP (D6) or OUT (D4), and A0-A7 decode into 0x00-0x6F. RESET dominates the set condition. The set path (status valid during SYNC, decode, flip-flop, 8224 RDYIN) MUST meet the 8224's RDYIN setup time for the clock edge on which READY is sampled in T2. **[verify]** The flip-flop MUST NOT be set from the 8228's I/OR or I/OW strobes, which arrive too late.
-2. **Cleared** by the rising edge of ACK (clocked, D tied low; not level-sensitive), or asynchronously by RESET. A held ACK level can never block the next set. Any REQ high the Pi reads after its ACK rising edge is a new access.
-3. **Every Pi-window cycle inserts at least one T_W**, whatever level ACK is at. The 8080 leaves T_W only after an ACK edge or RESET.
-4. **No timeout.** A dead or absent Pi stalls the 8080 in T_W until RESET.
+1. **Set** asynchronously (PRE) while all of these hold: 8224 STSTB is low, RESET is inactive, the CPU-side status shows INP (D6) or OUT (D4), and the port decodes into 0x00-0x6F. Status and address are valid from 76 ns before STSTB falls (tDSS min 296 - tDD max 220) until phi2 of T2. SYNC alone MUST NOT qualify the set. SYNC has only maximum delays (tDC <= 120 ns, no minimum) against tDD <= 220 and tDA <= 200, and it falls up to 120 ns after phi2 of T2 while the bus changes to write data. A SYNC-gated set can therefore fire on a memory cycle. SYNC MAY be added as an extra term. The RESET term uses the same inverted RESET that drives the flip-flop's /CLR, for two reasons: the 8224 drives STSTB low during reset, and PRE and CLR low together give Q = /Q = 1. RDYIN MUST be low within 167 ns of STSTB falling (8224 tDRS = -167 ns) and stays low past STSTB + 217 ns (tDRH). STSTB is at least 40 ns wide, against a flip-flop PRE minimum of 20-24 ns. **[bench]** The STSTB width at PRE, after the gate path. The flip-flop MUST NOT be set from I/OR or I/OW. I/OW starts only in T_W.
+2. **Cleared** by the rising edge of ACK (clocked, D tied low, not level-sensitive) or asynchronously by RESET. A held ACK level can never block the next set. ACK reaches CLK through two 74HCT14 Schmitt stages. REQ falls within about 100 ns of the ACK edge (est). After raising ACK, the Pi reads ACK back high, then waits at least 500 ns before it treats REQ as a new access, then lowers ACK. The Pi MUST NOT wait for REQ to go low: the next Pi-window REQ can follow about 5 us later, and a preempted Pi would miss the low and deadlock. A longer wait is always safe, because REQ stays high until ACK.
+3. **Every Pi-window cycle inserts at least one T_W**, whatever level ACK is at. REQ is gated by the 8080A WAIT output, so the Pi cannot see or ACK a request before T_W. The 8080 leaves T_W only after an ACK edge or RESET. T3 starts 0.4-0.9 us after the ACK edge (8224 resynchronization). Every Pi-window IN or OUT costs 10 T-states plus N >= 1 T_W.
+4. **No timeout.** A dead or absent Pi stalls the 8080 in T_W until RESET. An indefinite wait is allowed (MCS-80 p.2-5).
 
-**Direction.** A status latch clocked by STSTB holds the INP and OUT bits for the cycle. They give the Pi its DIR input and steer the data path.
+**When the Pi may sample.** REQ = WAIT flip-flop Q AND the 8080A WAIT output (pin 24). REQ rises only in T_W (>= 976 ns). By then A0-A6, DIR and OUT data have been valid at the Pi for at least about 90 ns. OUT data reaches the Pi by 883 ns: tDD 220, plus 8228 tWD 40, plus LVC245 6.3. Any GPIO read with REQ high therefore has valid port, direction and data. Q alone rises in T1, up to about 460 ns before OUT data is valid, while the 8228 system bus still carries the status byte (10h). Q MUST NOT reach the Pi ungated.
 
-**OUT cycle.** A0-A7 and D0-D7 stay valid through T_W. The OUT data byte reaches the Pi through a 74LVC245 down-translator that is enabled only during a Pi-window OUT cycle. The Pi samples address and data, applies the write, then raises ACK.
+**Direction.** DIR is the 8228 /I/OR, passed to the Pi through a 74LVC245A; low means IN. On an IN cycle /I/OR is low from 787 ns at the latest through T_W and T3. On an OUT cycle it is high throughout. DIR is therefore valid whenever REQ is high. There is no status latch.
 
-**IN cycle.** The Pi computes the byte, drives it on its D0-D7 GPIOs into a 74HCT374 IN latch, clocks the latch with a rising edge on LATCH, returns its D0-D7 GPIOs to input, then raises ACK. Glue enables the latch's outputs onto the system data bus only while I/OR is active on a Pi-window INP cycle. Nothing the Pi drives reaches the 8080 data bus at any other time, and no line is driven from both sides at once: the Pi drives its D0-D7 GPIOs only between REQ (with DIR = IN) and ACK, and the data 74LVC245 is enabled only on Pi-window OUT cycles.
+**OUT cycle.** The data 74LVC245A carries system DB0-DB7 to the Pi. Its /OE = NOT /I/OR (one inverter), so it is enabled except during I/OR. The Pi samples address and data from a read in which REQ is high, applies the write, then raises ACK.
 
-**Signals at the Pi (21 GPIO):**
+**IN cycle.** The Pi:
+1. computes the byte and drives it on its D0-D7 GPIOs into a 74HCT374 IN latch;
+2. reads D0-D7 back until they match, then reads once more;
+3. raises LATCH and reads it back high, then lowers LATCH;
+4. returns D0-D7 to input;
+5. raises ACK.
 
-| Signal | Count | Pi direction | Path |
-|--------|-------|--------------|------|
-| A0-A7 | 8 | in | 74LVC245 (5 V to 3.3 V) |
-| D0-D7 | 8 | in on OUT cycles, out to the IN latch on IN cycles | in: 74LVC245; out: 74HCT374 inputs |
-| DIR | 1 | in | 74LVC245 |
-| REQ | 1 | in | 74LVC245 |
-| RESET | 1 | in | 74LVC245 |
-| LATCH | 1 | out | 74HCT input (accepts 3.3 V levels) |
-| ACK | 1 | out | 74HCT input (accepts 3.3 V levels) |
+The read-backs guarantee the 74HCT374 tsu 25 ns, th 10 ns and tw 20 ns. Back-to-back GPIO writes do not: on a Pi 4 they can land about 4 ns apart. The latch outputs drive the system data bus (DB0-DB7, never the 8080-side D0-D7) while I/OR is active and the port decodes into the window. The enable MUST NOT use Q or REQ, because the 8080 samples in T3, after ACK has cleared Q. No line is ever driven from both sides. The Pi drives D0-D7 only while REQ is high with DIR = IN, which lies inside I/OR active, when the data 74LVC245A is disabled. It releases them before ACK, while the 8080 is still frozen in T_W.
 
-The Pi's GPIO runs at 3.3 V and is not 5 V tolerant; every 5 V signal reaches it through a 74LVC245.
+**Signals at the Pi (20 GPIO):**
 
-**Bring-up.** No power-on sequencing between the 8080 and the Pi is needed, provided that:
-- ACK and LATCH have pull-downs on the 5 V side, so they are inactive while the Pi boots;
-- no ACK edge reaches the WAIT flip-flop before the Pi's device service is running (ACK uses a GPIO whose boot-default pull is down);
+| Signal | Count | Pi direction | Path | BCM GPIO |
+|--------|-------|--------------|------|----------|
+| A0-A6 | 7 | in | 74LVC245A (A7 is always 0 in the window) | 4-10 |
+| D0-D7 | 8 | in on OUT cycles, out to the IN latch on IN cycles | in: 74LVC245A; out: 220-330 ohm series, then 74HCT374 inputs | 20-27 |
+| DIR (/I/OR) | 1 | in | 74LVC245A | 11 |
+| REQ (Q AND WAIT) | 1 | in | 74LVC245A | 12 |
+| RESET | 1 | in | 74LVC245A | 13 |
+| ACK | 1 | out | 74HCT14 Schmitt input | 16 |
+| LATCH | 1 | out | 74HCT374 CLK (accepts 3.3 V) | 17 |
+
+The Pi's GPIO runs at 3.3 V and is not 5 V tolerant. Every 5 V signal reaches it through a 74LVC245A powered from the Pi's 3V3 pin. Do not use a 74LVCH245A: its bus-hold fights the Pi on D0-D7. Every signal sits in GPLEV0, so one read is an atomic snapshot. D0-D7 sit in GPFSEL2, so turning the data lines around takes one register write.
+
+**Power and boot independence.** The 8080 board and the Pi have separate supplies, grounds joined at the header, and may be powered in either order, provided that:
+- every 74LVC245A runs from the Pi's 3V3, so an unpowered Pi leaves them in Ioff and is never back-powered;
+- the Pi drives only ACK, LATCH and D0-D7 toward the board, and D0-D7 only between REQ and LATCH. At idle ACK and LATCH are low and D0-D7 are inputs with internal pull-downs, so the Pi never back-powers an unpowered 5 V board through 74HCT input clamps;
+- ACK and LATCH have 4.7 kohm pull-downs on the 5 V side and use GPIOs whose boot-default pull is down (BCM 9-27, never 0-8 or 14/15). A 10 kohm pull-down against a Pi 4's 33 kohm minimum pull-up leaves only 33 mV of margin to HCT VIL;
+- on startup, the service sets D0-D7 to input and drives ACK and LATCH low before anything else;
 - the Pi service checks the REQ level when it starts and serves any request already pending. It MUST NOT depend on seeing a REQ edge.
 
-**One codebase.** One serviced REQ maps to exactly one `IoDevice::read` or `IoDevice::write` call. The emulator's IoBus and the Pi's GPIO front end call the same Rust device code.
+**One codebase.** The emulator and the Pi daemon build the same IoBus with the same device mapping for 00-6F (one function). Each Pi-window access in the emulator, and each serviced REQ on the Pi, is exactly one IoBus read or write. Devices do only bounded local work in read and write (DEVICE_SPECS 3.3). Host I/O goes through Console push_input/take_output. RESET rebuilds the IoBus, so post-reset state equals power-on state by construction. Reference Pi service: one thread busy-polls the mmapped GPIO block (/dev/gpiomem) on an isolated core and calls the IoBus inline. RESET edges come from a gpio character-device edge request (6.6). Mailbox background work runs on other cores. The target Pi uses the BCM283x/2711 register model (Pi 4B for v1). A Pi 5 also works, but its GPIO reads cross PCIe to RP1 and are several times slower (est). Do not use rppal (archived 2025-07-01).
 
 ### 6.5 Overlay Glue (0xFE, 0xFF)
 
-One 74LS74 half. RESET presets it. I/OW ANDed with a full 8-bit decode of port 0xFE clears it; the data bus is not decoded. A tri-state gate puts Q onto D0 while I/OR is active for port 0xFF. Q is OVL in the memory decode (6.2). Port semantics: `DEVICE_SPECS.md` (System Control).
+One 74HCT74 half; the other half is the WAIT flip-flop (6.4). /PRE = NOT RESET: the 8224 RESET is active high, and the same inverter drives the WAIT flip-flop's /CLR and the WAIT set term. /CLR = NOT (I/OW AND port = 0xFE), with a full 8-bit decode; the data bus is not decoded. A tri-state gate puts Q onto system DB0 while I/OR is active for port 0xFF. Q is OVL in the memory decode (6.2). Port semantics: `DEVICE_SPECS.md` (System Control).
 
 ### 6.6 Reset
 
-- Power-on reset and the reset button drive the 8224's RESIN. The 8224's RESET output drives the 8080's RESET, presets the overlay flip-flop, clears the WAIT flip-flop, and goes to the Pi's RESET GPIO.
+- RESIN (8224 pin 2, active low, Schmitt input) is held low until every rail is in regulation and the -5 V and +12 V ramps are complete. The 8224 only synchronizes RESIN to phi2; it does not stretch it. The reset source therefore guarantees the 8080A's minimum of 3 clocks. Source and button: decision RESET-SOURCE (`HARDWARE_BUILD.md`, Decisions).
+- The 8224 RESET output (pin 1, active high, VOH 3.6 V at -100 uA) has three loads, all CMOS inputs:
+  - the 8080 RESET (pin 12), directly;
+  - one 74HCT inverter, which drives the overlay flip-flop /PRE, the WAIT flip-flop /CLR and the WAIT set term (6.4);
+  - the Pi's RESET GPIO, through a 74LVC245A.
 - Clearing the WAIT flip-flop is required. Without it, a reset taken while the Pi is unresponsive leaves READY low, and the first opcode fetch at 0000 hangs.
-- **The Pi on RESET:** it detects the RESET assertion as a GPIO edge event (so a reset pulse of any length is seen), drops any request it is serving without raising ACK, and returns every device to its power-on state (`DEVICE_SPECS.md` rule 2.8). It finishes that before it serves the next REQ; the 8080's first Pi-window access after reset waits under READY until then. This costs zero ROM bytes.
-- A late ACK for a cycle cut off by reset is never raised, so it cannot release the first post-reset access with stale data.
-- Nothing else resets the machine.
+- The 8224 also drives STSTB low during reset. The NOT RESET term in the WAIT set blocks it. **[bench]** REQ stays low across 100 consecutive resets.
+- **The Pi on RESET.**
+  - It requests RESET through the gpio character device with both-edge events. The kernel latches the edge, so a pulse of any length is seen, even during an fsync. It also reads the RESET level in every GPIO snapshot.
+  - Immediately before every ACK, it checks for a latched or present RESET. If it finds one, it drops the request without raising ACK.
+  - When RESET is next low, it returns every device to its power-on state (`DEVICE_SPECS.md` rule 2.8), and only then serves a REQ. The 8080's first Pi-window access after reset waits under READY until then. This costs zero ROM bytes.
+  - A bouncing button can produce several RESET pulses. Each one is a full device reset.
+- A late ACK for a cycle cut off by reset is never raised. One residual race is accepted: the bus thread is descheduled between its last RESET check and the ACK write for longer than the RESET pulse plus the boot path to the first Pi-window access (about 0.12 ms).
+- Nothing else resets the machine, except the optional Pi TEST_RESET (decision TEST-RESET), which pulls the same RESIN node.
 
 ### 6.7 Other CPU Pins
 
-- **INT:** v1 has no interrupt source, so INT is held inactive. The 8228 is wired for its single-level RST 7 feature (INTA input to +12 V through 1 kΩ), so the 8228 supplies `RST 7` on acknowledge and a future source needs no new wiring. The tick source (Pi GPIO or 8254) is decided when a consumer appears (Someday).
-- **HOLD** is tied inactive. There is no DMA.
+- **INT** (pin 14): v1 has no interrupt source, so INT goes to GND through 10 kohm. The 8228 is wired for its single-level RST 7 feature: its INTA output (pin 23) is strapped to +12 V through 1 kohm (<= 5 mA, 8228 DC table). On acknowledge it then puts RST 7 (FF) on the 8080 bus during DBIN. The strap disables pin 23 as an INTA strobe, so a single-level source needs no new wiring and a vectored controller does. A future source (Pi GPIO tick or 8254, decided when a consumer appears, Someday) drives INT through a 74HCT gate. The 8080A VIH is 3.3 V, which neither a Pi GPIO (VOH 2.6-3.0 V) nor LS-TTL guarantees.
+- **HOLD** (pin 13) to GND. 8080A HLDA (pin 21) goes to 8228 HLDA (pin 2). There is no DMA.
+- **8228 BUSEN** (pin 22) to GND. A floating bipolar input reads high and tri-states the 8228.
+- Any driver of an 8080A input MUST be a CMOS/HCT output. 74LS is not allowed there.
 
 ### 6.8 What Is Local and What Is the Pi
 
@@ -328,10 +359,26 @@ One 74LS74 half. RESET presets it. I/OW ANDed with a full 8-bit decode of port 0
 | 8080A, 8224 clock and reset, 8228 system controller (6.1) | Console (a Pi FIFO device; the terminal connects to the Pi) |
 | 4 KB ROM at F000, static RAM, memory decode (6.2) | Storage and Mount (SD card) |
 | Overlay glue (6.5) | Service Mailbox |
-| Status latch (INP, OUT at STSTB), window decode, WAIT flip-flop, IN latch, level translation (6.4) | Every other port in 0x00-0x6F |
+| Window decode, WAIT flip-flop and REQ gate, IN latch, level translation (6.4) | Every other port in 0x00-0x6F |
 | Reset circuit (6.6) | |
 
 The console transport between the terminal and the Pi (UART with RTS/CTS, USB gadget serial, or TCP) is Pi configuration and is invisible to the 8080. Console behavior, including input flow control toward the terminal: `DEVICE_SPECS.md` (Console).
+
+### 6.9 Power
+
+- Datasheet maximum currents (8080A p.6-3, 8224 p.6-23, 8228 p.6-35):
+
+  | Rail (all +/-5%) | Load |
+  |------------------|------|
+  | +5 V | 8080A 80 mA, 8224 115 mA, 8228 190 mA, plus memory and glue: about 0.8 A total (est) |
+  | +12 V | 8080A 70 mA, 8224 12 mA, 8228 INTA strap 5 mA: 87 mA total |
+  | -5 V | 8080A 1 mA |
+
+- No 8080A pin or supply may go more than 0.3 V below VBB (8080A absolute maximum). VBB has a Schottky clamp to GND (anode VBB, cathode GND) at the CPU socket. **[bench]** At bring-up, scope VBB single-shot at power-up and power-down: it MUST stay at or below +0.3 V relative to GND.
+- +12 V MUST never exceed 12.6 V, including at turn-on. The 8224 VDD absolute maximum is 13.5 V.
+- If -5 V comes from a charge pump fed by +5 V, VBB tracks VCC. In that case +5 V MUST be held at 4.85-5.15 V at the board. How the rails are generated is decision POWER (`HARDWARE_BUILD.md`, Decisions).
+- Decoupling: 0.1 uF per IC per rail, plus 10 uF bulk per rail.
+- The Pi has its own supply (6.4, Power and boot independence).
 
 ---
 
@@ -371,6 +418,21 @@ On hardware the Pi passes every byte the terminal sends; the key map does not ex
 | **Host banner and exit lines** | "8080 Emulator", the build timestamp, and any exit message go to host stdout from `main.rs`, never from the CPU core or from a device the 8080 can see. |
 | **Test harness** | Allowed only on the host side: `TestConsole` (scripted input and captured output); test `IoDevice`s mapped with `map_port`, for example one that records every port access; `load_program` (writes that bypass the ROM and the overlay, `cpu.rs:1086`); a CPU with no ROM loaded; `interrupt(rst)` (5.7); direct access to the registers, memory, `cycles`, `halted` and `interrupts_enabled`; and `trace`, `debug_state` and `disassemble_at`. |
 | **No throttle** | The emulator runs at host speed. `cycles` counts T-states only. |
+
+### 7.3 Port Trace Format
+
+This is the only home for the port-trace line format. One line per event:
+
+```
+IN pp vv
+OUT pp vv
+RESET
+```
+
+- `pp` is the port and `vv` the byte transferred, each two uppercase hex digits (`MONITOR_SPEC.md` numeric output convention).
+- Any line MAY end with ` ; annotation`, free text after the semicolon.
+- Both the emulator debugger and the Pi daemon emit this format. Hardware traces are diffed against emulator traces for the same ROM and input.
+- Only the line format is fixed. Which events a given tool records is decided with that tool.
 
 ---
 
