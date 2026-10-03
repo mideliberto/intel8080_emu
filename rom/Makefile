@@ -7,24 +7,30 @@ P2BIN = p2bin
 # Source files
 ROM_SRC = monitor.asm
 
-# Output files
+# Output files (monitor.bin and monitor.sym are committed)
 ROM_BIN = monitor.bin
+ROM_SYM = monitor.sym
 ROM_P = monitor.p
 
 .PHONY: all clean
 
-all: $(ROM_BIN)
+all: $(ROM_BIN) $(ROM_SYM)
 
-# Assemble to .p file
+# Assemble to .p file (and .lst, and .noi with the labels)
 $(ROM_P): $(ROM_SRC)
-	$(ASL) -cpu 8080 -L $(ROM_SRC)
+	$(ASL) -cpu 8080 -L -g NOICE $(ROM_SRC)
+
+# Debugger symbols (ARCHITECTURE 7.4): one 'AAAA NAME' line per code label.
+# asl writes 0x80, not 0x0080: pad with zeros, then keep the last 4 digits.
+$(ROM_SYM): $(ROM_P)
+	sed -n 's/^DEFINE \([A-Z0-9_]*\) 0x\([0-9a-f]*\)$$/000\2 \1/p' monitor.noi | sed 's/^0*\([0-9a-f]\{4\} \)/\1/' | tr a-f A-F | sort > $(ROM_SYM)
 
 # Convert .p to binary
 $(ROM_BIN): $(ROM_P)
 	$(P2BIN) $(ROM_P) $(ROM_BIN) -r '$$F000-$$FFFF'
 
 clean:
-	rm -f *.p *.bin *.lst
+	rm -f *.p *.bin *.lst *.noi *.sym
 
 # Show disassembly (requires objdump or similar)
 disasm: $(ROM_BIN)

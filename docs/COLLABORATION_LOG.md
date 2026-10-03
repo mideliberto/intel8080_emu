@@ -444,11 +444,13 @@ Console I/O debugging session:
 - ROM overlay boot mechanism
 - 2511 of 4096 bytes used (1585 free)
 
+**Debugger (host-side, ARCHITECTURE 7.4):** Ctrl-E / `--debug` / `--script`, break, step, registers, memory, disassembly with ROM symbols (`rom/monitor.sym`), watchpoints, I/O breaks, port trace, 256-step trace ring
+
 **Devices:**
 - Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
 **Testing (verified 2026-10-03):**
-- 4 host + 129 CPU + 36 device + 16 monitor = 185, all passing (strict transcript harness, reference-model CPU tests, port-level device tests)
+- 7 host + 130 CPU + 36 device + 16 monitor + 12 debugger = 201, all passing (strict transcript harness, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 
 ### In Progress
@@ -462,7 +464,7 @@ Two host-only questions from 2026-10-03 (idle CPU at the prompt, exit at piped E
 
 ### Blocked/Deferred
 
-- **R command:** Needs return mechanism, deferred to Phase 10 (Debugger)
+- **R command:** Needs return mechanism (Phase 10). The debugger itself shipped 2026-10-03
 - **Pi services:** one Service Mailbox at 0x10-0x13. Phase 6 `TIME`, 7 `ASM`/`DIS`, 8 `GET`, 9 `ASK`
 - **8253 timer / interrupts:** Someday
 
@@ -474,6 +476,14 @@ Two host-only questions from 2026-10-03 (idle CPU at the prompt, exit at piped E
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: The Debugger (step D)
+- Spec first: ARCHITECTURE 7.4 (Ctrl-E, `--debug`, `--script FILE`; 15 short commands; exact output formats; stop report = reason, last 8 ring steps, registers, next instruction). Host-only, no new dependencies. `src/disasm.rs` (256-entry table checked against the reference), `src/debugger.rs` (breaks, watchpoints, I/O breaks, port trace collapsing repeats to ` ; xN`, 256-step ring, symbols), main.rs (Ctrl-E, line-mode prompt, script then terminal).
+- Watchpoint mechanism: the CPU lists each step's data transfers (`Intel8080::transfers()`: memory reads and writes, IN, OUT; opcode and operand fetches left out). One hook serves watchpoints, I/O breaks and the trace. Push and XTHL now write in 8080 bus order (high byte to SP-1 first); no state or cycle changes.
+- `rom/monitor.sym` from asl's NoICE output (code labels only; EQUs mix addresses with ports and characters), committed with `monitor.bin`. Host choices inside the mandate: a halt is still not a debugger stop (7.2 unchanged); a bad script line prints `? ...` and the script goes on; no debugger reset in v1.
+- Tests: 12 debugger tests (exact stop report, the `L 0 0200 0` wrap caught writing 0080, an I/O break on 0E, the mount trace, break at `CMD_DUMP`, the binary run with `--script`/`--debug`/bad arguments), a transfers table in the CPU tests, 3 run-loop tests. cargo-mutants: debugger + disasm all caught; main.rs survivors only on tty-only paths (raw mode, terminal read_line).
+- Review fixes: only address operands (a16) print as symbols, so `LXI SP,F000` no longer reads `LXI SP,COLD_START`; `monitor.sym` lines are zero-padded (asl writes `0x80`, which would have panicked the loader once a label sits below 1000); a stop report starts on its own line (CR LF when console output is mid-line); 7.4 corrected on the 8228 (operand fetches are plain MEMR, leaving them out is our choice) and on diffing against a Pi trace (drop FE/FF, ignore ` ; xN`).
+- What bit us: ROM tests that pin whole traces churn with every pending ROM fix (CONOUT still polls IN 02 before each OUT 00), so ROM-side debugger tests assert the stable parts and RAM programs pin the exact formats. Pushing a byte order the real chip doesn't use would have made watchpoints report the wrong byte first.
 
 ### 2026-10-03: Devices and Host Run Loop (step C)
 - Storage and Mount merged into one device on 08-0F (no `Rc<RefCell>` link): every IN/OUT 0B advances, host I/O errors unmount, `sync_all` on flush/unmount/remount/Drop, mount rules per DEVICE_SPECS 7 (uppercase first, 13th byte = too long, `.`/`..` invalid, >16MB = 01, failed mount unmounts), every OUT 0E clears the name, 0F reads 01 at power-on.

@@ -69,7 +69,7 @@ Detail: [ARCHITECTURE.md](ARCHITECTURE.md) (Host-Side Conveniences).
 | Key | Effect |
 |-----|--------|
 | Ctrl-C | Quits the emulator. Never reaches the 8080 |
-| Ctrl-E | Debugger hotkey (Phase 10). Never reaches the 8080 |
+| Ctrl-E | Stops the CPU and opens the `dbg>` prompt (ARCHITECTURE 7.4). Never reaches the 8080 |
 | Enter / Backspace / Tab / Esc | 0D / 08 / 09 / 1B |
 | Other Ctrl-A..Ctrl-Z | 01..1A |
 | Printable ASCII | Its byte |

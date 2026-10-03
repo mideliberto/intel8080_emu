@@ -6,7 +6,7 @@
 
 ## Status
 - Phase 4 complete (24-bit storage, 16MB). Phase 5 next: Intel HEX loader, parsed in ROM by the 8080.
-- 185 tests passing (4 host + 129 CPU + 36 device + 16 monitor), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
+- 201 tests passing (7 host + 130 CPU + 36 device + 16 monitor + 12 debugger), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
 - Monitor ROM v0.3, 14 commands, ~1.6KB ROM headroom
 - Spec solidified 2026-10-02: three normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC). No open decisions.
 - Live task list: `TODO.md`
@@ -23,12 +23,12 @@
 - `cargo test` after every change. Nothing commits red.
 - No debug prints in commits. `git commit -A` when files were deleted.
 - **Hardware is the target.** ROM code and device protocols must be buildable with real parts: no emulator-only shortcuts in ROM, no device behavior a Pi coprocessor or period chip couldn't provide. Emulator conveniences (debugger, trace, test harness) stay on the Rust side and out of the 8080's view.
-- ROM changes: rebuild `monitor.bin` (`cd rom && make`), commit it, and keep it within 4KB.
+- ROM changes: rebuild `monitor.bin` and `monitor.sym` (`cd rom && make`), commit both, and keep the bin within 4KB.
 - **Architectural decisions do not get made silently here.** If a question changes a port map, memory map, ROM command set, or device protocol, stop, write it under Open Decisions in `TODO.md`, and ask Mike. Docs that disagree with the code count: log it, don't pick a winner.
 
 ## Build
 - `cargo test` / `cargo run`
-- ROM: `cd rom && make` (AS Macro Assembler: `asl` + `p2bin`). Commit `monitor.bin`, not `.lst`/`.p`.
+- ROM: `cd rom && make` (AS Macro Assembler: `asl` + `p2bin`). Commit `monitor.bin` and `monitor.sym` (debugger symbols), not `.lst`/`.p`/`.noi`.
 
 ## Key Files
 - `docs/COLLABORATION_LOG.md` - history, decisions, lessons. Read Current State first.

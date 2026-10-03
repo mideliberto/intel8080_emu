@@ -6,6 +6,16 @@ use std::path::Path;
 use crate::registers::{Register, RegisterPair, PushPopPair, Condition};
 use crate::registers::{FLAG_CARRY, FLAG_BIT_1, FLAG_PARITY, FLAG_AUX_CARRY, FLAG_ZERO, FLAG_SIGN};
 
+/// A data transfer on the bus: address or port, then the byte. Opcode and operand
+/// fetches are not transfers (ARCHITECTURE 7.4, Bus transfers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transfer {
+    MemRead(u16, u8),
+    MemWrite(u16, u8),
+    In(u8, u8),
+    Out(u8, u8),
+}
+
 pub struct Intel8080 {
     // Registers
     pub a: u8,
@@ -30,6 +40,7 @@ pub struct Intel8080 {
     ei_delay: bool,                   // EI ran last step: no acceptance this step
     pending_interrupt: Option<u8>,    // RST n latched by interrupt(n)
     pub cycles: u64,
+    transfers: Vec<Transfer>,         // data transfers of the last step
 }
 
 impl Intel8080 {
@@ -50,6 +61,7 @@ impl Intel8080 {
             ei_delay: false,
             pending_interrupt: None,
             cycles: 0,
+            transfers: Vec::new(),
         };
         cpu.reset();
         cpu
@@ -57,6 +69,11 @@ impl Intel8080 {
 
     pub fn io_bus_mut(&mut self) -> &mut IoBus {
         &mut self.io_bus
+    }
+
+    /// The data transfers of the last step, in bus order.
+    pub fn transfers(&self) -> &[Transfer] {
+        &self.transfers
     }
 
     // ============================================
@@ -87,7 +104,7 @@ impl Intel8080 {
         self.flags = (val as u8 & 0xD5) | FLAG_BIT_1;  // bits 3 and 5 read as 0
     }
 
-    fn get_reg(&self, reg: Register) -> u8 {
+    fn get_reg(&mut self, reg: Register) -> u8 {
         match reg {
             Register::A => self.a,
             Register::B => self.b,
@@ -96,7 +113,7 @@ impl Intel8080 {
             Register::E => self.e,
             Register::H => self.h,
             Register::L => self.l,
-            Register::M => self.read_byte(self.get_hl()),
+            Register::M => self.load(self.get_hl()),
         }
     }
 
@@ -161,12 +178,26 @@ impl Intel8080 {
         self.ram[addr as usize]
     }
 
+    /// A memory write cycle, logged as a transfer.
     pub fn write_byte(&mut self, addr: u16, value: u8) {
+        self.transfers.push(Transfer::MemWrite(addr, value));
         // ROM is selected on reads only: writes under the overlay reach RAM (ARCHITECTURE 4).
         if !self.rom.is_empty() && addr >= 0xF000 {
             return;
         }
         self.ram[addr as usize] = value;
+    }
+
+    /// A data read, logged as a transfer. read_byte is the untraced peek.
+    fn load(&mut self, addr: u16) -> u8 {
+        let value = self.read_byte(addr);
+        self.transfers.push(Transfer::MemRead(addr, value));
+        value
+    }
+
+    fn load_word(&mut self, addr: u16) -> u16 {
+        let low = self.load(addr) as u16;
+        (self.load(addr.wrapping_add(1)) as u16) << 8 | low
     }
 
     fn fetch_byte(&mut self) -> u8 {
@@ -192,13 +223,16 @@ impl Intel8080 {
         self.write_byte(address.wrapping_add(1), (value >> 8) as u8);
     }
 
+    /// High byte first, to SP-1, then low to SP-2: the 8080's bus order.
     fn push(&mut self, value: u16) {
-        self.sp = self.sp.wrapping_sub(2);
-        self.write_word(self.sp, value);
+        self.sp = self.sp.wrapping_sub(1);
+        self.write_byte(self.sp, (value >> 8) as u8);
+        self.sp = self.sp.wrapping_sub(1);
+        self.write_byte(self.sp, value as u8);
     }
 
     fn pop(&mut self) -> u16 {
-        let value = self.read_word(self.sp);
+        let value = self.load_word(self.sp);
         self.sp = self.sp.wrapping_add(2);
         value
     }
@@ -250,6 +284,7 @@ impl Intel8080 {
     /// One step: an interrupt acknowledge, a halted step, or one instruction.
     /// Returns the cycles it took.
     pub fn execute_one(&mut self) -> u8 {
+        self.transfers.clear();
         let ei_delay = std::mem::replace(&mut self.ei_delay, false);
         let cycles = match self.pending_interrupt {
             Some(n) if self.interrupts_enabled && !ei_delay => {
@@ -369,6 +404,7 @@ impl Intel8080 {
 
     fn perform_out(&mut self) -> u8 {
         let port = self.fetch_byte();
+        self.transfers.push(Transfer::Out(port, self.a));
         if port == 0xFE {
             self.rom_overlay_enabled = false;  // any value clears the overlay flip-flop
         } else {
@@ -384,6 +420,7 @@ impl Intel8080 {
         } else {
             self.io_bus.read(port)
         };
+        self.transfers.push(Transfer::In(port, self.a));
         10
     }
 
@@ -486,12 +523,12 @@ impl Intel8080 {
 
             0x02 => { self.write_byte(self.get_bc(), self.a); 7 }  // STAX B
             0x12 => { self.write_byte(self.get_de(), self.a); 7 }  // STAX D
-            0x0A => { self.a = self.read_byte(self.get_bc()); 7 }  // LDAX B
-            0x1A => { self.a = self.read_byte(self.get_de()); 7 }  // LDAX D
+            0x0A => { self.a = self.load(self.get_bc()); 7 }  // LDAX B
+            0x1A => { self.a = self.load(self.get_de()); 7 }  // LDAX D
             0x32 => { let addr = self.fetch_word(); self.write_byte(addr, self.a); 13 }   // STA
-            0x3A => { let addr = self.fetch_word(); self.a = self.read_byte(addr); 13 }   // LDA
+            0x3A => { let addr = self.fetch_word(); self.a = self.load(addr); 13 }   // LDA
             0x22 => { let addr = self.fetch_word(); self.write_word(addr, self.get_hl()); 16 }  // SHLD
-            0x2A => { let addr = self.fetch_word(); let v = self.read_word(addr); self.set_hl(v); 16 }  // LHLD
+            0x2A => { let addr = self.fetch_word(); let v = self.load_word(addr); self.set_hl(v); 16 }  // LHLD
 
             0x07 => { let cy = self.a & 0x80 != 0; self.a = self.a.rotate_left(1); self.set_carry(cy); 4 }  // RLC
             0x0F => { let cy = self.a & 0x01 != 0; self.a = self.a.rotate_right(1); self.set_carry(cy); 4 } // RRC
@@ -507,8 +544,9 @@ impl Intel8080 {
             0xDB => self.perform_in(),
 
             0xE3 => {  // XTHL
-                let top = self.read_word(self.sp);
-                self.write_word(self.sp, self.get_hl());
+                let top = self.load_word(self.sp);
+                self.write_byte(self.sp.wrapping_add(1), self.h);  // 8080 bus order: H, then L
+                self.write_byte(self.sp, self.l);
                 self.set_hl(top);
                 18
             }

@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use intel8080_emu::cpu::Intel8080;
+use intel8080_emu::cpu::{Intel8080, Transfer};
 use intel8080_emu::io::IoDevice;
 use intel8080_emu::registers::*;
 
@@ -2167,6 +2167,66 @@ fn test_word_accesses_wrap_at_ffff() {
     assert_eq!(cpu.sp, 0x0000, "INX SP");
     cpu.execute_one();
     assert_eq!(cpu.sp, 0xFFFF, "DCX SP");
+}
+
+// ===========================================
+// BUS TRANSFERS (ARCHITECTURE 7.4): data cycles in 8080 bus order, no fetches
+// ===========================================
+
+#[test]
+fn test_transfers_of_one_step() {
+    use Transfer::*;
+    let cases: &[(u8, &[Transfer])] = &[
+        (0x00, &[]),                                    // NOP: fetches are not transfers
+        (0xC3, &[]),                                    // JMP 1234
+        (0x7E, &[MemRead(0x2000, 0x55)]),               // MOV A,M
+        (0x86, &[MemRead(0x2000, 0x55)]),               // ADD M
+        (0x77, &[MemWrite(0x2000, 0x0A)]),              // MOV M,A
+        (0x36, &[MemWrite(0x2000, 0x34)]),              // MVI M,34
+        (0x34, &[MemRead(0x2000, 0x55), MemWrite(0x2000, 0x56)]),  // INR M
+        (0x0A, &[MemRead(0x1234, 0x66)]),               // LDAX B
+        (0x02, &[MemWrite(0x1234, 0x0A)]),              // STAX B
+        (0x3A, &[MemRead(0x1234, 0x66)]),               // LDA 1234
+        (0x32, &[MemWrite(0x1234, 0x0A)]),              // STA 1234
+        (0x2A, &[MemRead(0x1234, 0x66), MemRead(0x1235, 0x77)]),   // LHLD 1234
+        (0x22, &[MemWrite(0x1234, 0x00), MemWrite(0x1235, 0x20)]), // SHLD 1234
+        (0xC5, &[MemWrite(0x7FFF, 0x12), MemWrite(0x7FFE, 0x34)]), // PUSH B: high byte first
+        (0xF1, &[MemRead(0x8000, 0x21), MemRead(0x8001, 0x43)]),   // POP PSW
+        (0xC9, &[MemRead(0x8000, 0x21), MemRead(0x8001, 0x43)]),   // RET
+        (0xCD, &[MemWrite(0x7FFF, 0x01), MemWrite(0x7FFE, 0x03)]), // CALL 1234
+        (0xFF, &[MemWrite(0x7FFF, 0x01), MemWrite(0x7FFE, 0x01)]), // RST 7
+        (0xE3, &[MemRead(0x8000, 0x21), MemRead(0x8001, 0x43), MemWrite(0x8001, 0x20), MemWrite(0x8000, 0x00)]), // XTHL
+        (0xDB, &[In(0x34, 0xFF)]),                      // IN 34 (unmapped)
+        (0xD3, &[Out(0x34, 0x0A)]),                     // OUT 34
+        (0xDB, &[In(0x34, 0xFF)]),
+    ];
+    for &(op, expected) in cases {
+        let mut cpu = Intel8080::new();
+        cpu.load_program(&[op, 0x34, 0x12], 0x0100);
+        cpu.load_program(&[0x55], 0x2000);
+        cpu.load_program(&[0x66, 0x77], 0x1234);
+        cpu.load_program(&[0x21, 0x43], 0x8000);
+        cpu.pc = 0x0100;
+        cpu.sp = 0x8000;
+        cpu.set_hl(0x2000);
+        cpu.set_bc(0x1234);
+        cpu.a = 0x0A;
+        cpu.execute_one();
+        assert_eq!(cpu.transfers(), expected, "opcode {:02X}", op);
+    }
+    // The interrupt acknowledge pushes like RST, and the overlay ports are transfers too.
+    let mut cpu = Intel8080::new();
+    cpu.load_program(&[0xD3, 0xFE, 0xDB, 0xFF], 0x0100);
+    cpu.sp = 0x8000;
+    cpu.a = 0x0A;
+    cpu.execute_one();
+    assert_eq!(cpu.transfers(), [Out(0xFE, 0x0A)]);
+    cpu.execute_one();
+    assert_eq!(cpu.transfers(), [In(0xFF, 0x00)]);
+    cpu.interrupts_enabled = true;
+    cpu.interrupt(7);
+    cpu.execute_one();
+    assert_eq!(cpu.transfers(), [MemWrite(0x7FFF, 0x01), MemWrite(0x7FFE, 0x04)]);
 }
 
 // ===========================================

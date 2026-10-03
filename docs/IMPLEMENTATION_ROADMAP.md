@@ -13,7 +13,7 @@
 | 7 | Development Tools | 🔲 Future |
 | 8 | Internet Services | 🔲 Future |
 | 9 | Claude Integration | 🔲 Future |
-| 10 | Debugger | 🔲 Future |
+| 10 | R command (debugger done early) | 🔲 Future |
 | 11 | Polish | 🔲 Future |
 
 ---
@@ -136,9 +136,11 @@ The 8080 talks to Claude via mailbox `ASK`; Q command. The API key lives on the 
 
 ---
 
-## Phase 10: Debugger
+## Phase 10: R Command
 
-Host-side: a hotkey (Ctrl-E) opens an emulator prompt for breakpoints, single-step and trace. R command (registers, deferred from Phase 3). Any host-side reset also resets the devices. Designed when the phase starts.
+The host-side debugger was pulled forward and shipped before Phase 5 (2026-10-03, ARCHITECTURE 7.4): Ctrl-E / `--debug` / `--script`, breakpoints, step, registers, memory, disassembly with ROM symbols, watchpoints, I/O breaks, the port trace and the trace ring.
+
+What is left: the monitor's `R` command (registers, deferred from Phase 3), which needs the `G` return contract to capture them. Not in the debugger v1, each to be decided when a need shows up: a debugger reset (it must reset the devices too, ARCHITECTURE 3.1), writing registers or memory, conditional breakpoints.
 
 ---
 

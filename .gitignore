@@ -3,5 +3,6 @@
 /storage
 rom/*.lst
 rom/*.p
+rom/*.noi
 .DS_Store
 /tests/data/exercisers

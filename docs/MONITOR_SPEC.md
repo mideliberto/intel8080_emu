@@ -507,7 +507,7 @@ These are placeholders, not designs. Each phase writes its own section here when
 | Q | 9 | Ask Claude: mailbox `ASK` |
 | R | 10 | Registers. Blocked on capturing registers at return |
 
-Quitting the emulator (Ctrl-C) and the Phase 10 debugger (Ctrl-E) are host-side, not monitor commands (`ARCHITECTURE.md`, Host-Side Conveniences).
+Quitting the emulator (Ctrl-C) and the debugger (Ctrl-E) are host-side, not monitor commands (`ARCHITECTURE.md`, Host-Side Conveniences).
 
 ---
 

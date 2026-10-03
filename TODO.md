@@ -4,6 +4,7 @@
 - None. All closed 2026-10-02; see COLLABORATION_LOG Key Decisions. The specs are docs/ARCHITECTURE.md, docs/DEVICE_SPECS.md, docs/MONITOR_SPEC.md.
 - Host idle CPU (2026-10-03): the pump polls with `Duration::ZERO`, so waiting at the prompt burns a full host core. ARCHITECTURE 7.2 doesn't fix the poll duration. Option: when a pump brings nothing and the console FIFO is empty, block in poll(1 ms). Host-only; the 8080 can't see wall time.
 - Piped stdin EOF (2026-10-03): a piped run never exits at end of input; it waits at the prompt until HLT or Ctrl-C. Exit at EOF (risks cutting output the CPU hasn't printed yet), or leave it?
+- Debugger (2026-10-03, host-only unless noted): (a) HLT opens the prompt instead of exiting (changes 7.2)? (b) a bad `--script` line quits instead of going on? (c) workspace as labels (`ORG 80h` + `DS`) in `monitor.asm` so `w STOR_ADDR` works: a ROM source change; the Makefile already pads low addresses. (d) does the Pi daemon trace collapse repeats with ` ; xN` like the debugger (7.3 leaves event choice to each tool)?
 
 ## Current
 - [x] Apply alignment package (archived: docs/archive/HANDOFF_2026-10.md)
@@ -12,7 +13,7 @@
 - [x] Rebuild stale `rom/monitor.bin` (it predated `X -` unmount)
 - [x] Close open decisions; solidify spec into 3 normative docs (2026-10-02)
 - [ ] Code review: emulator + ROM against the new specs
-- [ ] Spec the debugger (ARCHITECTURE Host-Side Conveniences), then build it before Phase 5: core + watchpoints + I/O break/trace + trace ring + ROM symbols; line prompt + script mode
+- [x] Spec the debugger (ARCHITECTURE Host-Side Conveniences), then build it before Phase 5: core + watchpoints + I/O break/trace + trace ring + ROM symbols; line prompt + script mode. Done 2026-10-03: ARCHITECTURE 7.4, `src/debugger.rs`, `src/disasm.rs`, `rom/monitor.sym`, `tests/debugger_tests.rs`
 - [x] Hardware-alignment pass (2026-10-02): design buildable with one hard fix (WAIT set via STSTB, not SYNC). Spec edits in ARCHITECTURE section 6 and DEVICE_SPECS; BOM and bring-up in docs/HARDWARE_BUILD.md
 - [x] 8080A/8224/8228 hardware reference: docs/reference/8080_HARDWARE.md
 
@@ -49,7 +50,7 @@ Emulator:
 ROM:
 - [ ] G pushes WARM (`WARM: LXI SP,STACK_TOP` before MAIN_LOOP) before PCHL (`rom/monitor.asm:876-885`)
 - [ ] CONOUT = `OUT 00h / RET` (drop the TX poll, `rom/monitor.asm:175-183`). Must land before the board exists: until then the first Pi access after reset is IN 02, not OUT 00
-- [ ] X: `OUT 0Eh,03h` before the name; 02 -> "Invalid filename", other nonzero -> "Mount failed"; drop "File not found" (`:1274-1277`, `:1496`)
+- [ ] X: `OUT 0Eh,03h` before the name; 02 -> "Invalid filename", other nonzero -> "Mount failed"; drop "File not found" (`:1274-1277`, `:1496`). The mount port list in `io_break_and_port_trace_of_a_mount` (`tests/debugger_tests.rs`) gains the `OUT 0E 03` line
 - [ ] L/W: read 0C after transfer (W after flush); bit 0 = 0 -> "Storage error"
 - [ ] Argument strictness per MONITOR_SPEC (Invalid range for end<start and count 0 incl. M; digit limits; byte args > FF; G garbage)
 - [ ] M copies backward when dst > src (memmove)
@@ -150,7 +151,7 @@ Method: a 16-agent review workflow (CPU first, then ROM and devices) with every 
 - [ ] Phase 7: Assembler/disassembler (mailbox `ASM`/`DIS`)
 - [ ] Phase 8: HTTP GET (mailbox `GET`)
 - [ ] Phase 9: Claude (mailbox `ASK`, Q command)
-- [ ] Phase 10: Debugger (breakpoints, single-step, R)
+- [ ] Phase 10: R command (the debugger shipped early, ARCHITECTURE 7.4)
 - [ ] 8253 timer, TIMER_ISR, RST 7 vector: when something needs a periodic interrupt
 - [ ] Hardware prototype: see docs/HARDWARE_BUILD.md (BOM, 9-step bring-up)
 - [ ] Pi daemon binary (busy-poll /dev/gpiomem, TCP console, shared device code)

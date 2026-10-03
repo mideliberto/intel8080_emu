@@ -15,7 +15,8 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Console device | ✅ |
 | Storage device (24-bit, 16MB) | ✅ |
 | Monitor ROM v0.3 (14 commands) | ✅ |
-| 185 tests (4 host + 129 CPU + 36 device + 16 monitor), plus 4 exercisers (`#[ignore]`) | ✅ |
+| Host-side debugger (breakpoints, watchpoints, I/O breaks, port trace, trace ring, ROM symbols) | ✅ |
+| 201 tests (7 host + 130 CPU + 36 device + 16 monitor + 12 debugger), plus 4 exercisers (`#[ignore]`) | ✅ |
 | Intel HEX loader (Phase 5) | 🔲 Next |
 | Service Mailbox: time, HTTP, Claude (Phases 6-9) | 🔲 Future |
 
@@ -85,7 +86,38 @@ Ready.
 > 
 ```
 
-Ctrl-C quits the emulator. Host key mapping: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). With stdin piped instead of a terminal, its bytes go straight to the console. A piped run ends only on HLT (`HLT at PC=xxxx`) or Ctrl-C; at end of input the monitor just waits at its prompt. Example: `printf 'F 0200 0200 76\rG 0200\r' | cargo run`.
+Ctrl-C quits the emulator. Ctrl-E opens the debugger. Host key mapping: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). With stdin piped instead of a terminal, its bytes go straight to the console. A piped run ends only on HLT (`HLT at PC=xxxx`) or Ctrl-C; at end of input the monitor just waits at its prompt. Example: `printf 'F 0200 0200 76\rG 0200\r' | cargo run`.
+
+## Debugger
+
+Host-side; the 8080 never sees it. Ctrl-E stops the CPU and opens a `dbg>` prompt; `cargo run -- --debug` starts stopped; `cargo run -- --script FILE` runs debugger commands from FILE first (each echoed as `dbg> ...`). ROM labels from `rom/monitor.sym` work anywhere an address does, as `NAME` or `NAME+n`. Numbers are hex.
+
+```
+c                  continue              s [n]            step n instructions
+r                  registers             m addr [len]     memory (D format)
+u [addr] [n]       disassemble           b addr           breakpoint
+w addr[-end] [r|w] watchpoint            io port [in|out] break on IN/OUT
+bl / bc [addr]     list / clear breaks   t file|off       port trace to a file
+ring [n]           last n steps          sym addr         address and label
+?                  command summary       q                quit
+```
+
+A stop prints the reason, the last 8 steps from the trace ring, the registers and the next instruction:
+
+```
+dbg> b CMD_DUMP
+dbg> c
+> D 0200 020F
+* break F28B CMD_DUMP
+...
+F05E  FE 44     CPI 44             A=44 F=12 BC=0B0D DE=0000 HL=0081 SP=F000
+F060  CA 8B F2  JZ CMD_DUMP        A=44 F=56 BC=0B0D DE=0000 HL=0081 SP=F000
+PC=F28B SP=F000 A=44 F=56 -ZAP- BC=0B0D DE=0000 HL=0081 INTE=0 OVL=0
+CMD_DUMP:
+F28B  CD 59 F1  CALL SKIP_SPACES
+```
+
+Full contract (formats, watchpoint and trace semantics): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) section 7.4.
 
 ## ROM Development
 
@@ -93,7 +125,7 @@ The monitor ROM uses the AS macro assembler (Alfred Arnold).
 
 ```bash
 cd rom
-make
+make          # monitor.bin and monitor.sym (debugger symbols); commit both
 ```
 
 ## ROM Overlay Boot
@@ -104,9 +136,11 @@ S-100 style boot: RESET starts the CPU at 0x0000 with the ROM at 0xF000 mirrored
 
 ```
 src/
-├── main.rs              # Host side: terminal, key map, run loop
+├── main.rs              # Host side: terminal, key map, run loop, debugger prompt
 ├── lib.rs               # Library exports
 ├── cpu.rs               # 8080 CPU emulation
+├── debugger.rs          # Debugger: commands, breaks, watchpoints, trace ring, port trace
+├── disasm.rs            # Table-driven disassembler (all 256 opcodes)
 ├── registers.rs         # Register enums, flags
 └── io/
     ├── mod.rs           # build_bus: the port map (devices in power-on state)
@@ -119,7 +153,8 @@ src/
 rom/
 ├── Makefile
 ├── monitor.asm          # Monitor ROM source
-└── monitor.bin          # Compiled ROM (4KB)
+├── monitor.bin          # Compiled ROM (4KB)
+└── monitor.sym          # ROM labels for the debugger ('AAAA NAME')
 
 examples/
 └── hello.asm            # Example 8080 program
