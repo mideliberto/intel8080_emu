@@ -5,10 +5,10 @@
 **Mantra:** "A fool admires complexity, genius admires simplicity."
 
 ## Status
-- Phase 6 complete (Service Mailbox at 10-13, `TIME` + T). Phase 7 next: `ASM`/`DIS`, A and U (designed when it starts).
+- Phase 6 complete (Service Mailbox at 10-13, `TIME` + T). Phase 7 in progress: `ASM`/`DIS`, A and U, specified 2026-10-03 (DEVICE_SPECS 8, MONITOR_SPEC 6.16-6.17), code pending. Pi daemon `pi8080d` specified 2026-10-03 (`docs/PI_DAEMON.md`), code pending.
 - 266 tests passing (13 host + 130 CPU + 37 device + 30 mailbox + 32 monitor + 16 debugger + 8 terminal), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
 - Monitor ROM v0.5, 15 commands plus the `:` HEX loader, matches MONITOR_SPEC. 2571 of 4096 bytes used (`cd rom && make size`), ~1.5KB headroom
-- Spec solidified 2026-10-02: three normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC). Open decisions: none (Phase 6 readings and Pi clock policy closed 2026-10-03; `TODO.md`).
+- Spec: four normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC since 2026-10-02; PI_DAEMON since 2026-10-03). Open decisions: none (the Pi daemon and Phase 7 sets closed 2026-10-03; `TODO.md`).
 - Live task list: `TODO.md`
 
 ## Roles
@@ -36,8 +36,9 @@
 - `docs/ARCHITECTURE.md` - spec: memory map, boot, overlay, CPU contract, hardware interface, host-side conveniences
 - `docs/DEVICE_SPECS.md` - spec: every I/O port protocol
 - `docs/MONITOR_SPEC.md` - spec: monitor commands, line input, messages, HEX loader
-- `docs/QUICK_REFERENCE.md` - cheat sheet pointing at the three specs
-- `docs/HARDWARE_BUILD.md` - hardware build plan (non-normative): decisions, BOM, bring-up, sourcing, Pi service
+- `docs/PI_DAEMON.md` - spec: the Pi daemon `pi8080d` (bus loop, RESET, TCP console, TIME clock, build, deployment, tests)
+- `docs/QUICK_REFERENCE.md` - cheat sheet pointing at the specs
+- `docs/HARDWARE_BUILD.md` - hardware build plan (non-normative): decisions, BOM, bring-up, sourcing, Pi platform decisions
 - `docs/reference/` - 8080 instruction set (`Complete_Intel_8080_Instruction_Set_Reference.txt`) and hardware (`8080_HARDWARE.md`: 8080A/8224/8228 pins, electrical, timing, cited to the MCS-80 manual)
 - `rom/monitor.asm` - monitor ROM source
 

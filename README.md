@@ -19,7 +19,9 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | 266 tests (13 host + 130 CPU + 37 device + 30 mailbox + 32 monitor + 16 debugger + 8 terminal), plus 4 exercisers (`#[ignore]`) | ✅ |
 | Intel HEX loader (Phase 5) | ✅ |
 | Service Mailbox (ports 10-13) and `TIME` / T (Phase 6) | ✅ |
-| Mailbox: assembler, HTTP, Claude (Phases 7-9) | 🔲 Future |
+| Mailbox `ASM`/`DIS`, A and U (Phase 7): specified ([DEVICE_SPECS](docs/DEVICE_SPECS.md) 8, [MONITOR_SPEC](docs/MONITOR_SPEC.md) 6.16-6.17) | 🔲 In progress |
+| Pi daemon `pi8080d`: specified ([PI_DAEMON](docs/PI_DAEMON.md)) | 🔲 Not started |
+| Mailbox: HTTP, Claude (Phases 8-9) | 🔲 Future |
 
 ## Monitor Commands
 
@@ -173,8 +175,9 @@ docs/
 ├── ARCHITECTURE.md          # Normative: memory map, boot, overlay, CPU, hardware
 ├── DEVICE_SPECS.md          # Normative: port protocols, READY
 ├── MONITOR_SPEC.md          # Normative: monitor commands, HEX loader
+├── PI_DAEMON.md             # Normative: the Pi daemon (bus loop, RESET, TCP console, build, deploy)
 ├── QUICK_REFERENCE.md       # Cheat sheet
-├── HARDWARE_BUILD.md         # Build plan: BOM, bring-up, Pi service
+├── HARDWARE_BUILD.md         # Build plan: BOM, bring-up, Pi platform decisions
 ├── IMPLEMENTATION_ROADMAP.md
 ├── COLLABORATION_LOG.md
 ├── reference/               # 8080 instruction set, I/O references
@@ -217,10 +220,11 @@ Normative specs (code that differs from them is tracked in `TODO.md`):
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Memory map, boot, overlay, CPU contract, hardware interface, host-side keys
 - [`docs/DEVICE_SPECS.md`](docs/DEVICE_SPECS.md) — I/O port protocols, READY contract
 - [`docs/MONITOR_SPEC.md`](docs/MONITOR_SPEC.md) — Monitor commands, line input, HEX loader, `G` return
+- [`docs/PI_DAEMON.md`](docs/PI_DAEMON.md) — The Pi daemon `pi8080d`: bus loop, RESET, TCP console, TIME clock, build, deployment, tests
 
 Working docs:
 - [`docs/QUICK_REFERENCE.md`](docs/QUICK_REFERENCE.md) — Cheat sheet
-- [`docs/HARDWARE_BUILD.md`](docs/HARDWARE_BUILD.md) — Hardware build plan: BOM, bring-up, sourcing, Pi service (non-normative)
+- [`docs/HARDWARE_BUILD.md`](docs/HARDWARE_BUILD.md) — Hardware build plan: BOM, bring-up, sourcing, Pi platform decisions (non-normative)
 - [`docs/reference/8080_HARDWARE.md`](docs/reference/8080_HARDWARE.md) — 8080A, 8224, 8228 hardware reference (MCS-80 User's Manual)
 - [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) — Phases and plans
 - [`docs/COLLABORATION_LOG.md`](docs/COLLABORATION_LOG.md) — History, decisions, lessons

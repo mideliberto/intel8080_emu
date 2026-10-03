@@ -1,6 +1,6 @@
 # Hardware Build Plan
 
-Non-normative. How to build the first real machine: parts, bring-up order, sourcing and the Pi side. The contract the board must meet is `ARCHITECTURE.md` section 6 (circuits) and `DEVICE_SPECS.md` (ports, READY contract). **Where this file disagrees with them, the specs win**; fix this file.
+Non-normative. How to build the first real machine: parts, bring-up order, sourcing and the Pi platform decisions. The contract the board must meet is `ARCHITECTURE.md` section 6 (circuits) and `DEVICE_SPECS.md` (ports, READY contract); the Pi software is `PI_DAEMON.md`. **Where this file disagrees with them, the specs win**; fix this file.
 
 Chip-level reference (pins, levels, cycle timing): `reference/8080_HARDWARE.md`. Source of this plan: the 2026-10-02 hardware-alignment pass.
 
@@ -25,7 +25,7 @@ All accepted by Mike on 2026-10-02. Record and rationale: `COLLABORATION_LOG.md`
 | TEST-RESET | Footprint fitted; populated only for the unattended test rig. |
 | CPU-SOURCING | One Intel/AMD 8080A reference plus two spares; 2x 8224, 2x 8228. |
 | CONSTRUCTION | One 2-layer PCB, no backplane. |
-| PI-PLATFORM | Pi 4B, busy-poll service (section 5). |
+| PI-PLATFORM | Pi 4B, busy-poll service (section 5; service model in `PI_DAEMON.md`). |
 | CONSOLE-TRANSPORT | One TCP listener in the Pi daemon; a new client replaces the old. |
 | CONSOLE-OUTPUT | Output buffer of at least 2 MiB; discard on full and on RESET. |
 | RESET-TIMING | Abandon the in-flight request on RESET assertion; rebuild devices on release. |
@@ -89,9 +89,9 @@ One stage at a time. Do not start a stage until the previous one passes.
 | 1. 8224 + crystal + 510 ohm pair + DS1813. Scope phi1, phi2, RESET and STSTB. 10x probes only: phi outputs are not short-circuit protected. | 2.048 MHz +/- crystal offset. phi1 >= 60 ns, phi2 >= 220 ns, phi high >= 9.0 V. RESET held >= 3 clocks (ms) after power-up and on every button press, and active high. |
 | 2. Add 8080A (ZIF) + 8228. No memory, RDYIN jumpered high, 2.2k DB pull-down jumper in (floating reads = NOP). BUSEN, HOLD, INT tied. | A0 toggles at 256 kHz, A15 period 128 ms. Supply currents within datasheet max (+12 V <= 87 mA). Screen every CPU this way. |
 | 3. Add ROM, RAM, GAL decode and the 74HCT74 overlay half. RDYIN still jumpered high, pull-down out. Burn a small diagnostic image (asl): read IN FF, OUT FE, read IN FF again, march-test 0000-EFFF, HLT at a pass or fail address. Run the same image in the emulator first and dump the debugger instruction trace. | The logic analyzer shows HLT at the pass address. IN FF bit 0 reads 1 then 0. The fetch-address sequence of the first ~200 instructions matches the emulator trace exactly. Scope: DB high level on SRAM reads >= 2.9 V (else fit the pull-up SIP). |
-| 4. Add the WAIT-FF set path, the REQ AND gate and the IN latch, with the manual-ACK jig (button -> HCT14, DIP switches + LATCH button on the 374). Burn the real monitor.bin. | The CPU freezes on the first Pi-window access. Today's ROM freezes on IN 02; after the CONOUT fix it is OUT 00. Each ACK press advances exactly one access. The scope shows RDYIN low <= STSTB+167 ns, the STSTB pulse at HCT74 PRE >= 20 ns, and REQ rising only after the 8080 WAIT pin. The LA shows zero REQs on memory cycles over 10^6 cycles and zero phantom REQs across 100 consecutive resets. |
-| 5. Connect the Pi 4B (own supply). Day one: measure GPLEV read latency and GPIO write-to-pin timing. Then run a tracer daemon that ACKs every access, serves the console over TCP, and logs the port-trace line format (`ARCHITECTURE.md` 7.3). | The boot port trace and the banner are byte-identical to the emulator's port trace and transcript for the same monitor.bin. Power both boards on in either order, and with the Pi off: the board waits at the first access and continues when the daemon starts. |
-| 6. Full device daemon (shared IoBus). Replay the strict-harness transcript files over the TCP console. | Every transcript matches the emulator's output exactly. Ctrl-less paste of an Intel HEX file (Phase 5) loses no bytes. |
+| 4. Add the WAIT-FF set path, the REQ AND gate and the IN latch, with the manual-ACK jig (button -> HCT14, DIP switches + LATCH button on the 374). Burn the real monitor.bin. | The CPU freezes on the first Pi-window access, the banner's OUT 00. Each ACK press advances exactly one access. The scope shows RDYIN low <= STSTB+167 ns, the STSTB pulse at HCT74 PRE >= 20 ns, and REQ rising only after the 8080 WAIT pin. The LA shows zero REQs on memory cycles over 10^6 cycles and zero phantom REQs across 100 consecutive resets. |
+| 5. Connect the Pi 4B (own supply) and install `pi8080d` (`PI_DAEMON.md` 2, 11). Day one: with the board powered, scope REQ/ACK/LATCH for the per-access service time (`PI_DAEMON.md` 12.2). Then run `pi8080d --trace` for the boot port trace (`ARCHITECTURE.md` 7.3) and the banner over the TCP console. The rest of this step's bench checks: `PI_DAEMON.md` 14. | The boot port trace and the banner are byte-identical to the emulator's port trace and transcript for the same monitor.bin. Power both boards on in either order, and with the Pi off: the board waits at the first access and continues when the daemon starts. |
+| 6. The same `pi8080d` (shared IoBus). Replay the strict-harness transcript files over the TCP console. | Every transcript matches the emulator's output exactly. Ctrl-less paste of an Intel HEX file (Phase 5) loses no bytes. |
 | 7. Storage conformance test (`DEVICE_SPECS.md` 3), with stress-ng on the Pi's other cores. Then press RESET during a long W/fsync. | I 0A/09/08 read 00 10 00 after both W and L, and C F000 FFFF 2000 prints nothing. After RESET mid-fsync the machine reboots to the banner, with storage unmounted and no hang. |
 | 8. CPU acceptance: load the exercisers from storage with L, using the 8080-asm BDOS shim (0005 JMP to a print routine <= EEFF; 0000 JMP to the monitor warm entry). Run TST8080, 8080PRE, CPUTEST (~2 min), 8080EXM (~3.2 h at 2.048 MHz, est from emulator cycle counts). | All PASS, with CRCs equal to the published values. Repeat for each spare CPU. Once the emulator AC fixes land, the emulator's output must match the silicon output line for line. |
 
@@ -109,18 +109,18 @@ One stage at a time. Do not start a stage until the previous one passes.
 
 ---
 
-## 5. Pi Platform and Service Model
+## 5. Pi Platform
 
-- **Platform:** Raspberry Pi 4B for v1, on its own supply, grounds joined at the header. A Pi 5 also works but its GPIO reads cross PCIe to RP1 and are several times slower (est).
+Decisions only. The service model (bus loop, RESET handling, console transport, TIME clock source, build, deployment, tests and the bench checks) is normative in `PI_DAEMON.md`.
+
+- **Platform:** Raspberry Pi 4B for v1, on its own supply, grounds joined at the header. A Pi 5 also works but its GPIO reads cross PCIe to RP1 and are several times slower (est); not in v1.
 - **OS:** 64-bit Raspberry Pi OS, so `time_t` is 64-bit and the clock does not wrap in 2038.
-- **Clock (mailbox `TIME`):** the clock is set only when the kernel reports NTP-synchronized (`adjtimex()` does not return `TIME_ERROR`); until then `TIME` gives 83. The Pi 4B has no RTC, and an added RTC alone would not count. Local time follows the Pi's configured time zone (TZ), set at install. Implemented with the Pi daemon. Normative text: `DEVICE_SPECS.md` 8, TIME clock.
-- **Bus service:** one thread busy-polls the mmapped GPIO block through `/dev/gpiomem` on a core isolated with `isolcpus`, and calls the IoBus inline. One GPLEV0 read is an atomic snapshot of every signal. Cost: one core at 100%. Expected sub-us to about 3 us per access (est); measure GPLEV latency on day one (bring-up step 5).
-- **RESET:** a gpio character-device (gpio-cdev) both-edge request. The kernel latches the edge, so no pulse is missed, even during an fsync. The bus thread checks it before every ACK (`ARCHITECTURE.md` 6.6).
-- **No rppal.** It was archived 2025-07-01.
-- **Console:** one TCP listener in the daemon; a new client replaces the old. TCP backpressure is the out-of-band input flow control `DEVICE_SPECS.md` (Console) requires. Use socat to bridge a serial port or USB gadget if wanted.
-- **Output buffer:** at least 2 MiB, discarded on full and on RESET (`DEVICE_SPECS.md`, Console).
-- **Background work:** mailbox requests run on the other cores, never under READY.
-- **Code:** one crate, two binaries. The emulator and the daemon call the same port-mapping function to build the same IoBus.
+- **Clock (mailbox `TIME`):** set only when the kernel reports NTP-synchronized. Normative: `DEVICE_SPECS.md` 8, TIME clock.
+- **Bus service:** one thread busy-polls the mmapped GPIO block (`/dev/gpiomem`) on an isolated core and calls the IoBus inline. Cost: one core at 100%. `PI_DAEMON.md` 1, 4, 11; service-time estimates in 12.
+- **RESET:** kernel-latched edges from the GPIO character device (raw v2 ioctl, no crate). No rppal: it was archived 2025-07-01. `PI_DAEMON.md` 5.
+- **Console:** one TCP listener in the daemon; a new client replaces the old (CONSOLE-TRANSPORT). TCP backpressure is the out-of-band input flow control `DEVICE_SPECS.md` 4 requires. Address and access: `PI_DAEMON.md` 7, 10, 11. Use socat to bridge a serial port or USB gadget if wanted.
+- **Background work:** mailbox commands that do not complete within the execute access (`DEVICE_SPECS.md` 3.3, 8) run on the other cores, never under READY.
+- **Code:** one crate, two binaries. The emulator and the daemon call the same port-mapping function to build the same IoBus. Build: `PI_DAEMON.md` 2.
 
 ---
 
@@ -131,5 +131,5 @@ These cannot be closed on paper. Each has a bring-up check.
 - **STSTB pulse width at the HCT74 PRE** after the gate path (datasheet >= 40 ns in, 20-24 ns needed). Step 4.
 - **Reset-release runt** from the 8224 STSTB/RESET skew could set WAIT as reset ends. Step 4: zero phantom REQs across 100 resets.
 - **SRAM VIH at zero datasheet margin** against the 8228 VOH (2.4 V both). Real margin is large because the load is CMOS. Step 3: DB high >= 2.9 V, else fit the pull-up SIP.
-- **Pi GPLEV latency** is unmeasured. Step 5.
+- **Pi per-access service time** is unmeasured (`PI_DAEMON.md` 12.2, 14). Step 5.
 - **NOS chip quality.** Buy spares; never a NEC D8080A without F. Steps 2 and 8.

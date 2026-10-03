@@ -10,11 +10,12 @@
 | 4 | Storage System | ✅ Complete |
 | 5 | Program Loading | ✅ Complete |
 | 6 | Time | ✅ Complete |
-| **7** | **Development Tools** | **🔲 Next** |
+| **7** | **Development Tools** | **🔲 In progress (specified 2026-10-03)** |
 | 8 | Internet Services | 🔲 Future |
 | 9 | Claude Integration | 🔲 Future |
 | 10 | R command (debugger done early) | 🔲 Future |
 | 11 | Polish | 🔲 Future |
+| - | Pi daemon track (parallel) | 🔲 Specified 2026-10-03 |
 
 ---
 
@@ -120,9 +121,39 @@ No timer in v1. The Pi keeps wall-clock time via NTP. A periodic interrupt sourc
 
 ---
 
-## Phase 7: Development Tools
+## Phase 7: Development Tools (in progress)
 
-Assemble and unassemble via mailbox `ASM` / `DIS`; A and U commands. Designed when the phase starts.
+**Goal:** Assemble and unassemble on the machine, with the tools running on the Pi.
+
+**Specified 2026-10-03** (decisions: COLLABORATION_LOG Key Decisions, "Phase 7 Specified"): mailbox `ASM` and `DIS` in `DEVICE_SPECS.md` 8; `A` and `U` in `MONITOR_SPEC.md` 6.16-6.17, with the conformance vectors in 6.17.1.
+
+**Tasks:**
+- [ ] `src/disasm.rs`: `assemble(line) -> Option<Vec<u8>>`, the OPCODES table read backwards (DEVICE_SPECS 8, ASM); `line(addr, bytes, name)` moved out of `Debugger::insn`, so DIS and the debugger share it
+- [ ] Mailbox `ASM` and `DIS` in `mailbox.rs` (DEVICE_SPECS 8): pure, complete within the execute access, 82 on a bad argument, never 83. No test knob
+- [ ] ROM: mailbox client MB_SEND/MB_PUT/MB_GET (MONITOR_SPEC 9), T moved onto it with no change to its port sequence; A and U (6.16, 6.17); `Invalid instruction`; help lines; v0.6
+- [ ] Tests, `tests/mailbox_tests.rs`: every DEVICE_SPECS 8 ASM/DIS vector; R1 and R2 at port level (one loop over `DIS 0000 x y z` and `ASM t` through the rig, no new pub items)
+- [ ] Tests, `tests/monitor_tests.rs`: the MONITOR_SPEC 6.17.1 rows as marked there. `t_against(statuses, bytes)` generalises to take the typed input and return `step`'s output; the *rule 4* rows join the existing argument-error test; A dialogs in transcripts are single `<` steps
+
+**Success criteria:**
+- `A 0200`, then `MVI A,0D`, `JMP 0200`, `.`; `U 0200 2` prints `0200  3E 0D     MVI A,0D` and `0202  C3 00 02  JMP 0200`.
+- For every opcode, U's text typed into A gives back the same bytes, except the R2 aliases (DEVICE_SPECS 8).
+- Pasting source with blank lines into A never runs a monitor command.
+- `t_runs_the_reference_client` passes unchanged.
+
+**Estimate:** +328 ROM bytes (2571 -> 2899, 1197 free), measured on a sketch: dispatch 10, T -25 (56 -> 31 on the shared client), MB_SEND/MB_PUT 13, MB_GET 19, A 87, U 100, MB_HEX 23, the command strings 15, help lines 64, `Invalid instruction` 22.
+
+---
+
+## Pi Daemon Track (parallel to the phases)
+
+**Goal:** `pi8080d`, the software that runs the emulator's port map behind GPIO on the Pi 4B, so the same ROM runs on the real board.
+
+**Specified 2026-10-03:** `docs/PI_DAEMON.md`, the fourth normative spec (decisions: COLLABORATION_LOG Key Decisions, "Pi Daemon Specified"). Not started; the task list is in `TODO.md` (Current).
+
+**Success criteria:**
+- `cargo test` on any OS: every transcript through the daemon on the simulated board, its trace equal to the emulator's port sequence (PI_DAEMON 13.2), and the 13.3 fault, RESET, startup, stop and console tests.
+- The aarch64 musl `cargo check` and `cargo clippy` gate passes (PI_DAEMON 2).
+- On the bench: the PI_DAEMON 14 checks, at bring-up steps 5-8 (`HARDWARE_BUILD.md` 3).
 
 ---
 

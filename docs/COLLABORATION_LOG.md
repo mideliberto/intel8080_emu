@@ -63,6 +63,37 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-03: Phase 7 Specified: ASM, DIS, A and U
+**Decision:** Mike accepted every Phase 7 recommendation. Homes: DEVICE_SPECS 8 (the grammar, the DIS line, R1/R2, the vectors) and MONITOR_SPEC 6.16-6.17 (the commands, 6.17.1 vectors).
+- **Q-ALIAS:** a starred mnemonic assembles to the lowest opcode of its group (`NOP*` 08, `JMP*` CB, `RET*` D9, `CALL*` DD). The byte round trip fails only for 10 18 20 28 30 38 ED FD, listed once in DEVICE_SPECS 8 R2.
+- **Q-HSUFFIX:** ASM numbers are bare hex, 1-4 digits, a byte at most FF. No `H` suffix, no `0x`, `$` or sign.
+- **Q-REGNUM:** in a number slot, a register letter is hex: `MVI A,D` = 3E 0D.
+- **Q-ADDR-DEFAULT:** A and U require an address. No LAST_ASM/LAST_UNASM workspace.
+- **Q-U-ARGS / Q-U-BADCOUNT:** `U addr [count]`, the count in instructions, default 8. A present but invalid count prints `Invalid hex value`, as L and W.
+- **Q-A-LOOP:** only `.` ends A. An empty or all-space line prompts again with nothing sent. 82 prints `Invalid instruction`, any other failure `Service error`, and both prompt the same address again.
+- **Q-DIS-SHAPE:** DIS takes `AAAA B0 B1 B2` and returns a binary length byte, the whole line and CR LF. The line is defined once, in DEVICE_SPECS 8 DIS; the debugger's instruction line is that line with symbols (ARCHITECTURE 7.4).
+- **Q-LINE-FN:** the line format moves from the private `Debugger::insn` to `disasm::line`, device code that DIS and the debugger both call. A move, not a new abstraction.
+- **Q-READY:** TIME, ASM and DIS complete within the execute access (bounded work under READY); every other mailbox command runs in the background. Reworded in DEVICE_SPECS 3 rule 3, HARDWARE_BUILD 5 and ARCHITECTURE 6.4, which all said "anything behind the mailbox".
+- **Mailbox client:** extracted from T into one ROM routine set, MB_SEND/MB_PUT/MB_GET (MONITOR_SPEC 9). Three users: T, A, U.
+
+**Rationale:** The ROM stays an editor and a byte pump: no opcode table in 4 KB, the Pi runs the same `OPCODES` the debugger uses. One number style everywhere (U prints what A reads). The A loop change came from a reproduced hazard: when an empty line or `Service error` ended A, pasted source fell through to the dispatcher, where `XCHG` ran as `X CHG` and mounted a file.
+**Mantra check:** declined: `H` suffixes, distinct alias spellings, address defaults with new workspace, ROM-side line formatting (+30-40 bytes and a second copy of the format). Budget +328 bytes (2571 -> 2899), measured on a sketch.
+
+### 2026-10-03: Pi Daemon Specified; PI_DAEMON.md Is the Fourth Normative Doc
+**Decision:** Mike accepted every Pi daemon recommendation:
+- **Fourth normative doc:** `docs/PI_DAEMON.md` joins ARCHITECTURE, DEVICE_SPECS and MONITOR_SPEC. This amends "Spec Solidified Into Three Normative Docs" (2026-10-02). HARDWARE_BUILD 5 shrinks to the platform decisions and a pointer.
+- **build_bus takes the clock:** `build_bus(storage_dir, clock)`. main.rs and the harnesses pass `mailbox::local_time`, the daemon its NTP-gated clock. One port map.
+- **Gpio trait, a deliberate exception to the rule of three:** `Gpio { read(off), write(off, v), reset_edge() }`, register level, with two implementations: `GpioMem` (Pi, `/dev/gpiomem` mmap) and `SimBoard` (tests). Without it the bus loop (lost, doubled or hung accesses, RESET races) could only be tested on the bench. Same kind of exception as the mailbox `Clock` seam.
+- **RESET check cost:** the level read and the REQ-lost check run before every ACK; the edge-latch syscall runs only when more than 1 ms has passed since the last call. Premise: the DS1813 (RESET-SOURCE) holds RESET for at least 150 ms. ARCHITECTURE 6.6 and DEVICE_SPECS 3.3 now name it; a sub-ms reset source would need the latch before every ACK.
+- **RESET edges:** raw GPIO v2 line-request ioctl plus GPIO_GET_CHIPINFO through `libc`, the chip found by its `pinctrl-bcm2711` label, struct sizes and ioctl numbers pinned by const asserts. No crate (not gpiocdev, not rppal).
+- **Console:** listens on 127.0.0.1:8080 by default, reached with `ssh -L`; `--listen` with a wildcard opens it. A byte reaches the Pi when the service reads it from the transport, and RESET discards bytes still buffered there (DEVICE_SPECS 4).
+- **Build:** static `aarch64-unknown-linux-musl`, cross-built on the Mac with `rust-lld`; native build on the Pi is the fallback. Verifying it is a task, not a decision.
+- **No `--measure` mode:** day-one numbers come from a scope on REQ/ACK/LATCH and whole-command timing (PI_DAEMON 12.2).
+- **Devices are not `Send`.** This clarifies the 2026-10-02 entry "Emulator Shape Follows the Hardware", which listed "wasn't Send" among the device layer's problems: the problem was crossterm in the device layer. Devices stay `Rc<RefCell<..>>`, and the daemon's one bus thread owns them.
+
+**Rationale:** The daemon is the emulator's port map behind GPIO instead of behind the CPU model; everything else is transport. The trait buys "nothing commits red" for the code with the worst failure modes. The 1 ms gate takes a syscall off a 3 us budget without a second thread, on a premise the reset part guarantees.
+**Mantra check:** declined: a watcher thread, a gpiocdev or rppal dependency, a measurement mode, Docker or zig for the cross build, `Send` devices.
+
 ### 2026-10-03: Phase 6 Readings Confirmed; Pi Clock Policy
 **Decision:** Mike confirmed every Phase 6 literal reading as normative, plus the Pi clock policy. Each now has one home:
 - MONITOR_SPEC 6.15: (1) an error after partial T output prints on the same line, no CR LF first (`2026-Service error`); (9) T transcripts match the shape, never a value, so they run on hardware; device-level tests may inject a clock (replaces "No injectable clock is needed").
@@ -497,12 +528,14 @@ Console I/O debugging session:
 
 ### In Progress
 
-- **Phase 6:** done 2026-10-03 (Service Mailbox, `TIME`, T, v0.5). Phase 7 (`ASM`/`DIS`, A and U) is next and not started; it is designed when it starts.
+- **Phase 6:** done 2026-10-03 (Service Mailbox, `TIME`, T, v0.5).
+- **Phase 7:** specified 2026-10-03 (DEVICE_SPECS 8, MONITOR_SPEC 6.16-6.17); code not started (`TODO.md`, Phase 7).
+- **Pi daemon:** specified 2026-10-03 (`docs/PI_DAEMON.md`); code not started (`TODO.md`, Current).
 - **Review findings:** 2026-10-02 review found CPU flag bugs, ROM range and parse bugs, and vacuous tests. All fixed by 2026-10-03 (steps A-E); `TODO.md` keeps the repros.
 
 ### Open Decisions
 
-None open. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
+None open. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon and Phase 7 sets closed 2026-10-03 too. The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
 
 ### Blocked/Deferred
 
@@ -513,11 +546,18 @@ None open. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "cl
 ### Future Vision (Documented, Not Started)
 
 - HTTP client, system time device, Gutenberg e-reader, Claude API device
-- Hardware prototype (Pi Zero + real 8080)
+- Hardware prototype (Pi 4B + real 8080; `docs/HARDWARE_BUILD.md`, `docs/PI_DAEMON.md`)
 
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Pi Daemon and Phase 7 Specs Integrated
+- Mike accepted every recommendation in both spec sets (Key Decisions, same date). Installed `docs/PI_DAEMON.md` as the fourth normative doc, with the open-decision markers replaced by the decisions.
+- Phase 7 spec text applied: DEVICE_SPECS 8 rewritten (ASM, DIS, the shared table, R1/R2, vectors, the MB_SEND/MB_PUT/MB_GET reference client); MONITOR_SPEC 3, 4.3, 4.4, 5, 6.14, 6.15, 6.16, 6.17, 9, 10, 11. The banner and Scope v0.6 edits wait for the ROM.
+- Cross-doc: ARCHITECTURE 6.4 (Pi service and background work), 6.6 (the RESET check names the DS1813 premise), 7.4 (DIS line, the trace diff recipe drops `RESET`), 8; DEVICE_SPECS 3.3, 4 (arrival and RESET discard), 10, scope and conventions; HARDWARE_BUILD 5 cut to decisions and pointers, steps 5-6 use `pi8080d`; QUICK_REFERENCE, README, roadmap (Phase 7 in progress, daemon track), CLAUDE.md Status and Key Files.
+- Code that does not exist yet is marked pending in the specs and listed in TODO (daemon, cross-build check, Phase 7 items 1-7). Docs only; `cargo test` green.
+- Left to Mike: the musl `cargo check`/`clippy` gate belongs in CLAUDE.md's rules; it lives in PI_DAEMON 2 until he adds it. Test comments that quote the old mailbox text are listed in TODO Phase 7 item 6 rather than edited now, since the code they test has not changed.
 
 ### 2026-10-03: Loose Ends: Clippy Clean, Real-Terminal Tests
 - `cargo clippy --all-targets` clean: Default for Debugger and Console (derived), Intel8080 and IoBus (`impl Default` calling `new()`: RESET state, and a 256-port array too long to derive); a `MountCase` alias in `device_tests.rs`.

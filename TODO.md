@@ -1,7 +1,9 @@
 # TODO
 
 ## Open Decisions (Mike decides before anyone codes against them)
-- The 2026-10-02 set closed 2026-10-02 and the 2026-10-03 sets closed 2026-10-03; see COLLABORATION_LOG Key Decisions. The specs are docs/ARCHITECTURE.md, docs/DEVICE_SPECS.md, docs/MONITOR_SPEC.md.
+- The 2026-10-02 set closed 2026-10-02 and the 2026-10-03 sets closed 2026-10-03; see COLLABORATION_LOG Key Decisions. The specs are docs/ARCHITECTURE.md, docs/DEVICE_SPECS.md, docs/MONITOR_SPEC.md, docs/PI_DAEMON.md.
+- [x] Pi daemon spec, 9 questions (build-bus-clock, gpio-seam, reset-check-cost, cdev-interface, listen-default, cross-build, measure-mode, fourth-normative-doc, console-input-arrival, device-send-wording): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Pi Daemon Specified"). Written into docs/PI_DAEMON.md, ARCHITECTURE 6.4/6.6/7.4, DEVICE_SPECS 3/4/8/10, HARDWARE_BUILD 3/5.
+- [x] Phase 7 spec, 10 questions (Q-ALIAS, Q-HSUFFIX, Q-REGNUM, Q-ADDR-DEFAULT, Q-U-ARGS, Q-U-BADCOUNT, Q-A-LOOP, Q-DIS-SHAPE, Q-READY, Q-LINE-FN): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Phase 7 Specified"). Written into DEVICE_SPECS 8, MONITOR_SPEC 6.16-6.17, and the cross-doc edits.
 - [x] Idle wait slowed compute-bound programs 15x (2026-10-03): closed 2026-10-03, the wait now also requires an `IN 02` read in the last pump interval (ARCHITECTURE 7.2); the 26M-step loop is back to no-wait speed.
 - [x] Debugger NAME+n only within one memory-map region (2026-10-03): accepted by Mike 2026-10-03 (ARCHITECTURE 7.4 Location).
 - [x] HEX guard wording: closed 2026-10-03, ARCHITECTURE 1 now says "would write into either range".
@@ -23,7 +25,20 @@
 - [x] Hardware-alignment pass (2026-10-02): design buildable with one hard fix (WAIT set via STSTB, not SYNC). Spec edits in ARCHITECTURE section 6 and DEVICE_SPECS; BOM and bring-up in docs/HARDWARE_BUILD.md
 - [x] 8080A/8224/8228 hardware reference: docs/reference/8080_HARDWARE.md
 - [x] Implement the 2026-10-03 decisions (2026-10-03): idle wait in the pump; HLT opens the prompt in an interactive run; a bad `--script` line exits 2; workspace labels in `monitor.asm` (ROM bytes identical but DATE/TIME, `monitor.sym` gains 9 names); the 7.3 repeat rule; MONITOR_SPEC 4.4 rule 4 and 6.1 wording
+- [x] Specs integrated (2026-10-03): docs/PI_DAEMON.md installed as the fourth normative doc; Phase 7 spec text in DEVICE_SPECS 8 and MONITOR_SPEC; cross-doc edits; Key Decisions. Docs only.
+- [ ] Pi daemon `pi8080d` per docs/PI_DAEMON.md (moved from Someday 2026-10-03). In order: `build_bus(storage_dir, clock)` with main.rs and the three harnesses passing `mailbox::local_time` (PI_DAEMON 6); `debugger::Trace` made `pub(crate)` (9); `src/pi/mod.rs` (the `Gpio` trait, register and pin constants, `setup_pins`, `serve`, RESET handling, console pass, stop), `src/pi/linux.rs` (`GpioMem`: mmap, the v2 line request found by the `pinctrl-bcm2711` label, the kernel-ABI const asserts, `ntp_local_time`), `src/pi_main.rs`, `default-run` in Cargo.toml (2); `tests/sim/mod.rs` (SimBoard, 13.1), `tests/pi_daemon_tests.rs` (13.3), `every_transcript_through_the_daemon` with `Mon.side` (13.2) and the `#[ignore]` `w_command_cycles` helper (12.2)
+- [ ] Mike: add the PI_DAEMON 2 aarch64 musl `cargo check`/`cargo clippy` gate to CLAUDE.md (Rules, Build, End of Session step 1) before the first `src/pi/` commit. Left to Mike because it changes CLAUDE.md's rules
+- [ ] Verify the cross build (PI_DAEMON 2; not a decision): `rustup target add aarch64-unknown-linux-musl`, `.cargo/config.toml` linker = `rust-lld`, `cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d`; then on the Pi, local time under musl reads `/etc/localtime` (PI_DAEMON 14). Fallback: build natively on the Pi
 - [x] Loose ends (2026-10-03): `cargo clippy --all-targets` clean (Default for Intel8080, Debugger, IoBus, Console; a `MountCase` alias in `device_tests.rs`). Real-terminal tests `tests/terminal_tests.rs` (8): the binary under a pty via `rexpect` (Unix-only dev-dependency), wrapped in `sh` so each test checks the exit status and `stty -g` before = after; raw mode boot, echo and run, Ctrl-C mid `JMP $`, Ctrl-E / bad line / `c`, interactive HLT / `q`, Backspace 7F -> 08 at `IN 01` and in a line edit, a piped `--script c` run leaving the terminal mode alone. No pty: prints `skipped: no pty` and passes; libtest captures that line, so the 266 count looks the same either way (`cargo test --test terminal_tests -- --nocapture` shows it). cargo-mutants `src/main.rs`: 8 missed -> 0 (65 caught, 5 timeouts = arg-loop hangs and a quit/resume swap that hangs the piped tests, 6 unviable)
+
+## Phase 7 - Development Tools (specified 2026-10-03; DEVICE_SPECS 8, MONITOR_SPEC 6.16-6.17)
+1. [ ] `src/disasm.rs`: `assemble(line) -> Option<Vec<u8>>` (the OPCODES table searched from 00, DEVICE_SPECS 8 ASM); `line(addr, bytes, name)` moved out of the private `Debugger::insn`; the debugger calls it with its symbol lookup, DIS with `|_| None`
+2. [ ] Mailbox `ASM` and `DIS` in `mailbox.rs`: pure, complete within the execute access, 82 on a bad argument, never 83; no test knob. Header (`mailbox.rs:4-6`): "TIME, ASM and DIS complete within the execute access"
+3. [ ] ROM: MB_SEND/MB_PUT/MB_GET (MONITOR_SPEC 9, the DEVICE_SPECS 8 reference client), T moved onto it with its port sequence unchanged; A (6.16) and U (6.17); `Invalid instruction`; the A and U help lines; banner v0.6 with MONITOR_SPEC Scope and 1.1 (sketch edits E1, E3); the Status sentence says 6.16 and 6.17 are implemented. Budget +328 (2571 -> 2899)
+4. [ ] Tests, `tests/mailbox_tests.rs`: every DEVICE_SPECS 8 ASM/DIS vector; R1 and R2 over all 768 cases at port level. `placeholder_commands_are_unknown_in_phase_6` becomes `placeholder_commands_are_unknown` with `GET` and `ASK` only
+5. [ ] Tests, `tests/monitor_tests.rs` and transcripts: every MONITOR_SPEC 6.17.1 row as marked there (scripted rows on the test-local `ScriptedMailbox`; rule 4 rows appended to `argument_errors_write_no_port_and_no_memory_outside_the_workspace`); `help.txt` gains the A and U lines
+6. [ ] Spec quotes in tests and code (lesson 2026-10-03): `mailbox_tests.rs` lines 18, 94-95, 111, 653, 703 ("Commands that complete within the execute access ..."); `monitor_tests.rs` 513 (6.15 step 1 "through the mailbox client"), 603 (the new `Service error` row), 616 (MB_GET outcomes)
+7. [ ] Ship docs: README status, Coming line and tree (`mailbox.rs`: TIME, ASM, DIS); CLAUDE.md Status (v0.6, 17 commands, bytes, counts); MONITOR_SPEC Status; ARCHITECTURE 8 and DEVICE_SPECS 8/10 drop their "pending" notes; roadmap Phase 7 done
 
 ## Done: Phase 5 - Intel HEX Loader (2026-10-03)
 Budget was ~250 bytes, from a 176-byte sketch that left out the five messages and the help line (126 bytes the spec requires). Shipped at +289 (2165 -> 2454): 163 code, 87 the five messages, 39 the help line. Built from three candidate implementations: the two-pass one as the base, grafts and tests from the other two.
@@ -167,12 +182,10 @@ All done 2026-10-03 (step E): the WARM/error-tail/one-parser/RANGE refactor from
 - [ ] R command - needs register capture on return (Phase 10)
 
 ## Someday
-- [ ] Phase 7: Assembler/disassembler (mailbox `ASM`/`DIS`)
-- [ ] Phase 8: HTTP GET (mailbox `GET`)
+- [ ] Phase 8: HTTP GET (mailbox `GET`). Its background worker must not move the IoBus off the Pi daemon's bus thread (devices are not `Send`, PI_DAEMON 1)
 - [ ] Phase 9: Claude (mailbox `ASK`, Q command)
 - [ ] Phase 10: R command (the debugger shipped early, ARCHITECTURE 7.4)
 - [ ] 8253 timer, TIMER_ISR, RST 7 vector: when something needs a periodic interrupt
 - [ ] Hardware prototype: see docs/HARDWARE_BUILD.md (BOM, 9-step bring-up)
-- [ ] Pi daemon binary (busy-poll /dev/gpiomem, TCP console, shared device code). Its `TIME` clock: "not set" unless `adjtimex()` reports NTP-synchronized, local time per the TZ set at install (DEVICE_SPECS 8, TIME clock)
 - [ ] Pi-assisted hardware single-step (needs A8-A15 on the Pi; not in v1)
 - [ ] Interrupt tick source (Pi GPIO vs 8254) when something needs a periodic interrupt

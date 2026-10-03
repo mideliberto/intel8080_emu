@@ -5,6 +5,7 @@ Cheat sheet. Not normative. Every section links to the doc that owns the detail,
 - [ARCHITECTURE.md](ARCHITECTURE.md): memory map, workspace, boot, overlay, CPU contract, hardware interface, host-side keys.
 - [DEVICE_SPECS.md](DEVICE_SPECS.md): every port protocol and the READY contract.
 - [MONITOR_SPEC.md](MONITOR_SPEC.md): line input, argument grammar, commands, messages, HEX loader, `G` return.
+- [PI_DAEMON.md](PI_DAEMON.md): the Pi software behind the ports (`pi8080d`): bus loop, RESET, TCP console, build, deployment.
 
 This page shows decided behavior. Where the code does not match yet, the change is pending in `TODO.md`.
 
@@ -16,6 +17,7 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 
 | Cmd | Syntax | Description |
 |-----|--------|-------------|
+| A | `A addr` | Assemble, one line per prompt; only `.` ends (mailbox `ASM`) |
 | C | `C start end dest` | Compare memory; prints each mismatch |
 | D | `D [start [end]]` | Dump memory; default 128 bytes from the last dump address |
 | E | `E [addr]` | Examine/modify; `CR` stores and advances, `.` exits |
@@ -28,6 +30,7 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 | O | `O port val` | Output to port |
 | S | `S start end b1 [.. b8]` | Search for 1-8 bytes |
 | T | `T` | Show time (mailbox `TIME`); `Service error` on a mailbox failure |
+| U | `U addr [cnt]` | Unassemble `cnt` instructions, default 8 (mailbox `DIS`) |
 | W | `W mem stor [cnt]` | Write to storage (24-bit `stor`), then flush; `cnt` default 0100 |
 | X | `X [file \| -]` | `X` query, `X name` mount, `X -` unmount |
 | ? | `?` | Help |
@@ -38,7 +41,7 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 - Ranges are inclusive. `end < start` prints `Invalid range`.
 - Words take 1-4 hex digits, storage addresses 1-6. More digits is an error, never a truncation.
 - Byte arguments parse as a word and must be at most FF (`00AA` is fine, `1AA` is an error).
-- L/W count 0 or M count 0 prints `Invalid range`.
+- L/W/M/U count 0 prints `Invalid range`.
 - Tokens after the last argument are ignored.
 - A command that reports an argument error writes no memory outside the workspace and no I/O port.
 
@@ -52,8 +55,6 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 
 | Cmd | Phase | Description |
 |-----|-------|-------------|
-| A | 7 | Assemble (mailbox `ASM`) |
-| U | 7 | Unassemble (mailbox `DIS`) |
 | N | 8 | HTTP GET (mailbox `GET`) |
 | Q | 9 | Ask Claude (mailbox `ASK`) |
 | R | 10 | Registers |
@@ -142,6 +143,7 @@ Detail: [DEVICE_SPECS.md](DEVICE_SPECS.md).
 
 - Errors: 80 unknown/empty command, 81 buffer overflow, 82 bad args, 83 service failed.
 - `TIME` returns 19 bytes, `YYYY-MM-DD HH:MM:SS`, Pi local time, no line ending.
+- `ASM` returns 1-3 binary bytes of machine code. `DIS` returns a length byte, the instruction line and CR LF. Both give 82 on a bad argument, never 83 (DEVICE_SPECS 8).
 
 ### System Control (FE-FF)
 

@@ -6,8 +6,9 @@ Normative. Every I/O port the 8080 can see, at register level. Where the emulato
 - This file covers the port map, what every register returns and does, and the READY contract as software sees it.
 - `ARCHITECTURE.md` covers port-range ownership, the memory map, reset and boot, CPU behavior (including interrupts), the circuits (WAIT flip-flop and handshake, Pi data path, overlay 74HCT74, decode, reset wiring, level translation, clock, power) and host-side emulator conveniences, including the host key map.
 - `MONITOR_SPEC.md` covers monitor commands, messages, line input and the HEX loader. This file names a ROM routine only where it is the reference client of a protocol.
+- `PI_DAEMON.md` covers the Pi software that serves 00-6F: the bus loop, RESET handling, the console transport, the TIME clock source, build and deployment. It meets the contracts in this file and does not restate them.
 
-**Conventions:** Port numbers and values are hex. "R" means `IN` and "W" means `OUT`. "Ignored" means no state changes. All decisions in this file were made by Mike on or before 2026-10-02 and are binding.
+**Conventions:** Port numbers and values are hex. "R" means `IN` and "W" means `OUT`. "Ignored" means no state changes. All decisions in this file were made by Mike (COLLABORATION_LOG Key Decisions) and are binding.
 
 ---
 
@@ -74,9 +75,9 @@ The circuit is in `ARCHITECTURE.md` (Pi Window and READY). This section is the c
    - Sample port, direction and OUT data from a GPIO read in which REQ is high (`ARCHITECTURE.md`, Pi Window and READY).
    - After raising ACK, read it back high and wait at least 500 ns before treating REQ as a new access. Never wait for REQ to go low.
    - Separate dependent GPIO steps (drive data, LATCH, ACK) with a read-back of the GPIO level register.
-   - On RESET, drop any request in flight without raising ACK. Check for a latched RESET immediately before every ACK (rule 2.8; `ARCHITECTURE.md`, Reset).
-   - Do only bounded local work under READY: console byte transfer, storage address, data and control operations (including fsync and filling a past-EOF gap), and mount commands (open, create, fsync or close a local file). "Bounded" means the operation always finishes. It does not mean it is fast: an fsync, or a write at FFFFFF in an empty file, can hold READY for seconds.
-   - Never wait on the network, an external service or user input while holding READY. Unbounded work (anything behind the mailbox) runs in the background and reports through mailbox status (section 8).
+   - On RESET, drop any request in flight without raising ACK, and never ACK across a RESET (rule 2.8). The check before each ACK is in `ARCHITECTURE.md` 6.6 (Reset). It relies on the reset source holding RESET for at least 150 ms (a DS1813, decision RESET-SOURCE), which lets the latched-edge part of the check run at most once per millisecond.
+   - Do only bounded local work under READY: console byte transfer, storage address, data and control operations (including fsync and filling a past-EOF gap), mount commands (open, create, fsync or close a local file), and the mailbox commands that complete within the execute access (`TIME`, `ASM`, `DIS`; section 8). "Bounded" means the operation always finishes. It does not mean it is fast: an fsync, or a write at FFFFFF in an empty file, can hold READY for seconds.
+   - Never wait on the network, an external service or user input while holding READY. Every other mailbox command is unbounded work: it runs in the background and reports through mailbox status (section 8).
 4. **No timeout.** The 8080 waits as long as the access is pending. A dead Pi stalls the 8080 until RESET. Until the Pi's device service is running, the first Pi-window access stalls and then completes once the Pi services it. At boot that access is the banner's first `OUT 00`. The stalled access MUST NOT complete with a floating bus (`ARCHITECTURE.md`, Pi Window and READY, rule 3 and Power and boot independence). No ROM code handles the stall.
 5. **Timing:** on hardware every Pi-window access costs 10 T-states plus at least one wait state. T3 starts 0.4-0.9 us after the Pi's ACK, and the Pi's service time comes on top (on the order of microseconds on a busy-polling Pi 4, est). Software MUST NOT depend on how long an `IN` or `OUT` takes. The emulator models no wait states: `IN` and `OUT` take 10 T-states, and device effects are applied within the instruction.
 6. **Hardware is the target.** No protocol in this file may rely on emulator-only timing or behavior.
@@ -118,13 +119,13 @@ The console is a Pi FIFO device behind READY. The terminal connects to the Pi; t
 
 ### Behavior
 
-- **OUT 00:** the byte goes to the terminal unchanged: 8-bit transparent, no translation, no CR/LF insertion. `OUT 00` never waits on the terminal. When no terminal is attached, or the Pi's output buffer is full, the byte is discarded. The Pi's output buffer holds at least 2 MiB, more than any single monitor command prints (`C 0000 FFFF` prints up to 1,114,112 bytes). Bytes are discarded only when it is full. The emulator's buffer is 2 MiB (`OUTPUT_CAP`, `src/io/devices/console.rs`); the host run loop drains it to stdout.
-- **IN 01 with input waiting** returns the oldest byte and removes it from the FIFO. A byte is "waiting" from the moment it reaches the Pi. Arrival never depends on whether the 8080 has read `IN 02`.
+- **OUT 00:** the byte goes to the terminal unchanged: 8-bit transparent, no translation, no CR/LF insertion. `OUT 00` never waits on the terminal. When no terminal is attached, or the Pi's output buffer is full, the byte is discarded. The Pi's output buffer holds at least 2 MiB, more than any single monitor command prints (`U 0000 FFFF` prints up to 1,900,515 bytes: 65,535 lines of at most 29 bytes). Bytes are discarded only when it is full. The emulator's buffer is 2 MiB (`OUTPUT_CAP`, `src/io/devices/console.rs`); the host run loop drains it to stdout.
+- **IN 01 with input waiting** returns the oldest byte and removes it from the FIFO. A byte is "waiting" from the moment it reaches the Pi, which is when the device service reads it from the transport. Arrival never depends on whether the 8080 has read `IN 02`.
 - **IN 01 with the FIFO empty** returns 00 and changes nothing.
 - **Input bytes** are delivered in arrival order and unchanged, including control characters (00-1F, 7F) and bytes 80-FF. The device delivers every byte the terminal sends.
 - **No echo:** the device never echoes input. 8080 software does all echoing (`MONITOR_SPEC.md`, Line Input (READ_LINE)).
 - **Input FIFO:** MUST NOT drop bytes. Its capacity is a Pi implementation detail. When the FIFO is full, the Pi stops the terminal with out-of-band flow control: RTS/CTS, or the transport's own (USB, TCP). In-band XON/XOFF is forbidden, because 11 and 13 are data.
-- **Power-on and RESET:** the input FIFO is empty, status reads 02, and console output not yet sent to the terminal is discarded. Bytes received before RESET is released are discarded, so the ROM needs no input drain at boot.
+- **Power-on and RESET:** the input FIFO is empty, status reads 02, and console output not yet sent to the terminal is discarded. Bytes the terminal sent before the device service observes the release of RESET are discarded, including bytes still buffered in the transport (for TCP, the socket), so the ROM needs no input drain at boot. A byte typed in the moment between the real release and the service seeing it is discarded too.
 - **Emulator:** host keys become FIFO bytes through `ARCHITECTURE.md` (Host Key Map), the only home for host-reserved keys.
 
 ### Reference client
@@ -309,7 +310,7 @@ The monitor's `X name` follows this sequence and prints `Invalid filename` for 0
 
 ## 8. Service Mailbox (Ports 10-13)
 
-One device carries every Pi service. The 8080 writes a text command and reads back a byte stream. The Pi handles TLS, DNS, JSON, NTP and the API key. The device logic is Rust behind `IoDevice`: the emulator bus calls it, and on the Pi a GPIO front end calls the same code. Its first use is Phase 6 `TIME`.
+One device carries every Pi service. The 8080 writes a text command and reads back a byte stream. The Pi handles TLS, DNS, JSON, NTP and the API key. The device logic is Rust behind `IoDevice`: the emulator bus calls it, and on the Pi a GPIO front end calls the same code. Phase 6 brought `TIME`; Phase 7 adds `ASM` and `DIS` (specified 2026-10-03; the code is pending, `TODO.md`, and until it ships both give 80).
 
 ### Registers
 
@@ -347,7 +348,7 @@ One device carries every Pi service. The 8080 writes a text command and reads ba
 - A response may be empty.
 - Response bytes can be any value 00-FF. The end is marked by status, not by a terminator.
 - **Abort** completes within the `OUT 11` access and never waits on the network. The device marks the old request cancelled, and nothing a cancelled request produces is ever delivered.
-- **Phase 6:** `TIME` completes within the execute access. Right after execute, `IN 12` reads 02 or an error code (80-83), or 00 after a Pi service restart (rule 2.9). It never reads 01. The emulator needs no background worker until a command that takes time exists (Phase 8).
+- **Commands that complete within the execute access:** `TIME` (Phase 6), `ASM` and `DIS` (Phase 7). Right after execute, `IN 12` reads 02 or an error code, or 00 after a Pi service restart (rule 2.9). It never reads 01. `TIME` can give 80-83; `ASM` and `DIS` can give 80-82 and never 83. The emulator needs no background worker until a command that takes time exists (Phase 8).
 
 ### Reading 13 in each state
 
@@ -366,10 +367,10 @@ One device carries every Pi service. The 8080 writes a text command and reads ba
 
 ### Command format
 
-- The **command word** is the bytes before the first 20h, or the whole buffer when it contains no 20h. It is matched exactly and case-sensitively against the uppercase names below. An empty word, a lowercase word or an unknown word gives 80. A placeholder word in the Commands table (`ASM`, `DIS`, `GET`, `ASK`) is unknown until its phase ships, so it gives 80, with or without arguments.
+- The **command word** is the bytes before the first 20h, or the whole buffer when it contains no 20h. It is matched exactly and case-sensitively against the uppercase names below. An empty word, a lowercase word or an unknown word gives 80. A placeholder word in the Commands table (`GET`, `ASK`) is unknown until its phase ships, so it gives 80, with or without arguments.
 - The **argument string** is everything after the first 20h, passed verbatim and possibly empty. URLs are case-sensitive.
 - There is no terminator: execute ends the command.
-- Text responses use CR LF (0D 0A) between lines and after each line, except for `TIME` (below).
+- Text responses use CR LF (0D 0A) between lines and after each line. The exceptions are `TIME` (no line ending), `ASM` (binary machine code) and the first byte of a `DIS` response (a binary length). Each is specified below.
 
 ### Error codes
 
@@ -388,12 +389,12 @@ One device carries every Pi service. The 8080 writes a text command and reads ba
 | Command | Phase | Exact buffer | Response |
 |---------|-------|--------------|----------|
 | `TIME` | 6 | `TIME` only. Any other buffer whose command word is `TIME` (for example `TIME ` or `TIME UTC`) gives 82 | 19 bytes, `YYYY-MM-DD HH:MM:SS`: local time, 24-hour, every field zero-padded, with no line ending. Example: `2026-10-02 14:30:05`. A year below 1000 is zero-padded to four digits (`0999-01-02 03:04:05`). A year above 9999 gives 83. If the clock is not set, the result is 83. Clock rules: TIME clock, below |
-| `ASM <line>` | 7 | Placeholder. Gives 80 until Phase 7 ships it | Designed in Phase 7 |
-| `DIS <bytes>` | 7 | Placeholder. Gives 80 until Phase 7 ships it | Designed in Phase 7 |
+| `ASM <line>` | 7 | `ASM`, one 20h, then one instruction in the notation `DIS` prints. Grammar: ASM, below | The instruction's 1-3 bytes of machine code, binary, opcode first, then the operand (a word low byte first). No line ending |
+| `DIS AAAA B0 B1 B2` | 7 | `DIS`, one 20h, then exactly `AAAA B0 B1 B2`. Grammar: DIS, below | One length byte (binary 01-03), then the instruction line, then CR LF |
 | `GET <url> [> FILE]` | 8 | Placeholder. Gives 80 until Phase 8 ships it | Designed in Phase 8, including how it interacts with the mounted file |
 | `ASK <prompt>` | 9 | Placeholder. Gives 80 until Phase 9 ships it | Designed in Phase 9 |
 
-Large results go to storage files, and the 8080 reads them through section 6. How long a request may run, and how a hung request ends, is designed in Phase 8 with `GET`. `TIME` cannot hang.
+Large results go to storage files, and the 8080 reads them through section 6. How long a request may run, and how a hung request ends, is designed in Phase 8 with `GET`. `TIME`, `ASM` and `DIS` cannot hang.
 
 ### TIME clock
 
@@ -403,28 +404,133 @@ Large results go to storage files, and the 8080 reads them through section 6. Ho
 - **Year above 9999:** the clock reports "not set", so `TIME` gives 83.
 - **Not set:** `TIME` gives 83.
 - **Emulator:** the host's local time (`localtime_r`). It reports "not set" when the host time is before 1970, does not fit the host's `time_t`, gives a year above 9999, or `localtime_r` fails. The host has no other notion of "clock not set".
-- **Pi:** the Pi runs 64-bit Raspberry Pi OS, so `time_t` is 64-bit and does not wrap in 2038. The clock is set when the kernel reports NTP-synchronized: `adjtimex()` does not return `TIME_ERROR`. Otherwise it reports "not set" and `TIME` gives 83. An RTC alone does not count. Local time follows the Pi's configured time zone (TZ), set at install (`HARDWARE_BUILD.md`, Pi Platform). Implemented with the Pi daemon (`TODO.md`, Someday).
+- **Pi:** the Pi runs 64-bit Raspberry Pi OS, so `time_t` is 64-bit and does not wrap in 2038. The clock is set when the kernel reports NTP-synchronized: `adjtimex()` does not return `TIME_ERROR`. Otherwise it reports "not set" and `TIME` gives 83. An RTC alone does not count. With no NTP update for about 9 h the kernel marks the clock unsynchronized, and `TIME` gives 83 until the next sync. Local time follows the Pi's configured time zone (TZ), set at install (`PI_DAEMON.md` 11). The daemon's clock: `PI_DAEMON.md` 8 (pending, `TODO.md`).
+
+### ASM and DIS: the shared table
+
+Both commands are pure functions of the argument string: no clock, no network, no storage, no state kept between requests. Both are one 256-entry opcode table (`OPCODES` in `src/disasm.rs`): `DIS` reads it forwards, `ASM` reads it backwards. There is no second opcode table. The debugger reuses the table and the `DIS` line (`ARCHITECTURE.md` 7.4).
+
+- **Notation** is the table's: Intel mnemonics as in `docs/reference/Complete_Intel_8080_Instruction_Set_Reference.txt`. Registers `B C D E H L M A`, pairs `B D H SP` (and `PSW` for `PUSH` and `POP`), `RST 0` to `RST 7`. Numbers are uppercase hex with no prefix or suffix: a byte operand (`d8`, `p8`) prints as 2 digits, a word operand (`d16`, `a16`) as 4. The 12 undocumented opcodes (`ARCHITECTURE.md` 5.4) carry a star: `NOP*` (08 10 18 20 28 30 38), `JMP*` (CB), `RET*` (D9), `CALL*` (DD ED FD).
+- **No symbols.** An address operand always prints as 4 hex digits. Neither command knows a name.
+
+**Round-trip properties,** stated at port level. For every *x* in 00-FF and every operand pair *y z* in {00 00, FF FF, 34 12}, `DIS 0000 x y z` responds with a length *L* and a line; let *t* be the line from column 16 (after the address, the bytes field and their spaces) up to the CR LF. Tests MUST check R1 and R2 for all 768 cases.
+
+- **R1, text (all 256 opcodes):** `ASM t` responds with *L* bytes, and `DIS 0000` of those bytes (padded with *y z*) gives *t* again.
+- **R2, bytes:** the *L* bytes `ASM t` responds with are the first *L* of *x y z*, for every opcode except the 8 duplicate aliases. `NOP*` always assembles to 08, so 10 18 20 28 30 38 come back as 08, and `CALL*` always assembles to DD, so ED and FD come back as DD. The text cannot tell the members of an alias group apart. 08, CB, D9, DD and the 244 documented opcodes round-trip exactly. This is the only list of the R2 aliases; other docs point here.
+
+### ASM
+
+`ASM <line>` assembles one instruction. `<line>` is the whole argument string.
+
+- **Length:** the 128-byte buffer leaves 124 bytes for `<line>`. A longer command gives 81.
+- **Characters:** only 20h-7Eh. Any other byte, including Tab, CR, LF, 00 and 80-FF, gives 82. `a`-`z` fold to `A`-`Z` before matching.
+- **Blanks:** 20h is the only blank. Leading and trailing spaces are ignored. The mnemonic is the first run of non-space characters, and one or more spaces separate it from the operand field. The operand field is split at every comma, and spaces before and after each operand are ignored. An operand that is empty or contains a space gives 82: `MOV A,`, `MOV A B`, `MOV A,,B`.
+- **Matching:** the table is searched from opcode 00 to FF and the first entry that matches wins. A line matches an entry when the mnemonic is equal (a trailing `*` included), the operand count is equal, and each operand matches the entry's:
+  - a register, pair or `RST` number (`A`, `M`, `SP`, `PSW`, `7`) matches by its exact text, after case folding;
+  - a byte operand (`d8`, `p8`) matches a byte number, and a word operand (`d16`, `a16`) matches a word number.
+- **Numbers** are hex: 1-4 digits `0-9 A-F a-f` and nothing else. There is no `H` suffix, no `0x` or `$` prefix, no sign and no decimal. A byte number's value is at most FF, so `00AA` is AA and `1AA` gives 82. A word number is 0000-FFFF. Where the entry has a number, a token that is also a register name is a number: `MVI A,D` is `MVI A,0D`.
+- **Aliases:** a starred mnemonic assembles to the lowest opcode of its group, because the search runs from 00: `NOP*` gives 08, `JMP*` CB, `RET*` D9 and `CALL*` DD.
+- **Not in the grammar**, each giving 82: labels (`LOOP: NOP`), comments (`NOP ; x`), directives (`DB`, `ORG`, `EQU`), expressions (`LXI H,0100+2`), `$`, character constants, Zilog names and pair names (`LD`, `BC`, `HL`), `MOV M,M` (76 is `HLT`), and pairs an instruction does not take (`LDAX H`, `PUSH SP`, `LXI PSW,0000`). `RST` takes the single digits `0`-`7` only: `RST 07` and `RST 8` give 82.
+- **Response:** the machine code, 1-3 bytes, binary. Opcode first, then a byte operand, or a word operand low byte first. `ASM LXI H,1234` responds 21 34 12. There is no line ending.
+- **Errors:** 82 for every line that does not assemble, including `ASM` with no argument string and an argument string of only spaces. 80 and 81 as for every command. ASM never gives 83.
+- **All or nothing:** ASM decides at execute. It never delivers a byte and then fails, so a client may store bytes as they arrive. Only a Pi service restart can cut a response short (rule 2.9).
+
+### DIS
+
+`DIS AAAA B0 B1 B2` disassembles the instruction whose bytes are B0 B1 B2, for display at address AAAA.
+
+- **Request:** the argument string is exactly 13 bytes: 4 hex digits, a space, then three 2-digit hex bytes, each preceded by one space. Hex digits are `0-9 A-F a-f`. Anything else gives 82: fewer or more than three bytes, other digit counts, a second space, a trailing space.
+- **The client always sends three bytes.** Bytes past the instruction's length are ignored and do not change the response. AAAA does not affect decoding (the 8080 has no relative operands). It is only printed.
+- **Response:** one length byte L, binary 01, 02 or 03, the instruction's length. Then the instruction line, then CR LF.
+- **The instruction line** is `AAAA  B0 B1 B2  TEXT`: the address as 4 uppercase hex digits, two spaces, the instruction's L bytes as uppercase hex separated by single spaces and padded with spaces to 8 characters, two spaces, then the table text (Notation, above). The line is 18-27 bytes (`0100  FB        EI` to `0200  31 FE EF  LXI SP,EFFE`), and the response is 21-30 bytes. This is the one definition of the line: the debugger's instruction line is this line with symbols added (`ARCHITECTURE.md` 7.4).
+- **Errors:** 82 for a bad argument string, including `DIS` with none. 80 and 81 as for every command. DIS never gives 83, and every opcode 00-FF disassembles.
+
+### ASM and DIS conformance vectors
+
+Device-level tests MUST cover every row. Responses are shown as hex bytes; for DIS, `L` then the line text in quotes, then `0D 0A`.
+
+| Command buffer | Status after execute | Response |
+|----------------|----------------------|----------|
+| `ASM MVI A,0D` | 02 | 3E 0D |
+| `ASM mvi a,0d` | 02 | 3E 0D |
+| `ASM   MVI   A , 0D  ` | 02 | 3E 0D |
+| `ASM MVI A,D` | 02 | 3E 0D |
+| `ASM MVI A,000D` | 02 | 3E 0D |
+| `ASM MVI A,00AA` | 02 | 3E AA |
+| `ASM LXI H,1` | 02 | 21 01 00 |
+| `ASM LXI SP,EFFE` | 02 | 31 FE EF |
+| `ASM CALL 0005` | 02 | CD 05 00 |
+| `ASM MOV A,M` | 02 | 7E |
+| `ASM HLT` | 02 | 76 |
+| `ASM IN 02` | 02 | DB 02 |
+| `ASM POP PSW` | 02 | F1 |
+| `ASM RST 7` | 02 | FF |
+| `ASM xchg` | 02 | EB |
+| `ASM NOP*` | 02 | 08 |
+| `ASM JMP* 0200` | 02 | CB 00 02 |
+| `ASM RET*` | 02 | D9 |
+| `ASM call* 1234` | 02 | DD 34 12 |
+| `ASM` | 82 | none |
+| `ASM ` and `ASM    ` | 82 | none |
+| `ASM MVI A,100`, `ASM MVI A,1AA` (byte above FF) | 82 | none |
+| `ASM LXI H,10000` (5 digits) | 82 | none |
+| `ASM MVI A,0DH`, `ASM MVI A,0x0D`, `ASM MVI A,+D`, `ASM MVI A,-1` | 82 | none |
+| `ASM MOV M,M`, `ASM LDAX H`, `ASM PUSH SP`, `ASM LXI PSW,0` | 82 | none |
+| `ASM RST 8`, `ASM RST 07` | 82 | none |
+| `ASM JMP` (missing operand), `ASM NOP 00` (extra operand) | 82 | none |
+| `ASM MVI A,`, `ASM MOV A B`, `ASM MOV A,,B`, `ASM MOV A,B,C` | 82 | none |
+| `ASM MVI` Tab `A,0D` (09 inside the line) | 82 | none |
+| `ASM NOP ;c`, `ASM LABEL: NOP`, `ASM DB 00` | 82 | none |
+| `asm NOP` (lowercase command word) | 80 | none |
+| `ASM ` followed by 125 bytes (129 in all) | 81 | none |
+| `DIS 0100 3E 0D 00` | 02 | 02 `"0100  3E 0D     MVI A,0D"` 0D 0A |
+| `DIS 0100 00 FF FF` | 02 | 01 `"0100  00        NOP"` 0D 0A |
+| `DIS 0100 c3 00 f0` | 02 | 03 `"0100  C3 00 F0  JMP F000"` 0D 0A |
+| `DIS FFFF CD 34 12` | 02 | 03 `"FFFF  CD 34 12  CALL 1234"` 0D 0A |
+| `DIS 0200 31 FE EF` (longest line, 27) | 02 | 03 `"0200  31 FE EF  LXI SP,EFFE"` 0D 0A |
+| `DIS 0100 FB 00 00` (shortest line, 18) | 02 | 01 `"0100  FB        EI"` 0D 0A |
+| `DIS 0200 DB 02 00` | 02 | 02 `"0200  DB 02     IN 02"` 0D 0A |
+| `DIS 0200 FF 00 00` | 02 | 01 `"0200  FF        RST 7"` 0D 0A |
+| `DIS 0100 08 FF FF` | 02 | 01 `"0100  08        NOP*"` 0D 0A |
+| `DIS 0100 DD 00 01` | 02 | 03 `"0100  DD 00 01  CALL* 0100"` 0D 0A |
+| `DIS` and `DIS ` | 82 | none |
+| `DIS 0100 3E 0D` (two bytes) | 82 | none |
+| `DIS 100 3E 0D 00` (3-digit address) | 82 | none |
+| `DIS 0100 3E 0D 00 ` (trailing space), `DIS 0100  3E 0D 00` (double space) | 82 | none |
+| `DIS 0100 3E 0D 0G`, `DIS 0100 +E 0D 00` | 82 | none |
 
 ### Reference client
 
-This is the shared send-and-poll loop. Each command supplies its own byte sink and its own error handling. The monitor's `T` prints each byte to the console, then CR LF, and prints `Service error` when the loop reaches ERR (`MONITOR_SPEC.md`, T: Time).
+This is the monitor's mailbox client (`MONITOR_SPEC.md` 9; the ROM routines are pending, `TODO.md`, and v0.5's `T` inlines the same port sequence). MB_SEND clears the mailbox (the resync) and sends a NUL-terminated string, and MB_PUT appends one without the clear. The caller executes. MB_GET then waits for the next result and returns one of three outcomes: a response byte, done (03), or failed with the status (00 after execute, meaning the Pi restarted, or 80-FF). Each monitor command's sink and messages: `MONITOR_SPEC.md` 6.15-6.17.
 
 ```asm
-        MVI     A,02H
+; HL -> NUL-terminated command text
+MB_SEND: MVI     A,02H
         OUT     11H             ; clear (resync)
-        ; ... OUT 10H for each command byte ...
+MB_PUT:  MOV     A,M             ; entry: append without the clear
+        ORA     A
+        RZ
+        OUT     10H
+        INX     H
+        JMP     MB_PUT
+
+        ; ... more OUT 10H appends (MB_PUT, or single bytes) ...
         MVI     A,01H
         OUT     11H             ; execute
-POLL:   IN      12H
+
+; byte:   CY=0, A = the next response byte (Z undefined).
+; done:   CY=1 Z=1.
+; failed: CY=1 Z=0, A = the status.  Callers test CY before Z.
+MB_GET:  IN      12H
         CPI     01H
-        JC      ERR             ; 00 after execute: Pi restarted (rule 2.9)
-        JZ      POLL            ; 01 busy
-        CPI     03H
-        RZ                      ; 03 done
-        JNC     ERR             ; 80+ error (04-7F never returned)
-        IN      13H             ; 02 avail
-        CALL    SINK            ; per-command byte sink
-        JMP     POLL
+        JZ      MB_GET          ; 01 busy
+        CPI     02H
+        JNZ     MB_END
+        IN      13H             ; 02 avail (CY=0 from the CPI)
+        RET
+MB_END:  CPI     03H             ; Z: 03 done
+        STC                     ; NZ: 00 after execute (Pi restarted, rule 2.9)
+        RET                     ;     or 80-FF (04-7F are never returned)
 ```
 
 ---
@@ -444,8 +550,8 @@ Superseded on 2026-10-02 (see COLLABORATION_LOG Key Decisions):
 
 | Device | Emulator | Hardware |
 |--------|----------|----------|
-| Port map 00-6F | `build_bus` (`src/io/mod.rs`), used by `main.rs` and every test harness | Pi daemon: the same function |
-| Console 00-02 | `src/io/devices/console.rs` (input FIFO and output buffer, no terminal code); the terminal side is `src/main.rs` | Pi, with the terminal connected to the Pi |
+| Port map 00-6F | `build_bus` (`src/io/mod.rs`), used by `main.rs` and every test harness. It takes the TIME clock as a parameter, `build_bus(storage_dir, clock)`, and the emulator's callers pass `mailbox::local_time` (pending, `TODO.md`) | Pi daemon: the same function, with its own clock (`PI_DAEMON.md` 6, 8) |
+| Console 00-02 | `src/io/devices/console.rs` (input FIFO and output buffer, no terminal code); the terminal side is `src/main.rs` | Pi: the same Rust code, with the terminal connected to the Pi over TCP (`PI_DAEMON.md` 7) |
 | Storage 08-0C, Mount 0D-0F | `src/io/devices/storage.rs`, one device (std::fs) | Pi: the same Rust code, files on its SD card |
-| Service Mailbox 10-13 | `src/io/devices/mailbox.rs`. `TIME` reads a clock passed to `Mailbox::new` (a plain fn returning the date and time fields, or None for "not set"). The device formats the 19 bytes, so the emulator and the Pi daemon share the formatter. `build_bus` passes the host's local time (`mailbox::local_time`, `localtime_r` through the `libc` crate); tests pass a fixed or a failing one | Pi: the same Rust code and formatter behind GPIO, with a clock that reports "not set" (83) unless the kernel is NTP-synchronized (section 8, TIME clock) |
+| Service Mailbox 10-13 | `src/io/devices/mailbox.rs`. `TIME` reads a clock passed to `Mailbox::new` (a plain fn returning the date and time fields, or None for "not set"). The device formats the 19 bytes, so the emulator and the Pi daemon share the formatter. `build_bus` passes the host's local time (`mailbox::local_time`, `localtime_r` through the `libc` crate); tests pass a fixed or a failing one. `ASM` and `DIS` call `src/disasm.rs`: `assemble` reads the opcode table backwards, and `line` formats the DIS line, which the debugger reuses (pending, `TODO.md`) | Pi: the same Rust code and formatter behind GPIO, with a clock that reports "not set" (83) unless the kernel is NTP-synchronized (section 8, TIME clock; `PI_DAEMON.md` 8). `ASM` and `DIS` are the same code |
 | System control FE-FF | `src/cpu.rs` | 74HCT74 and decode (`ARCHITECTURE.md`, Overlay Glue) |

@@ -2,14 +2,14 @@
 
 Normative. This is the contract for everything the monitor ROM shows the user: the banner, the prompt, line input, the argument grammar, every command, the messages, the Intel HEX loader, the `G` return contract and the ROM routine contracts. It replaces the deleted `MONITOR_IMPLEMENTATION_STATUS.md`.
 
-**Scope.** Monitor ROM v0.5 (v0.3 plus Phase 5, the HEX loader, and Phase 6, the `T` command) and the 2026-10-02 decisions. Phases 7-10 get one-line placeholders (Future Commands).
+**Scope.** Monitor ROM v0.5 (v0.3 plus Phase 5, the HEX loader, and Phase 6, the `T` command) and the 2026-10-02 decisions, plus Phase 7 (the `A` and `U` commands, specified 2026-10-03 and not yet implemented; see Status). Phases 8-10 get one-line placeholders (Future Commands).
 
 **Elsewhere (one fact, one home):**
 - `ARCHITECTURE.md`: the memory map, workspace layout, stack page, reset and boot sequence, WARM entry code, the ROM overlay, the hardware interface (READY, the Pi window), and Host-Side Conveniences (the host key map, Ctrl-C quit, the Ctrl-E debugger hotkey).
 - `DEVICE_SPECS.md`: every port protocol (console, storage, mount, Service Mailbox, system control) and the READY contract as software sees it.
 - `TODO.md`: the work queue and every known difference between the code and this spec.
 
-**Status of this spec.** All decisions are made (2026-10-02; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6, v0.5) is implemented (2026-10-03).
+**Status of this spec.** All decisions are made (2026-10-02 and 2026-10-03; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6, v0.5) is implemented (2026-10-03). The Phase 7 edits (3 item 5, 4.3 U count, 4.4 rule 5, 5, 6.14, 6.15 step 1, 6.16, 6.17, the section 9 mailbox client, 10 and 11) are not yet implemented (`TODO.md`).
 
 ---
 
@@ -78,7 +78,7 @@ After READ_LINE returns:
 2. An empty line (nothing, or only spaces) prints the prompt again, with no message.
 3. The first non-space character selects the command. `a`-`z` fold to `A`-`Z`.
 4. `:` selects the Intel HEX loader (Intel HEX Loader). It is not a command letter. Leading spaces before `:` are allowed.
-5. The recognized characters are `C D E F G H I L M O S T W X ?` and `:`. `T` came with Phase 6.
+5. The recognized characters are `A C D E F G H I L M O S T U W X ?` and `:`. `T` came with Phase 6, and `A` and `U` came with Phase 7.
 6. Anything else prints `Unknown command. Type ? for help.` This includes the letters reserved for later phases (Future Commands) until they are implemented.
 
 Arguments start right after the command character. The space between the letter and the first argument is optional, so `D0200` is the same as `D 0200`.
@@ -110,6 +110,7 @@ Silent truncation is forbidden. `F 10200 1020F 1AA` is an error, not a fill of 0
 - **Ranges** (`start end`) are inclusive. `end < start` is an error and prints `Invalid range`. `end = start` covers one byte.
 - **Counts** for L and W run from 0001 to FFFF. An omitted count is 0100 (256). A count of 0 prints `Invalid range`. A present but invalid count is an error (`Invalid hex value`), never the default.
 - **Count** for M runs from 0001 to FFFF. A count of 0 prints `Invalid range`.
+- **Count** for U is a number of instructions, 0001 to FFFF. An omitted count is 0008. A count of 0 prints `Invalid range`. A present but invalid count is an error (`Invalid hex value`), never the default.
 
 ### 4.4 Validation order and side effects
 
@@ -117,7 +118,7 @@ Silent truncation is forbidden. `F 10200 1020F 1AA` is an error, not a fill of 0
 2. The first argument that is missing or invalid prints its command's syntax message (Messages), and the command stops.
 3. The `Invalid range` checks (end < start, count 0) run only after every argument has parsed. Example: `F 0300 0200 ZZ` prints `Invalid hex value`.
 4. A command that reports an argument or syntax error (`Invalid address`, `Invalid hex value`, `Invalid port/value`, `Invalid range`) MUST NOT have written memory outside the workspace and the stack page (EF00-EFFF), and MUST NOT have written any I/O port. L and W read port 0Ch to check "mounted" before they parse (sections 6.8 and 6.12). That is a read, and it is allowed.
-5. Device-reported errors (`Storage error`, `Invalid filename`, `Mount failed`) are printed after the port accesses that produced them. Rule 4 does not apply to them.
+5. Device-reported errors (`Storage error`, `Invalid filename`, `Mount failed`, `Service error`, `Invalid instruction`) are printed after the port accesses that produced them. Rule 4 does not apply to them.
 
 ---
 
@@ -128,10 +129,10 @@ These are the exact strings. Each is printed with a trailing `<CR><LF>`.
 | String | Printed by |
 |---|---|
 | `Unknown command. Type ? for help.` | Dispatch: unrecognized first character |
-| `Invalid address` | D, E, G: an argument is invalid |
-| `Invalid hex value` | C, F, H, M, S, L, W: an argument is missing or invalid |
+| `Invalid address` | D, E, G: an argument is invalid. A, U: `addr` missing or invalid |
+| `Invalid hex value` | C, F, H, M, S, L, W: an argument is missing or invalid. U: `count` invalid |
 | `Invalid port/value` | I, O: an argument is missing, invalid, or above FF |
-| `Invalid range` | C, D (two arguments), F, S: end < start. L, W, M: count 0 |
+| `Invalid range` | C, D (two arguments), F, S: end < start. L, W, M, U: count 0 |
 | `No storage mounted` | L, W: storage status bit 0 = 0 before parsing. X query: not mounted |
 | `Storage error` | L, W: storage status bit 0 = 0 after the transfer (W: after the flush) |
 | `Mounted` | X: the mount succeeded, or the query reports mounted |
@@ -145,10 +146,11 @@ These are the exact strings. Each is printed with a trailing `<CR><LF>`.
 | `Checksum error` | HEX: checksum mismatch |
 | `Bad record type` | HEX: type other than 00 or 01 |
 | `Address out of range` | HEX: a type 00 record would write outside 0100-EEFF |
-| `Service error` | T (Phase 6): mailbox status 00 after execute, or 80-FF |
+| `Service error` | T, U: mailbox status 00 after execute, or 80-FF. U: also DONE before the length byte. A: status 00 after execute, or 80-FF except 82; A then prompts the same address again |
+| `Invalid instruction` | A (Phase 7): mailbox status 82, so the line does not assemble; A prompts the same address again |
 
 - The ROM MUST NOT contain `File not found`. Mount creates missing files, so that message can never be true.
-- Strings new since v0.3: `Invalid range`, `Mount failed`, `Storage error`, the five HEX errors, and `Service error` (Phase 6). The HEX EOF record reuses `Loaded`.
+- Strings new since v0.3: `Invalid range`, `Mount failed`, `Storage error`, the five HEX errors, `Service error` (Phase 6) and `Invalid instruction` (Phase 7). The HEX EOF record reuses `Loaded`.
 
 ---
 
@@ -324,6 +326,7 @@ Prints this text exactly, each line ending in `<CR><LF>`:
 
 ```
 Commands:
+  A addr           - Assemble
   C start end dest - Compare memory
   D [start] [end]  - Dump memory
   E [addr]         - Examine/modify
@@ -336,20 +339,21 @@ Commands:
   O port value     - Output to port
   S start end pat  - Search memory
   T                - Show time
+  U addr [cnt]     - Unassemble
   W mem stor [cnt] - Write to storage
   X [file | -]     - Mount/unmount storage
   :LLAAAATT..CC    - Intel HEX record
   ?                - Help
 ```
 
-- The `:LLAAAATT..CC` line shipped with Phase 5 and the `T` line with Phase 6. Each line ships in the same commit as its feature.
+- The `:LLAAAATT..CC` line shipped with Phase 5, the `T` line with Phase 6, and the `A` and `U` lines with Phase 7. Each line ships in the same commit as its feature.
 - Arguments after `?` are ignored.
 
 ### 6.15 T: Time
 
 `T`
 
-1. Runs the mailbox command `TIME` with the reference client in `DEVICE_SPECS.md` (Service Mailbox): clear (OUT 11h ← 02h), send `T` `I` `M` `E` to OUT 10h, execute (OUT 11h ← 01h), then poll IN 12h.
+1. Runs the mailbox command `TIME` through the mailbox client (section 9; `DEVICE_SPECS.md`, Service Mailbox, Reference client): clear (OUT 11h ← 02h), send `T` `I` `M` `E` to OUT 10h, execute (OUT 11h ← 01h), then poll IN 12h.
 2. Each response byte read from IN 13h is printed to the console as it arrives.
 3. On status 03h (DONE), prints `<CR><LF>`.
 4. On status 00h after execute (Pi service restarted) or 80h-FFh, prints `Service error` then `<CR><LF>`. Any response bytes already printed stay on the same line, with no `<CR><LF>` before the message: an error after `2026-` prints `2026-Service error`.
@@ -358,6 +362,117 @@ Commands:
 - The successful output is one line, `YYYY-MM-DD HH:MM:SS` (the Pi's local time), followed by `<CR><LF>`.
 - T uses ports 10h-13h.
 - T transcripts match the shape `NNNN-NN-NN NN:NN:NN` (N = decimal digit), never a value, so they run unchanged on hardware against the Pi's clock. Device-level and emulator tests may inject a clock (`DEVICE_SPECS.md`, TIME clock) to check exact values, padding and the clock-not-set error.
+
+### 6.16 A: Assemble
+
+`A addr`
+
+Assembles one instruction per line into memory, starting at `addr`. The assembler runs on the Pi: mailbox `ASM` (`DEVICE_SPECS.md`, Service Mailbox, ASM).
+
+1. Parse `addr` (word, required). If it is missing or invalid, print `Invalid address` and stop. No port is written.
+2. Print the prompt `AAAA: `: the current address, `:`, then a space. No `<CR><LF>` comes before it.
+3. Read one line with READ_LINE (section 2: up to 79 characters, BS and DEL, echo, `<CR>` or `<LF>` ends it).
+4. Skip leading spaces. If nothing is left, go back to step 2 with the same address: nothing is sent and nothing else is printed. If the first non-space character is `.`, A ends and the `> ` prompt follows; the rest of the line is ignored.
+5. Otherwise run the mailbox command `ASM <text>`. `<text>` runs from the first non-space character to the end of the stored line, trailing spaces included. The sequence is: clear (OUT 11h ← 02h); `A` `S` `M` `<SP>` and then each character of `<text>` to OUT 10h; execute (OUT 11h ← 01h); poll IN 12h.
+6. Write each response byte to the current address, then advance the address by 1 (FFFF wraps to 0000). On DONE, go back to step 2 with the advanced address.
+7. On status 82, the line does not assemble. Print `Invalid instruction`, write nothing, and go back to step 2 with the same address.
+8. On status 00 after execute (the Pi restarted) or any other status from 80h to FFh, print `Service error` and go back to step 2 with the address this line started at. ASM never fails after its first byte (`DEVICE_SPECS.md`, ASM), so only a Pi restart can leave part of a line written; typing the line again rewrites it.
+
+- **Only `.` ends A.** An empty line, a line of only spaces, and every failure prompt again. Pasted source therefore never falls through to the command dispatcher, where an instruction would run as a command (`XCHG` as `X CHG`, which mounts a file). A file sent with `<CR><LF>` line ends gives an empty line after every line, which only prompts again. With a dead or Phase 6 Pi service every line prints `Service error`; type `.` to leave.
+- A success prints nothing more. The next prompt's address shows how many bytes were written.
+- **Syntax:** one instruction in the ASM grammar (`DEVICE_SPECS.md` 8, ASM).
+- **No guard**, as E: writes to F000-FFFF have no effect, but the address still advances. Writing to the workspace (0080-00FF) or the stack page (EF00-EFFF) has undefined results, as F.
+- A keeps no state. When it ends, the address is lost; `A addr` starts again anywhere. A changes neither LAST_DUMP_ADDR nor LAST_EXAM_ADDR.
+- Tokens after `addr` are ignored (4.1).
+- Lines may be pasted. Nothing paces the sender (section 2). Each line costs one mailbox round trip, about 3,800 cycles for `MVI A,0D` (1.9 ms at 2.048 MHz, before READY wait states).
+- A uses ports 10h-13h, and only after a line other than an empty one or `.` is entered.
+
+Example:
+
+```
+> A 0200
+0200: MVI A,0D
+0202: lxi h , 1234
+0205:
+0205: JMP 0200
+0208: MOV A,Q
+Invalid instruction
+0208: .
+>
+```
+
+This stores 0200-0207 = 3E 0D 21 34 12 C3 00 02.
+
+### 6.17 U: Unassemble
+
+`U addr [count]`
+
+Disassembles `count` instructions starting at `addr`. The disassembler runs on the Pi: mailbox `DIS` (`DEVICE_SPECS.md`, Service Mailbox, DIS).
+
+1. Parse `addr` (word, required), then `count` (word, optional, default 0008; 4.3). If `addr` is missing or invalid, print `Invalid address`. If `count` is present but invalid, print `Invalid hex value`. A count of 0 prints `Invalid range`. No port is written until both have parsed.
+2. For each instruction, run the mailbox command `DIS AAAA B0 B1 B2`. AAAA is the current address and B0 B1 B2 are the bytes at the address, the address + 1 and the address + 2 (wrapping past FFFF), each in uppercase hex. The sequence is: clear (OUT 11h ← 02h); `DIS `, the 4 address digits, then `<SP>` and 2 digits for each byte, to OUT 10h (17 bytes); execute (OUT 11h ← 01h); poll IN 12h.
+3. The first response byte is the instruction's length, L (01-03). U prints every following byte to the console as it arrives: that is the instruction line and its `<CR><LF>`.
+4. On DONE, the address advances by L (FFFF wraps to 0000). Then the next instruction follows.
+5. On status 00 at any point after execute (the Pi restarted), on 80h-FFh, or on DONE before the length byte, print `Service error` and end U. Bytes of the current line already printed stay on that line, with no `<CR><LF>` before the message, as for T (6.15).
+
+- **Line format:** U prints the `DIS` line (`DEVICE_SPECS.md` 8, DIS) unchanged. The ROM has no opcode table: it learns each instruction's length from the length byte.
+- U only reads memory. It reads three bytes for every instruction, whatever its length. Memory reads have no side effects on this machine. F000-FFFF reads as the ROM. U over the stack page shows U's own stack use, as C does (6.1).
+- U keeps no state and changes neither LAST_DUMP_ADDR nor LAST_EXAM_ADDR. Tokens after `count` are ignored (4.1).
+- U wraps: `U FFFF 2` lists FFFF, then the address after it modulo 10000h.
+- U uses ports 10h-13h. One line costs about 9,500 cycles (4.6 ms at 2.048 MHz, before READY wait states), so the default 8 lines take about 37 ms.
+- **Round trip:** U's text field (everything after the bytes field), typed at an A prompt, assembles to the bytes U showed, except the R2 aliases (`DEVICE_SPECS.md` 8, Round-trip properties).
+
+Example, after the 6.16 example:
+
+```
+> U 0200 3
+0200  3E 0D     MVI A,0D
+0202  21 34 12  LXI H,1234
+0205  C3 00 02  JMP 0200
+>
+```
+
+### 6.17.1 A and U conformance vectors
+
+Phase 7 tests MUST cover every row. "Prompts" lists the `AAAA: ` prompts A prints, in order. RAM is set by `F` or `A` first, because transcripts only display memory they wrote.
+
+- **Where each row lives.** Rows marked *scripted* are Rust tests in `tests/monitor_tests.rs`: they map the test-local `ScriptedMailbox` (statuses, bytes) at 10-13 with `map_mailbox`, as `t_against` does for T, and the statuses and bytes given are its script. `Mailbox` gets no test knob: it is the code the Pi runs. Rows marked *ports* use the real `Mailbox` from `build_bus` and check the port sequence. Rows marked *rule 4* join the `lines` list of `argument_errors_write_no_port_and_no_memory_outside_the_workspace`. Every other row is a transcript.
+- **An A dialog in a transcript** is one step in the `<` form, every line typed with `\r`, ending in the `.` line, followed by the expected lines. Example: `< A 0200\rMVI A,0D\r.\r`, then `A 0200`, `0200: MVI A,0D`, `0202: .`. The step ends at the `> ` after `.`, so neither the transcript player nor the daemon end-to-end test changes.
+
+| Input | Expected output | Memory and port effect |
+|---|---|---|
+| `A 0200`, `MVI A,0D`, empty line, `.` | prompts `0200: `, `0202: `, `0202: ` | 0200-0201 = 3E 0D |
+| `A 0200`, `  lxi h , 1234`, `.` | prompts `0200: `, `0203: ` | 0200-0202 = 21 34 12 |
+| `A 0200`, `NOP*`, `call* 0005`, `   . junk` | prompts `0200: `, `0201: `, `0204: ` | 0200-0203 = 08 DD 05 00 |
+| `A 0200`, `MOV A,Q`, `NOP`, `.` | `0200: `, `Invalid instruction`, `0200: `, `0201: ` | 0200 = 00 |
+| `A 0200`, a line of only spaces, `.` | prompts `0200: `, `0200: ` | none; no mailbox port written |
+| Paste: `A 0200`, `NOP`, empty line, `XCHG`, empty line, `ADD B`, `.` | prompts `0200: `, `0201: `, `0201: `, `0202: `, `0202: `, `0203: ` | 0200-0202 = 00 EB 80; nothing mounted or created (`X` never runs) |
+| `a 0200` (lowercase), `RST 7`, `.` | prompts `0200: `, `0201: ` | 0200 = FF |
+| `A 0200 junk`, `NOP`, `.` | as `A 0200` (4.1) | 0200 = 00 |
+| `A FFFF`, `CALL 1234`, `.` | prompts `FFFF: `, `0002: ` | FFFF unchanged (ROM), 0000-0001 = 34 12 |
+| *rule 4:* `A` | `Invalid address` | no port written |
+| *rule 4:* `A 02G0`, `A 10000` | `Invalid address` (each) | no port written |
+| *ports:* `A 0200`, `MVI A,0D`, `.` | prompts `0200: `, `0202: ` | OUT 11 02; OUT 10 41 53 4D 20 4D 56 49 20 41 2C 30 44 (`ASM MVI A,0D`); OUT 11 01; IN 12 02, IN 13 3E, IN 12 02, IN 13 0D, IN 12 03 |
+| *scripted* [83]: `A 0200`, `NOP`, `.` | `0200: `, `Service error`, `0200: ` | 0200 unchanged |
+| *scripted* [00]: `A 0200`, `NOP`, `.` | `0200: `, `Service error`, `0200: ` | 0200 unchanged |
+| *scripted* [80] (an old Pi service): `A 0200`, `NOP`, `.` | `0200: `, `Service error`, `0200: ` | 0200 unchanged |
+| *scripted* [82]: `A 0200`, `NOP`, `.` | `0200: `, `Invalid instruction`, `0200: ` | 0200 unchanged |
+| *scripted* statuses [02 00 02 02 02 03], bytes [21 21 34 12] (a restart after one byte, then a retry): `A 0200`, `LXI H,1234`, `LXI H,1234`, `.` | `0200: `, `Service error`, `0200: `, `0203: ` | 0200-0202 = 21 34 12 |
+| `F 0200 0207 00`, then `A 0200` with the lines of the 6.16 example, then `U 0200 3` | `0200  3E 0D     MVI A,0D` / `0202  21 34 12  LXI H,1234` / `0205  C3 00 02  JMP 0200` | none |
+| `F 0200 020F 76`, then `U 0200` | 8 lines, `0200  76        HLT` through `0207  76        HLT` | none |
+| *ports:* `U 0200 1` with 0200 = 3E 0D 21 | `0200  3E 0D     MVI A,0D` | OUT 11 02; OUT 10 `DIS 0200 3E 0D 21` (17 bytes); OUT 11 01; then IN 12 / IN 13 pairs: 02 (the length), then the 24 line bytes and 0D 0A; then IN 12 03 |
+| `F 0200 0200 08`, `U 0200 1`; `F 0200 0202 DD`, `U 0200 1` | `0200  08        NOP*`; `0200  DD DD DD  CALL* DDDD` | none |
+| `A 0000`, `JMP 1234`, `.`, then `U FFFF 2` | `FFFF  FF        RST 7` / `0000  C3 34 12  JMP 1234` | 0000-0002 = C3 34 12. FFFF is in the ROM's unused tail, which the image fills with FF (`ARCHITECTURE.md` 2) |
+| *rule 4:* `U`, `U 02G0` | `Invalid address` (each) | no port written |
+| *rule 4:* `U 0200 ZZ`, `U 0200 10000` | `Invalid hex value` (each) | no port written |
+| *rule 4:* `U 0200 0` | `Invalid range` | no port written |
+| *scripted* [83]: `U 0200 2` | `Service error` | — |
+| *scripted* [00]: `U 0200 2` | `Service error` | — |
+| *scripted* statuses [02 02 02 02 02 02 83], bytes [02 30 32 30 30 20]: `U 0200 2` | `0200 Service error` (the 5 bytes `0200 ` then the message, on one line) | — |
+| *scripted* statuses [02 02 02 02 02 02 00], bytes [02 30 32 30 30 20]: `U 0200 2` | `0200 Service error` | — |
+| *scripted* [03] (DONE with an empty response): `U 0200 1` | `Service error` | — |
+| **Identity:** for every opcode xx, with 0200-0202 = xx 01 02, `U 0200 1` | the output string (`.1`) of `Debugger::new().command(&mut m.cpu, "u 0200 1")`, no symbols loaded, with its LF replaced by CR LF | none |
+| **Round trip:** for every opcode xx, `U 0200 1`, then `A 0300` with U's text field, `.` | none extra | 0300.. = 0200.. for the instruction's length, except the R2 aliases (`DEVICE_SPECS.md` 8) |
 
 ---
 
@@ -488,17 +603,16 @@ The header comment above each routine in `rom/monitor.asm` is that routine's con
 - There is no public API and no jump table. User programs MUST NOT call ROM addresses, because they move between builds.
 - READ_HEX_WORD and READ_HEX_ADDR24 implement section 4, and READ_HEX_BYTE (a word whose value is at most FF) builds on READ_HEX_WORD. Their headers MUST state the error cases (no digits, too many digits, a token not ended by a space or NUL) and that they skip leading spaces on entry.
 - CMD_COMPARE relies on B surviving PRINT_ADDR, PRINT_HEX_BYTE, PRINT_SPACE, CONOUT and PRINT_CRLF.
+- MB_SEND, MB_PUT and MB_GET implement the `DEVICE_SPECS.md` reference client (Service Mailbox), which T, A and U use. MB_GET's header MUST state its three outcomes (a byte, done, failed with the status in A) and that callers test CY before Z.
 
 ---
 
 ## 10. Future Commands (Placeholders)
 
-These are placeholders, not designs. Each phase writes its own section here when it starts. Until a letter is implemented, it prints `Unknown command. Type ? for help.`
+These are placeholders, not designs. Each phase writes its own section here when it starts. Until a letter is implemented, it prints `Unknown command. Type ? for help.` A and U (Phase 7) are now 6.16 and 6.17.
 
 | Cmd | Phase | Purpose |
 |---|---|---|
-| A | 7 | Assemble: mailbox `ASM` |
-| U | 7 | Unassemble: mailbox `DIS` |
 | N | 8 | HTTP GET: mailbox `GET` |
 | Q | 9 | Ask Claude: mailbox `ASK` |
 | R | 10 | Registers. Blocked on capturing registers at return |
@@ -509,10 +623,10 @@ Quitting the emulator (Ctrl-C) and the debugger (Ctrl-E) are host-side, not moni
 
 ## 11. Hardware Constraints on the ROM
 
-- Ports the monitor uses on its own: 00h-02h (console), 08h-0Ch (storage), 0Dh-0Fh (mount), 10h-13h (Service Mailbox, Phase 6 `T`), and FEh (overlay off at boot). I and O can reach any port. The protocols are in `DEVICE_SPECS.md`.
+- Ports the monitor uses on its own: 00h-02h (console), 08h-0Ch (storage), 0Dh-0Fh (mount), 10h-13h (Service Mailbox: `T`, `A`, `U`), and FEh (overlay off at boot). I and O can reach any port. The protocols are in `DEVICE_SPECS.md`.
 - The ROM does no console chip initialization. The console is a Pi FIFO device behind READY.
 - **CONOUT is `OUT 00h` followed by `RET`.** It MUST NOT poll TX-ready: status bit 1 always reads 1, and OUT 00 never waits on the terminal (`DEVICE_SPECS.md`, Console).
-- The only polling loops in the ROM wait for a person or a background service, never for a byte transfer: CONIN and E poll RX-ready (port 02h, bit 0), and T polls mailbox status (port 12h). Every other device access assumes an instant answer, which READY provides on hardware.
+- The only polling loops in the ROM wait for a person or a background service, never for a byte transfer: CONIN and E poll RX-ready (port 02h, bit 0), and MB_GET (T, A, U) polls mailbox status (port 12h). Every other device access assumes an instant answer, which READY provides on hardware.
 - The boot's first Pi-window access is the banner's first `OUT 00h`. If the Pi's device service is not running yet, that access waits under READY with no timeout (`DEVICE_SPECS.md`, READY Contract). No ROM code handles the stall.
 - The I and O commands run self-modified `IN` and `OUT` stubs in workspace RAM. That works on any 8080 and needs no special hardware.
 - `rom/monitor.bin` MUST be at most 4096 bytes and run at F000h.

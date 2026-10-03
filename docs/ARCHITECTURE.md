@@ -2,11 +2,12 @@
 
 Normative. Covers the memory map, ROM organization, reset and boot, the ROM overlay, the CPU behavioral contract, the hardware circuits behind the I/O ports, and the host-side rules for the emulator (including the host key map).
 
-The other two normative specs:
+The other three normative specs:
 - `DEVICE_SPECS.md`: every port protocol, register values, power-on state of each device, and the READY contract as software sees it.
 - `MONITOR_SPEC.md`: line input, argument grammar, every monitor command and message, the Intel HEX loader, the `G` return contract, and ROM routine contracts.
+- `PI_DAEMON.md`: the Pi software behind the window (`pi8080d`): how it meets 6.4 and 6.6, the console transport, build, deployment and its tests.
 
-One fact, one home: this file links to those and does not restate them. "MUST" applies to both the emulator and the hardware unless a section says otherwise. Where the current code differs, the code is wrong; the fixes are tracked in `TODO.md` ("Decided, to implement" and "Review findings"). All decisions here were made by Mike, 2026-10-02 or earlier.
+One fact, one home: this file links to those and does not restate them. "MUST" applies to both the emulator and the hardware unless a section says otherwise. Where the current code differs, the code is wrong; the fixes are tracked in `TODO.md` ("Decided, to implement" and "Review findings"). All decisions here were made by Mike (COLLABORATION_LOG Key Decisions).
 
 The rule behind every section: **the ROM sees only what real parts provide.** If the 8080 can observe a behavior, a period chip or the Pi coprocessor must be able to produce it. Emulator conveniences stay on the host side (section 7).
 
@@ -321,7 +322,7 @@ The Pi's GPIO runs at 3.3 V and is not 5 V tolerant. Every 5 V signal reaches it
 - on startup, the service sets D0-D7 to input and drives ACK and LATCH low before anything else;
 - the Pi service checks the REQ level when it starts and serves any request already pending. It MUST NOT depend on seeing a REQ edge.
 
-**One codebase.** The emulator and the Pi daemon build the same IoBus with the same device mapping for 00-6F (one function). Each Pi-window access in the emulator, and each serviced REQ on the Pi, is exactly one IoBus read or write. Devices do only bounded local work in read and write (DEVICE_SPECS 3.3). Host I/O goes through Console push_input/take_output. RESET rebuilds the IoBus, so post-reset state equals power-on state by construction. Reference Pi service: one thread busy-polls the mmapped GPIO block (/dev/gpiomem) on an isolated core and calls the IoBus inline. RESET edges come from a gpio character-device edge request (6.6). Mailbox background work runs on other cores. The target Pi uses the BCM283x/2711 register model (Pi 4B for v1). A Pi 5 also works, but its GPIO reads cross PCIe to RP1 and are several times slower (est). Do not use rppal (archived 2025-07-01).
+**One codebase.** The emulator and the Pi daemon build the same IoBus with the same device mapping for 00-6F (one function). Each Pi-window access in the emulator, and each serviced REQ on the Pi, is exactly one IoBus read or write. Devices do only bounded local work in read and write (DEVICE_SPECS 3.3). Host I/O goes through Console push_input/take_output. RESET rebuilds the IoBus, so post-reset state equals power-on state by construction. The Pi service is specified in `PI_DAEMON.md`: one thread busy-polls the mmapped GPIO block on an isolated core and calls the IoBus inline. Mailbox commands that do not complete within the execute access run on other cores (DEVICE_SPECS 3.3). The target Pi uses the BCM2711 register model (Pi 4B for v1, decision PI-PLATFORM).
 
 ### 6.5 Overlay Glue (0xFE, 0xFF)
 
@@ -338,7 +339,7 @@ One 74HCT74 half; the other half is the WAIT flip-flop (6.4). /PRE = NOT RESET: 
 - The 8224 also drives STSTB low during reset. The NOT RESET term in the WAIT set blocks it. **[bench]** REQ stays low across 100 consecutive resets.
 - **The Pi on RESET.**
   - It requests RESET through the gpio character device with both-edge events. The kernel latches the edge, so a pulse of any length is seen, even during an fsync. It also reads the RESET level in every GPIO snapshot.
-  - Immediately before every ACK, it checks for a latched or present RESET. If it finds one, it drops the request without raising ACK.
+  - Before every ACK it checks that RESET is not present and REQ is still high, in a GPIO read made after the device operation. It also asks the kernel's edge latch, but only when more than 1 ms has passed since it last asked. That is enough because of the reset source: a DS1813 (decision RESET-SOURCE) holds RESET for at least 150 ms after any assertion, the button and TEST_RESET included, so no pulse can start and end unseen within 1 ms of the previous check. A pulse that came and went shows as REQ low, since only ACK or RESET clears the WAIT flip-flop. If any check finds a RESET, the Pi drops the request without raising ACK. A reset source that can make sub-millisecond pulses would require the latch to be asked before every ACK. Detail: `PI_DAEMON.md` 4-5.
   - When RESET is next low, it returns every device to its power-on state (`DEVICE_SPECS.md` rule 2.8), and only then serves a REQ. The 8080's first Pi-window access after reset waits under READY until then. This costs zero ROM bytes.
   - A bouncing button can produce several RESET pulses. Each one is a full device reset.
 - A late ACK for a cycle cut off by reset is never raised. One residual race is accepted: the bus thread is descheduled between its last RESET check and the ACK write for longer than the RESET pulse plus the boot path to the first Pi-window access (about 0.12 ms).
@@ -438,7 +439,7 @@ RESET
 
 ### 7.4 Debugger
 
-Host-side only. The 8080 cannot observe it: it adds no cycles, no port, no memory and no byte to the console stream. Code: `src/debugger.rs` (commands, breaks, ring, trace), `src/disasm.rs` (disassembler), `src/main.rs` (entry and prompt). Tests: `tests/debugger_tests.rs`.
+Host-side only. The 8080 cannot observe it: it adds no cycles, no port, no memory and no byte to the console stream. Code: `src/debugger.rs` (commands, breaks, ring, trace), `src/disasm.rs` (the opcode table and the instruction line: device code for mailbox `ASM` and `DIS`, `DEVICE_SPECS.md` 8, which the debugger reuses; the move of the line out of the debugger is pending, `TODO.md`), `src/main.rs` (entry and prompt). Tests: `tests/debugger_tests.rs`.
 
 **Entry.**
 
@@ -482,11 +483,11 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 
 - **Location:** `AAAA`, or `AAAA NAME` / `AAAA NAME+n` with the nearest symbol at or below AAAA in the same memory-map region (section 1), so a user-area address is never named after the workspace.
 - **Registers line:** `PC=F28B SP=F000 A=44 F=56 -ZAP- BC=0B0D DE=0000 HL=0081 INTE=0 OVL=0`, then ` HLT` when halted. The flag field is S Z A P C, a letter when set and `-` when clear. OVL is the overlay flip-flop (section 4).
-- **Instruction line:** `AAAA  B0 B1 B2  MNEMONIC` with the bytes field 8 wide. Intel mnemonics as in `docs/reference/Complete_Intel_8080_Instruction_Set_Reference.txt`, operands in hex (`MVI A,0D`, `LXI H,0080`, `IN 02`). An address operand (jumps, calls, `LDA`, `STA`, `LHLD`, `SHLD`) equal to a symbol prints as the name (`CALL SKIP_SPACES`); immediate data (`LXI`) always prints in hex. The undocumented aliases (5.4) print with a star: `NOP*`, `JMP*`, `RET*`, `CALL*`. Wherever an instruction line is listed (`u`, `s`, a stop report; not ring lines), an address that is a symbol is preceded by a `NAME:` line.
+- **Instruction line:** the mailbox `DIS` line (`DEVICE_SPECS.md` 8, DIS: `AAAA  B0 B1 B2  MNEMONIC`, the bytes field 8 wide, Intel mnemonics, operands in hex, the undocumented aliases starred), with symbols: an address operand (jumps, calls, `LDA`, `STA`, `LHLD`, `SHLD`) equal to a symbol prints as the name (`CALL SKIP_SPACES`); immediate data (`LXI`) always prints in hex. Wherever an instruction line is listed (`u`, `s`, a stop report; not ring lines), an address that is a symbol is preceded by a `NAME:` line.
 - **Ring line:** the instruction line padded with spaces to 34 characters, one space, then the registers before it ran: `A=44 F=56 BC=0B0D DE=0000 HL=0081 SP=F000`.
 - **Stop report:** a reason line, then the last 8 ring lines (the last one is the instruction that caused a watchpoint or I/O stop), then the registers line, then the next instruction. The reason line always begins a line: when the console output before a stop does not end with LF, the host writes CR LF first. Reasons: `* break LOCATION`, `* watch read AAAA VV`, `* watch write AAAA VV`, `* io IN PP VV`, `* io OUT PP VV`, `* ctrl-e`, `* start`, `* halt`.
 
-**Port trace.** One 7.3 line per `IN` or `OUT` transfer, ports FE and FF included. Repeats are collapsed by the 7.3 rule (`IN 02 02 ; x12`). Pending lines are written at every stop and at `t off` and quit, so a run split by a stop is written as two lines. The debugger writes no `RESET` line: it has no reset. Diffing against a Pi daemon trace (7.3): the Pi never sees ports 70-FF (`DEVICE_SPECS.md`), so drop the FE and FF lines, strip the ` ; xN` annotation, since poll counts depend on timing, then merge adjacent identical lines, since a stop splits a run (`grep -Ev '^(IN|OUT) F[EF] ' | sed 's/ ; x[0-9]*$//' | uniq`).
+**Port trace.** One 7.3 line per `IN` or `OUT` transfer, ports FE and FF included. Repeats are collapsed by the 7.3 rule (`IN 02 02 ; x12`). Pending lines are written at every stop and at `t off` and quit, so a run split by a stop is written as two lines. The debugger writes no `RESET` line: it has no reset. Diffing against a Pi daemon trace (7.3): the Pi never sees ports 70-FF (`DEVICE_SPECS.md`), so drop the FE and FF lines; drop `RESET` lines, which only the daemon writes; strip the ` ; xN` annotation, since poll counts depend on timing; then merge adjacent identical lines, since a stop splits a run (`grep -Ev '^(IN|OUT) F[EF] |^RESET$' | sed 's/ ; x[0-9]*$//' | uniq`).
 
 **Symbols.** `rom/monitor.sym` is built with `monitor.bin` by `cd rom && make` and committed with it: one `AAAA NAME` line per label in `monitor.asm`, from asl's NoICE output: the code labels and the workspace labels (1.1), so `w STOR_ADDR` works. EQU constants are left out: they are ports, characters and sizes. The emulator loads it from next to `monitor.bin` when present; without it a `NAME` argument is an error and output has no names.
 
@@ -497,6 +498,7 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 ## 8. Later Phases (Placeholders)
 
 - **Phase 6 (done 2026-10-03):** Service Mailbox device (ports 10-13), mailbox `TIME`, and the `T` command. Protocol: `DEVICE_SPECS.md` (Service Mailbox). Command: `MONITOR_SPEC.md`. No memory-map or circuit change.
-- **Phases 7-9:** more mailbox commands (`ASM`/`DIS`, `GET`, `ASK`). No architecture change.
+- **Phase 7 (specified 2026-10-03; code pending, `TODO.md`):** mailbox `ASM` and `DIS`, and the `A` and `U` commands (`DEVICE_SPECS.md` 8, `MONITOR_SPEC.md` 6.16-6.17). No memory-map or circuit change.
+- **Phases 8-9:** more mailbox commands (`GET`, `ASK`). No architecture change.
 - **Phase 10:** what is left after the debugger (7.4): the monitor's `R` command, which needs the `G` return contract to capture registers.
 - **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6).
