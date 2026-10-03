@@ -19,3 +19,7 @@ Unknown command. Type ? for help.
 0200: 41 41 41 41 41 41 41 41  41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
 > D   0200   020F   junk
 0200: 41 41 41 41 41 41 41 41  41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
+
+# ':' selects the Intel HEX loader, which is Phase 5. Until then it is unknown.
+> :00000001FF
+Unknown command. Type ? for help.

@@ -1,5 +1,4 @@
-# E: AAAA: XX- then keys (MONITOR_SPEC 6.3). Only one-digit entries here:
-# two digits advancing on their own is a tracked ROM bug (TODO.md Review findings).
+# E: AAAA: XX- then keys (MONITOR_SPEC 6.3).
 > F 0100 02FF 00
 > F 0201 0201 99
 
@@ -28,5 +27,67 @@ E 0205
 > D 01FF 01FF
 01FF: 00 05 07 00 02 00 0A 00  00 00 00 00 00 00 00 00  ................
 
+# Two digits, then CR stores and advances once (the spec example: 0200=12,
+# 0201=34, then '.' leaves the continue address at 0202).
+> F 0300 035F 00
+< E 0300\r12\r34\r.
+E 0300
+0300: 00-12
+0301: 00-34
+0302: 00-
+< E\r.
+E
+0302: 00-
+
+# A third digit is ignored and not echoed; BS after two digits removes the second.
+< E 0310\r123\r45\x086\r.
+E 0310
+0310: 00-12
+0311: 00-45\x08 \x086
+0312: 00-
+
+# LF is ignored, so a CR LF terminal advances once per Enter; DEL deletes like BS.
+< E 0320\r5\n\r67\r\n8\x7F9\r\n.
+E 0320
+0320: 00-5
+0321: 00-67
+0322: 00-8\x08 \x089
+0323: 00-
+
+> D 0300 0320
+0300: 12 34 00 00 00 00 00 00  00 00 00 00 00 00 00 00  .4..............
+0310: 12 46 00 00 00 00 00 00  00 00 00 00 00 00 00 00  .F..............
+0320: 05 67 09 00 00 00 00 00  00 00 00 00 00 00 00 00  .g..............
+
+# Store rules on bytes that start nonzero: CR with no digits does not store;
+# 12 BS CR stores 01; DEL with no digit does nothing; 1 BS CR leaves no digit,
+# so nothing is stored; 0 CR stores 00.
+> F 0330 0335 77
+< E 0330\r\r12\x08\r\x7F\r1\x08\r0\r.
+E 0330
+0330: 77-
+0331: 77-12\x08 \x08
+0332: 77-
+0333: 77-1\x08 \x08
+0334: 77-0
+0335: 77-
+> D 0330 0330
+0330: 77 01 77 77 00 77 00 00  00 00 00 00 00 00 00 00  w.ww.w..........
+
+# FFFF advances to 0000. A store to ROM has no effect (FFFF is ROM padding, FF).
+> F 0000 0000 00
+< E FFFF\r12\r.
+E FFFF
+FFFF: FF-12
+0000: 00-
+< E FFFF\r.
+E FFFF
+FFFF: FF-
+
+# An invalid address: a bad digit, five digits, a bad terminator.
 > E ZZ
+Invalid address
+> E 10200
+Invalid address
+> E 02ZZ
 Invalid address

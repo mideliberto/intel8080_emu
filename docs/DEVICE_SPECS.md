@@ -139,7 +139,7 @@ CONIN:  IN      02H
         RET
 ```
 
-This is the monitor's CONOUT and CONIN (`MONITOR_SPEC.md`, Hardware Constraints on the ROM). The current ROM's CONOUT still polls bit 1 (`rom/monitor.asm:175-183`; ROM change pending, TODO.md).
+This is the monitor's CONOUT and CONIN (`MONITOR_SPEC.md`, Hardware Constraints on the ROM).
 
 ---
 

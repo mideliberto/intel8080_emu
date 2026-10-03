@@ -177,7 +177,7 @@ Detail: [ARCHITECTURE.md](ARCHITECTURE.md) (Workspace Layout).
 | Address | Size | Purpose |
 |---------|------|---------|
 | 0080-00CF | 80 | LINE_BUFFER (79 chars + NUL) |
-| 00D0-00D1 | 2 | Free (unused `BUFFER_PTR` equate, `rom/monitor.asm:52`, deletion pending, TODO.md) |
+| 00D0-00D1 | 2 | Free |
 | 00D2-00D3 | 2 | LAST_DUMP_ADDR |
 | 00D4-00D5 | 2 | LAST_EXAM_ADDR |
 | 00D6-00D8 | 3 | IO_IN_STUB (`IN pp` / `RET`) |

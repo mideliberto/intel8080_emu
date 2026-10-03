@@ -25,3 +25,22 @@ Invalid hex value
 Invalid hex value
 > C ZZ 0210 0300
 Invalid hex value
+
+# end < start is Invalid range, checked after all arguments parse (MONITOR_SPEC 6.1, 4.4).
+> C 0201 0200 0300
+Invalid range
+> C 0201 0200 ZZ
+Invalid hex value
+> C 0200 0210 10300
+Invalid hex value
+> C 0200 0210 0300,
+Invalid hex value
+
+# dest wraps past FFFF. FFF8-FFFF is ROM padding (FF); 0000-0007 is RAM.
+> F 0400 0407 FF
+> F 0408 040F 00
+> F 0000 0007 00
+> C 0400 040F FFF8
+> F 0004 0004 11
+> C 0400 040F FFF8
+040C:00 0004:11

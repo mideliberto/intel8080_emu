@@ -17,7 +17,8 @@ const BDOS: u16 = 0xEE00;  // CP/M programs put their stack below the BDOS entry
 
 /// (address, bytes)
 const SHIM: [(u16, &[u8]); 3] = [
-    // 0000: JMP F000. Warm boot: restart the monitor (WARM once the ROM has it).
+    // 0000: JMP F000. Warm boot: restart the monitor. F000 (COLD_START) is the ROM's only
+    // fixed address; WARM moves between builds and is not published (ARCHITECTURE 2).
     (0x0000, &[0xC3, 0x00, 0xF0]),
     // 0005: JMP BDOS
     (0x0005, &[0xC3, 0x00, 0xEE]),

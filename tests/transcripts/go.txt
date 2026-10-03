@@ -1,0 +1,57 @@
+# G [addr] (MONITOR_SPEC 6.5) and the G return contract (section 8). Boot RAM is
+# HLT junk, so a G that runs anything by mistake halts the harness and fails.
+
+# A present but invalid address is an error and runs nothing (0100 is still junk).
+> G ZZ
+Invalid address
+> G 01ZZ
+Invalid address
+> G 10100
+Invalid address
+> G 0100,
+Invalid address
+
+# A program that prints "!" CR LF and returns with RET lands at the prompt (WARM):
+# MVI A,21 / OUT 00 / MVI A,0D / OUT 00 / MVI A,0A / OUT 00 / RET
+> F 0300 030F 00
+> F 0400 048F 00
+< E 0300\r3E\r21\rD3\r00\r3E\r0D\rD3\r00\r3E\r0A\rD3\r00\rC9\r.
+E 0300
+0300: 00-3E
+0301: 00-21
+0302: 00-D3
+0303: 00-00
+0304: 00-3E
+0305: 00-0D
+0306: 00-D3
+0307: 00-00
+0308: 00-3E
+0309: 00-0A
+030A: 00-D3
+030B: 00-00
+030C: 00-C9
+030D: 00-
+> D 0400 040F
+0400: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+> G 0300
+!
+> g300
+!
+# WARM keeps the workspace: D continues after the dump before G, E resumes at 030D.
+> D
+0410: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0420: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0430: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0440: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0450: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0460: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0470: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0480: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+< E\r.
+E
+030D: 00-
+
+# Bare G runs 0100.
+> M 0300 0100 D
+> G
+!

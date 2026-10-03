@@ -440,9 +440,9 @@ Console I/O debugging session:
 **CPU Core:** All 256 opcodes (5 undocumented aliases decoded), flags match ARCHITECTURE 5.1-5.3 including AC, 8080A interrupt input (EI delay, HLT wake), reset() = RESET pin. All four exercisers pass, 8080EXM included
 
 **Monitor ROM v0.3:**
-- 14 commands: D, E, F, M, S, C, H, G, I, O, L, W, X, ?
-- ROM overlay boot mechanism
-- 2511 of 4096 bytes used (1585 free)
+- 14 commands: D, E, F, M, S, C, H, G, I, O, L, W, X, ?, to MONITOR_SPEC sections 1-6, 8, 9, 11 (strict arguments, WARM, G return, memmove, Storage error, Mount failed)
+- ROM overlay boot mechanism; CONOUT is OUT 00 / RET, so the first Pi access after reset is the banner's OUT 00
+- 2165 of 4096 bytes used (1931 free; `make size`)
 
 **Debugger (host-side, ARCHITECTURE 7.4):** Ctrl-E / `--debug` / `--script`, break, step, registers, memory, disassembly with ROM symbols (`rom/monitor.sym`), watchpoints, I/O breaks, port trace, 256-step trace ring
 
@@ -450,17 +450,17 @@ Console I/O debugging session:
 - Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
 **Testing (verified 2026-10-03):**
-- 7 host + 130 CPU + 36 device + 16 monitor + 12 debugger = 201, all passing (strict transcript harness, reference-model CPU tests, port-level device tests)
+- 7 host + 130 CPU + 36 device + 23 monitor + 12 debugger = 208, all passing (strict transcript harness, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 
 ### In Progress
 
 - **Phase 5:** Intel HEX loader, parsed by the 8080 itself in ROM. All design decisions made 2026-10-02; build order in `TODO.md`. Not started.
-- **Review findings:** 2026-10-02 review found CPU flag bugs (AC on subtract, DCR, ANA, DAA; PSW bits; EI delay; HLT), ROM range and parse bugs, and vacuous tests. All are listed in `TODO.md` with repros. The vacuous tests are replaced and the CPU bugs are fixed (2026-10-03); the ROM bugs are open.
+- **Review findings:** 2026-10-02 review found CPU flag bugs, ROM range and parse bugs, and vacuous tests. All fixed by 2026-10-03 (steps A-E); `TODO.md` keeps the repros.
 
 ### Open Decisions
 
-Two host-only questions from 2026-10-03 (idle CPU at the prompt, exit at piped EOF); see `TODO.md` Open Decisions. Everything else closed 2026-10-02. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
+Host-only questions from 2026-10-03 (idle CPU at the prompt, exit at piped EOF, debugger options) and two MONITOR_SPEC wording questions from step E (the stack page in 4.4 rule 4 and in C's 65536-byte compare), the exerciser shim's exit (F000 vs a fixed WARM vector); see `TODO.md` Open Decisions. Everything else closed 2026-10-02. The spec is the three normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`.
 
 ### Blocked/Deferred
 
@@ -476,6 +476,13 @@ Two host-only questions from 2026-10-03 (idle CPU at the prompt, exit at piped E
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: The ROM to MONITOR_SPEC (step E)
+- `rom/monitor.asm` rewritten on the review's prototypes: WARM (`LXI SP` before MAIN_LOOP) that every command and error tail jumps to, one tail per message, no POP cleanup chains. One parser (C:D:E, digit limit in B) for READ_HEX_WORD and READ_HEX_ADDR24 with the absent (CY Z) / invalid (CY, NZ) contract and the terminator check; READ_HEX_BYTE on top for byte forms. One RANGE helper for C, D, F, S; both `CPI 0F0H` heuristics gone.
+- Behavior to spec: Invalid range (end < start, count 0 incl. M), 4/6 digit limits, bytes > FF rejected, present-invalid never absent, G pushes WARM and rejects junk, L/W parse everything before any port write and check status after (W after the flush), X resyncs with OUT 0E,03 and prints Mount failed, M copies backward when dst > src, E per 6.3 (CR stores and advances, LF ignored, DEL deletes), READ_LINE DEL = BS, CONOUT = OUT 00 / RET. Dead CONST, PRINT_BANNER, BUFFER_PTR, File not found and the size guard deleted; ROM_END + `make size`. 2511 -> 2165 bytes.
+- Tests: new transcript lines for the spec behaviors above (new `go.txt`), plus monitor tests for D line counts to FFFF, the G entry contract, Mount failed (a directory), Storage error (host unmounts mid-transfer), L/W port sequences, boot I/O = OUT FE then OUT 00 only, and a debugger-driven test that 43 argument errors reach WARM with no port written and no write outside the workspace and stack. 18 of the 23 monitor tests fail on the old ROM. Hand mutants of the new ROM: 61/61 killed.
+- Review: no ROM defects; 151 hand mutants, 136 killed, 5 equivalent, 2 unreachable with this device, 8 real test gaps. Closed with transcript lines (E: CR with no digits, `12 BS` CR, `1 BS` CR, `0` CR on nonzero bytes; M/L/W count 100; lowercase `x`) and asserts (`C 0000 FFFF 0001` ends with the FFFF/0000 pair; boot leaves 0100-EEFF untouched); each of the 8 plus boot `LXI SP,EF00` re-checked as killed. The exerciser shim's F000-vs-WARM conflict moved from a silent [x] to TODO Open Decisions.
+- What bit us: `make` decides by timestamp, so a mutant written in the same second as the previous build ran the old binary; mutation runs need `make -B`. A mutation script crash left the scratch ROM mutated, so the next run measured mutants on a broken base; restored and rerun. `C 0000 FFFF 0000` reports EFFC-EFFF because C's own pushes change the stack page mid-compare: true to the code, but the spec doesn't say it (logged, with 4.4 rule 4's missing stack page, in TODO Open Decisions).
 
 ### 2026-10-03: The Debugger (step D)
 - Spec first: ARCHITECTURE 7.4 (Ctrl-E, `--debug`, `--script FILE`; 15 short commands; exact output formats; stop report = reason, last 8 ring steps, registers, next instruction). Host-only, no new dependencies. `src/disasm.rs` (256-entry table checked against the reference), `src/debugger.rs` (breaks, watchpoints, I/O breaks, port trace collapsing repeats to ` ; xN`, 256-step ring, symbols), main.rs (Ctrl-E, line-mode prompt, script then terminal).

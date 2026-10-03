@@ -12,7 +12,7 @@ ROM_BIN = monitor.bin
 ROM_SYM = monitor.sym
 ROM_P = monitor.p
 
-.PHONY: all clean
+.PHONY: all clean size disasm
 
 all: $(ROM_BIN) $(ROM_SYM)
 
@@ -36,7 +36,8 @@ clean:
 disasm: $(ROM_BIN)
 	hexdump -C $(ROM_BIN) | head -64
 
-# Check ROM size
-size: $(ROM_BIN)
-	@echo "ROM size: $$(wc -c < $(ROM_BIN)) bytes (max 4096)"
-	@test $$(wc -c < $(ROM_BIN)) -le 4096 || echo "WARNING: ROM exceeds 4KB!"
+# Bytes used: ROM_END - F000 (ARCHITECTURE 2). The bin is padded to 4096, so
+# its file size measures nothing; asl itself errors past FFFF.
+size: $(ROM_SYM)
+	@end=$$(sed -n 's/^\([0-9A-F]*\) ROM_END$$/\1/p' $(ROM_SYM)); \
+	echo "ROM used: $$((0x$$end - 0xF000)) of 4096 bytes"

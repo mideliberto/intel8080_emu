@@ -13,9 +13,14 @@ No storage mounted
 No storage mounted
 > X
 No storage mounted
+> x
+No storage mounted
 
 # Mount; a mount resets the storage address; the name ends at a space.
+# X sends OUT 0E,03 before the name, so a stale character a program (here O 0D)
+# left in the device's name buffer is discarded: this mounts TEST.BIN, not ATEST.BIN.
 > O 08 55
+> O 0D 41
 > X TEST.BIN junk
 Mounted
 > I 08
@@ -66,6 +71,20 @@ Loaded
 > I 08
 10
 
+# A count whose low byte is 00 is not 0 (MONITOR_SPEC 4.3): 0100 bytes each way.
+> W 0200 0 100
+Written
+> I 09
+01
+> I 08
+00
+> L 0 0400 100
+Loaded
+> I 09
+01
+> I 08
+00
+
 # Six-digit storage addresses; every address byte is set by each command.
 > W 0200 123456 1
 Written
@@ -98,6 +117,36 @@ Invalid hex value
 Invalid hex value
 > W 0200
 Invalid hex value
+
+# Every argument parses before any port is written (MONITOR_SPEC 6.8, 6.12, 4.4):
+# a bad count, count 0, too many digits. None of them moves the address (010004).
+> L 123456 0200 ZZ
+Invalid hex value
+> L 123456 0200 0
+Invalid range
+> L 1234567 0200
+Invalid hex value
+> L 123456 10200
+Invalid hex value
+> L 123456 0200 10000
+Invalid hex value
+> W 0200 123456 ZZ
+Invalid hex value
+> W 0200 123456 0
+Invalid range
+> W 0200 1234567
+Invalid hex value
+> W 10200 123456
+Invalid hex value
+> W 0200 12345G
+Invalid hex value
+> I 0A
+01
+> I 09
+00
+> I 08
+04
+
 > X BAD/NAME
 Invalid filename
 # A failed mount unmounts the previous file; names over 12 characters, "." and ".."

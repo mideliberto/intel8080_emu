@@ -29,3 +29,28 @@ Invalid port/value
 Invalid port/value
 > I ZZ
 Invalid port/value
+
+# Ports and values are bytes: leading zeros are fine, above FF or five digits is
+# an error, and no port is written on an error (MONITOR_SPEC 4.2, 6.7, 6.10).
+> I 0002
+02
+> O 08 77
+> I 100
+Invalid port/value
+> I 00002
+Invalid port/value
+> I 08,
+Invalid port/value
+> O 08 100
+Invalid port/value
+> O 108 00
+Invalid port/value
+> O 08 0Z
+Invalid port/value
+> O 08 00000
+Invalid port/value
+> I 08
+77
+> O 0008 0055
+> I 08
+55

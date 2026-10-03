@@ -34,12 +34,12 @@ The rule behind every section: **the ROM sees only what real parts provide.** If
 
 ### 1.1 Workspace Layout
 
-This table and the equates in `rom/monitor.asm` (:50-66) MUST match. If they disagree, that is a defect and goes in `TODO.md`.
+This table and the WORKSPACE equates in `rom/monitor.asm` MUST match. If they disagree, that is a defect and goes in `TODO.md`.
 
 | Address | Size | Name | Initialized at boot |
 |---------|------|------|---------------------|
 | 0080-00CF | 80 | LINE_BUFFER (at most 79 characters plus a NUL) | no |
-| 00D0-00D1 | 2 | free. The `BUFFER_PTR` equate (`monitor.asm:52`) is never referenced and is deleted (ROM change pending, TODO.md). | - |
+| 00D0-00D1 | 2 | free | - |
 | 00D2-00D3 | 2 | LAST_DUMP_ADDR | 0000 |
 | 00D4-00D5 | 2 | LAST_EXAM_ADDR | 0000 |
 | 00D6-00D8 | 3 | IO_IN_STUB (`IN pp` / `RET`) | DB 00 C9 |
@@ -58,11 +58,11 @@ The I/O stubs run from RAM as self-modifying code. Real hardware runs it the sam
 
 ## 2. ROM Organization
 
-- **Source:** `rom/monitor.asm`. **Image:** `rom/monitor.bin`, exactly 4096 bytes, assembled at `ORG 0F000H` (`monitor.asm:15`), unused bytes 0xFF.
+- **Source:** `rom/monitor.asm`. **Image:** `rom/monitor.bin`, exactly 4096 bytes, assembled at `ORG 0F000H`, unused bytes 0xFF.
 - **Fixed address:** only one. COLD_START is the first byte of the image (0xF000, which is also 0x0000 through the overlay). Every other routine address can move from build to build.
 - **No public entry points.** User programs MUST NOT call ROM routines by address. Programs do their own I/O through the ports in `DEVICE_SPECS.md`. ROM routine contracts are in `MONITOR_SPEC.md` (ROM Routine Contracts); they describe the code, not an ABI.
-- **Budget:** 4096 bytes. Used bytes = `ROM_END - 0F000H`, where `ROM_END` is a label after the last assembled byte. `make size` prints that number. The padded image size is not a measurement. (Today `make size` prints the padded 4096, `rom/Makefile:34-35`; ROM change pending, TODO.md.)
-- **Layout** (not normative): boot at F000, then MAIN_LOOP, console I/O and print routines, input and parse routines, the commands, the storage commands, then the strings.
+- **Budget:** 4096 bytes. Used bytes = `ROM_END - 0F000H`, where `ROM_END` is a label after the last assembled byte. `make size` prints that number. The padded image size is not a measurement.
+- **Layout** (not normative): boot at F000, then WARM and MAIN_LOOP, the shared error exits, console I/O and print routines, input and parse routines, the commands, the storage commands, then the strings and ROM_END.
 
 ---
 
@@ -101,12 +101,11 @@ There is no software reset.
   BOOT_CONTINUE: XRA  A
                  OUT  0FEH               ; clears the overlay flip-flop
                  ; init LAST_DUMP_ADDR, LAST_EXAM_ADDR, IO_IN_STUB, IO_OUT_STUB (table 1.1)
-                 CALL PRINT_BANNER       ; banner text: MONITOR_SPEC.md
+                 LXI  H,MSG_BANNER       ; banner text: MONITOR_SPEC.md
+  PRINT_WARM:    CALL PRINT_STRING       ; also the tail of every message that ends a command
   WARM:          LXI  SP,0F000H
   MAIN_LOOP:     ...
 ```
-
-Current code: `monitor.asm:72-109`. WARM does not exist yet, and CONOUT polls `IN 02H` before each `OUT 00H` (`monitor.asm:175-183`), so today the first Pi-window access is `IN 02H` (ROM changes pending, TODO.md).
 
 Requirements:
 

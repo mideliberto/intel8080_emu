@@ -270,7 +270,7 @@ fn port_trace_collapses_repeats_and_sees_fe_ff() {
 fn break_at_a_rom_symbol() {
     let mut r = rom();
     let cmd_dump = r.sym("CMD_DUMP");
-    let skip_spaces = r.sym("SKIP_SPACES");
+    let read_word = r.sym("READ_HEX_WORD");
     assert_eq!(r.cmd("sym cmd_dump+3"), format!("{:04X} CMD_DUMP+3\n", cmd_dump + 3));
     assert_eq!(r.cmd("sym 0100"), "0100\n");
     r.type_in("D 0200 020F\r");
@@ -285,12 +285,12 @@ fn break_at_a_rom_symbol() {
     assert!(lines[8].contains("  JZ CMD_DUMP ") && lines[8].contains(" A=44 "), "{}", report);
     assert!(lines[9].starts_with(&format!("PC={:04X} ", cmd_dump)) && lines[9].contains(" HL=0081 "), "{}", report);
     assert_eq!(lines[10], "CMD_DUMP:");
-    let (lo, hi) = (skip_spaces as u8, (skip_spaces >> 8) as u8);
-    assert_eq!(lines[11], format!("{:04X}  CD {:02X} {:02X}  CALL SKIP_SPACES", cmd_dump, lo, hi));
+    let (lo, hi) = (read_word as u8, (read_word >> 8) as u8);
+    assert_eq!(lines[11], format!("{:04X}  CD {:02X} {:02X}  CALL READ_HEX_WORD", cmd_dump, lo, hi));
     // One step into the call.
     let step = r.cmd("s");
-    assert!(step.starts_with(&format!("PC={:04X} ", skip_spaces)), "{}", step);
-    assert!(step.contains("\nSKIP_SPACES:\n"), "{}", step);
+    assert!(step.starts_with(&format!("PC={:04X} ", read_word)), "{}", step);
+    assert!(step.contains("\nREAD_HEX_WORD:\n"), "{}", step);
     // Back at the prompt the dump has been printed.
     r.cmd("b MAIN_LOOP");
     assert_eq!(r.cmd("c").lines().next(), Some(format!("* break {:04X} MAIN_LOOP", r.sym("MAIN_LOOP")).as_str()));
@@ -300,11 +300,11 @@ fn break_at_a_rom_symbol() {
 
 #[test]
 fn watchpoint_catches_a_load_wrapping_into_the_workspace() {
-    // L with count 0 moves 65536 bytes (TODO, Review findings): from 0200 up, through
-    // FFFF, around to the workspace at 0080. The copy loop uses no stack, so it gets there.
+    // L's destination is not guarded and wraps (MONITOR_SPEC 6.8): 0101 bytes at FF80 run
+    // through the ROM, past FFFF, and their last byte lands on the workspace at 0080.
     let mut r = rom();
     let cl_loop = r.sym("CL_LOOP");
-    r.type_in("X T.BIN\rL 0 0200 0\r");
+    r.type_in("X T.BIN\rL 0 FF80 0101\r");
     r.cmd("b CL_LOOP");
     r.cmd("c");
     r.cmd("bc");
@@ -351,9 +351,9 @@ fn io_break_and_port_trace_of_a_mount() {
     }
     // The console side: X is read from the FIFO and echoed.
     assert!(trace.contains("\nIN 01 58\n") && trace.contains("\nOUT 00 58\n"), "{}", trace);
-    // The mount side (DEVICE_SPECS 7). This list changes when the ROM sends OUT 0E,03 first (TODO).
+    // The mount side (DEVICE_SPECS 7, MONITOR_SPEC 6.13): the resync query, the name, mount, status.
     let mount: Vec<&str> = trace.lines().filter(|l| [" 0D ", " 0E ", " 0F "].iter().any(|p| l.contains(p))).collect();
-    assert_eq!(mount, ["OUT 0D 41", "OUT 0D 42", "OUT 0E 01", "IN 0F 00"]);
+    assert_eq!(mount, ["OUT 0E 03", "OUT 0D 41", "OUT 0D 42", "OUT 0E 01", "IN 0F 00"]);
     assert!(r.dir.path().join("AB").exists());
 }
 

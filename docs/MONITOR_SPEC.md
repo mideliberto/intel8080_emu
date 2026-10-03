@@ -9,7 +9,7 @@ Normative. This is the contract for everything the monitor ROM shows the user: t
 - `DEVICE_SPECS.md`: every port protocol (console, storage, mount, Service Mailbox, system control) and the READY contract as software sees it.
 - `TODO.md`: the work queue and every known difference between the code and this spec.
 
-**Status of this spec.** All decisions are made (2026-10-02; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong. Every known difference is listed in `TODO.md` ("Decided, to implement" or "Review findings"). This file marks the main ones as "(ROM change pending, TODO.md)" with the current code's location.
+**Status of this spec.** All decisions are made (2026-10-02; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03). Section 7 (the HEX loader, Phase 5) and 6.15 (`T`, Phase 6) are not yet: until Phase 5, a line starting with `:` prints `Unknown command. Type ? for help.`
 
 ---
 
@@ -37,7 +37,7 @@ Built: <date> <time><CR><LF>
 Ready.<CR><LF>
 ```
 
-- `<version>` is `0.3` today (`rom/monitor.asm:1455`). A phase that changes the command set bumps it in the same commit. Phase 5 ships `0.4`.
+- `<version>` is `0.3` today (`MSG_BANNER` in `rom/monitor.asm`). A phase that changes the command set bumps it in the same commit. Phase 5 ships `0.4`.
 - `<date>` and `<time>` are the assembler's `DATE` and `TIME` at build time.
 - Tests MUST NOT match on the version, date or time. A banner check matches only `8080 Monitor v`.
 - **Input across reset.** RESET empties the console input FIFO (`DEVICE_SPECS.md`, Rules Common to All Ports), so the monitor never sees bytes typed before a reset. Bytes that arrive after the reset are ordinary input and are processed after the banner. The ROM has no input-drain loop.
@@ -61,7 +61,7 @@ The monitor reads one line at a time into LINE_BUFFER (`ARCHITECTURE.md`, Worksp
 | Any other byte below 20h (NUL, Tab, Esc, 03h, 05h, ...) | Ignored | Nothing |
 
 Requirements:
-- `<DEL>` MUST behave exactly like `<BS>`. Current code stores DEL as a character (`rom/monitor.asm:299-303`; ROM change pending, TODO.md).
+- `<DEL>` MUST behave exactly like `<BS>`.
 - Characters after the 79th are discarded silently. There is no bell and no overflow message, and the truncated line is processed as it stands.
 - READ_LINE does not fold case. Case folding happens per field (Command Dispatch, Argument Grammar).
 - **CR and LF.** `<CR>` and `<LF>` each end a line. READ_LINE keeps no state between lines, so a `<CR><LF>` pair produces the line plus one empty line, and the empty line re-prompts (Command Dispatch). A pasted file with CRLF line ends therefore shows an extra `> ` after each line.
@@ -103,7 +103,7 @@ Arguments start right after the command character. The space between the letter 
 | addr24 (storage address) | 1-6 | 000000-FFFFFF | 7 or more digits |
 | byte (fill value, port, I/O value, search byte) | 1-4, parsed as a word | 00-FF | 5 or more digits, or a value above FF. Leading zeros are allowed: `00AA` = AA, `1AA` is an error |
 
-Silent truncation is forbidden. `F 10200 1020F 1AA` is an error, not a fill of 0200-020F with AA. Current code truncates (READ_HEX_WORD `rom/monitor.asm:360-415`, READ_HEX_ADDR24 `:460-530`; ROM change pending, TODO.md).
+Silent truncation is forbidden. `F 10200 1020F 1AA` is an error, not a fill of 0200-020F with AA.
 
 ### 4.3 Ranges and counts
 
@@ -147,7 +147,7 @@ These are the exact strings. Each is printed with a trailing `<CR><LF>`.
 | `Address out of range` | HEX: a type 00 record would write outside 0100-EEFF |
 | `Service error` | T (Phase 6): mailbox status 00 after execute, or 80-FF |
 
-- The ROM MUST NOT contain `File not found`. Mount creates missing files, so that message can never be true. Current code still has it (`rom/monitor.asm:1274-1277`, `:1496-1497`; ROM change pending, TODO.md).
+- The ROM MUST NOT contain `File not found`. Mount creates missing files, so that message can never be true.
 - Strings new since v0.3: `Invalid range`, `Mount failed`, `Storage error`, the five HEX errors, and `Service error` (Phase 6). The HEX EOF record reuses `Loaded`.
 
 ---
@@ -164,7 +164,7 @@ Notation: `[x]` is optional. Numeric forms follow 4.2. "No output" means that on
 - For each mismatch, in ascending order, prints `AAAA:XX BBBB:YY`: the first-range address and byte, then the second-range address and byte.
 - If the ranges are identical, there is no output.
 - `dest` addresses wrap past FFFF. `C 0000 FFFF dest` compares 65536 bytes.
-- Errors: `Invalid hex value` for a missing or invalid argument. `Invalid range` for end < start. Current code compares (end - start + 1) mod 10000h bytes when end < start, which wraps: up to 65536 when end = start - 1 (`rom/monitor.asm:561-568`; ROM change pending, TODO.md).
+- Errors: `Invalid hex value` for a missing or invalid argument. `Invalid range` for end < start.
 
 ### 6.2 D: Dump
 
@@ -184,7 +184,7 @@ Notation: `[x]` is optional. Numeric forms follow 4.2. "No output" means that on
   ```
   Each line is: the address, `:`, a space; 16 × (byte, space), with one extra space after the 8th byte; one more space; 16 characters, where 20h-7Eh print as themselves and every other byte prints as `.`; then `<CR><LF>`.
 - Bytes inside a line wrap: a line that starts at FFF8 shows FFF8-FFFF and then 0000-0007.
-- **Termination.** After each line, the next line start is `line start + 10h`. Dumping stops when that addition carries past FFFF, or when the next line start is greater than `end`. `D 0000 F000` prints F01h lines (3841). `D 0000 FFFF` prints 1000h lines (4096). Current code stops early on a wrap heuristic (`rom/monitor.asm:750-756`; ROM change pending, TODO.md).
+- **Termination.** After each line, the next line start is `line start + 10h`. Dumping stops when that addition carries past FFFF, or when the next line start is greater than `end`. `D 0000 F000` prints F01h lines (3841). `D 0000 FFFF` prints 1000h lines (4096).
 - When the dump finishes, LAST_DUMP_ADDR is set to the next line start (wrapped). After `D FFF8 FFFF` it is 0008.
 - Errors: `Invalid address` for an invalid argument. `Invalid range` for end < start. LAST_DUMP_ADDR does not change on an error.
 
@@ -206,7 +206,7 @@ Notation: `[x]` is optional. Numeric forms follow 4.2. "No output" means that on
 | `-` | Ignored | Nothing |
 | Anything else | Ignored | Nothing |
 
-- Two digits do not advance on their own. Only `<CR>` stores and advances, so a CRLF terminal advances exactly once per Enter. Current code advances on LF and returns after the second digit (`rom/monitor.asm:1171-1172`, `:1195-1198`; ROM change pending, TODO.md).
+- Two digits do not advance on their own. Only `<CR>` stores and advances, so a CRLF terminal advances exactly once per Enter.
 - One digit is a complete value: `5 <CR>` stores 05.
 - E does not read the byte back to verify it. Storing to a ROM address (F000-FFFF) has no effect.
 - Error: `Invalid address` for an invalid `addr`.
@@ -220,7 +220,7 @@ Example: `E 0200`, then `1` `2` `<CR>` `3` `4` `<CR>` `.`, stores 0200=12 and 02
 - Writes `byte` to every address in `start..end`. F never wraps: with `end = FFFF` it stops after FFFF.
 - No output.
 - F does not guard the workspace (0080-00FF) or the stack page (EF00-EFFF). Filling either has undefined results.
-- Errors: `Invalid hex value` for a missing or invalid argument, or for `byte` above FF. `Invalid range` for end < start. Current code fills to FFFF when end < start (`rom/monitor.asm:847-861`; ROM change pending, TODO.md).
+- Errors: `Invalid hex value` for a missing or invalid argument, or for `byte` above FF. `Invalid range` for end < start.
 
 ### 6.5 G: Go
 
@@ -230,7 +230,6 @@ Example: `E 0200`, then `1` `2` `<CR>` `3` `4` `<CR>` `.`, stores 0200=12 and 02
 - `G addr` jumps to `addr`. Any address is allowed.
 - G pushes the WARM address before it jumps. The G Return Contract (section 8) applies.
 - Error: `Invalid address` when `addr` is present but invalid. Nothing executes.
-- Current code runs 0100 on a bad argument and pushes nothing (`rom/monitor.asm:876-885`; ROM change pending, TODO.md).
 
 ### 6.6 H: Hex math
 
@@ -260,7 +259,6 @@ Example: `E 0200`, then `1` `2` `<CR>` `3` `4` `<CR>` `.`, stores 0200=12 and 02
 - Reads past the end of the file return FFh and advance the address (`DEVICE_SPECS.md`, Storage). That is not an error.
 - The destination is not guarded.
 - Errors: `Invalid hex value` when an argument is invalid or `stor` or `mem` is missing. `Invalid range` for a count of 0.
-- Current code writes ports 08h-0Ah before parsing `mem` (`rom/monitor.asm:1319-1325`), treats an invalid count as 0100 (`:1339`), moves 65536 bytes for count 0 (`:1351-1358`), and skips the step 4 check (`:1360`). ROM change pending, TODO.md.
 
 ### 6.9 M: Move
 
@@ -270,7 +268,6 @@ Example: `E 0200`, then `1` `2` `<CR>` `3` `4` `<CR>` `.`, stores 0200=12 and 02
 - **Overlap.** After M, `dst..dst+count-1` MUST hold the original contents of `src..src+count-1` for any overlap, as long as neither range wraps past FFFF. The copy runs backward (highest address first) when `dst > src`, and forward otherwise.
 - No output.
 - Errors: `Invalid hex value` for a missing or invalid argument. `Invalid range` for a count of 0.
-- Current code always copies forward and treats count 0 as a no-op (`rom/monitor.asm:954-995`; ROM change pending, TODO.md).
 
 ### 6.10 O: Output
 
@@ -290,7 +287,6 @@ Example: `E 0200`, then `1` `2` `<CR>` `3` `4` `<CR>` `.`, stores 0200=12 and 02
 - The pattern has 1 to 8 bytes. Tokens after the 8th byte are ignored (4.1).
 - The workspace (0080-00FF) holds LINE_BUFFER and S's own copy of the pattern. A range that covers that copy always reports it as a match.
 - Errors: `Invalid hex value` when start or end is missing or invalid, there are no pattern bytes, a pattern token is invalid, or a pattern byte is above FF. `Invalid range` for end < start.
-- Current code stops early on a wrap heuristic (`rom/monitor.asm:1123-1129`; ROM change pending, TODO.md).
 
 Example: with 0100-EEFF zeroed, `F 0500 0502 77` followed by `S 0100 EEFF 77 77 77` prints exactly `0500`.
 
@@ -304,7 +300,6 @@ Example: with 0100-EEFF zeroed, `F 0500 0502 77` followed by `S 0100 EEFF 77 77 
 4. Read the storage status (port 0Ch). If bit 0 = 1, print `Written`. If bit 0 = 0, print `Storage error`: a host I/O error on a write or on the flush unmounted the file, or the Pi service restarted (`DEVICE_SPECS.md`, Storage).
 
 - Errors: as for L.
-- Current code writes ports 08h-0Ah before parsing `count` (`rom/monitor.asm:1394-1400`), treats an invalid count as 0100 (`:1408`), moves 65536 bytes for count 0 (`:1420-1427`), and skips the step 4 check (`:1433`). ROM change pending, TODO.md.
 
 ### 6.13 X: Mount, unmount, query
 
@@ -319,7 +314,6 @@ Example: with 0100-EEFF zeroed, `F 0500 0502 77` followed by `S 0100 EEFF 77 77 
 - The name runs to the next space or the end of the line. Characters are sent as typed. The device uppercases the name, validates it, and clears its name buffer on every 0Eh write (`DEVICE_SPECS.md`, Storage Mount). The ROM sends no terminator.
 - Mounting a missing file creates it. There is no "not found".
 - X does not print the name of the mounted file.
-- Current code sends no leading query and prints `File not found` for status 01 (`rom/monitor.asm:1249-1277`; ROM change pending, TODO.md).
 
 ### 6.14 ?: Help
 
@@ -479,7 +473,7 @@ This section owns the program-facing contract. The WARM entry code and the stack
 
 **To return:** execute `RET` with SP = EFFEh and the word at EFFE intact. `RET` is the only supported exit. The WARM address is not published.
 
-**WARM** sets SP = F000h and enters MAIN_LOOP, which prints the prompt. It prints no banner and no `<CR><LF>`, and it does not reinitialize the workspace. LAST_DUMP_ADDR and LAST_EXAM_ADDR survive unless the program overwrote them. Current code has no WARM label; MAIN_LOOP follows the banner call directly (`rom/monitor.asm:103-109`; ROM change pending, TODO.md).
+**WARM** sets SP = F000h and enters MAIN_LOOP, which prints the prompt. It prints no banner and no `<CR><LF>`, and it does not reinitialize the workspace. LAST_DUMP_ADDR and LAST_EXAM_ADDR survive unless the program overwrote them.
 
 ---
 
@@ -487,11 +481,11 @@ This section owns the program-facing contract. The WARM entry code and the stack
 
 The header comment above each routine in `rom/monitor.asm` is that routine's contract. Register preservation is descriptive, not an ABI. This spec does not repeat the headers. The rules are:
 
-- The convention is stated once, in the header block of `monitor.asm`: **a register that a routine's header lists neither as an output nor as trashed is preserved.** The current header block (`rom/monitor.asm:1-12`) does not state it yet (ROM change pending).
+- The convention is stated once, in the header block of `monitor.asm`: **a register that a routine's header lists neither as an output nor as trashed is preserved.**
 - A change to a routine's register behavior MUST update its header in the same commit.
 - There is no public API and no jump table. User programs MUST NOT call ROM addresses, because they move between builds.
-- READ_HEX_WORD and READ_HEX_ADDR24 implement section 4. Their headers MUST state the error cases (no digits, too many digits, a token not ended by a space or NUL) and that both skip leading spaces on entry.
-- CMD_COMPARE relies on B surviving PRINT_HEX_WORD, PRINT_HEX_BYTE, PRINT_SPACE, CONOUT and PRINT_CRLF.
+- READ_HEX_WORD and READ_HEX_ADDR24 implement section 4, and READ_HEX_BYTE (a word whose value is at most FF) builds on READ_HEX_WORD. Their headers MUST state the error cases (no digits, too many digits, a token not ended by a space or NUL) and that they skip leading spaces on entry.
+- CMD_COMPARE relies on B surviving PRINT_ADDR, PRINT_HEX_BYTE, PRINT_SPACE, CONOUT and PRINT_CRLF.
 
 ---
 
@@ -515,7 +509,7 @@ Quitting the emulator (Ctrl-C) and the debugger (Ctrl-E) are host-side, not moni
 
 - Ports the monitor uses on its own: 00h-02h (console), 08h-0Ch (storage), 0Dh-0Fh (mount), 10h-13h (Service Mailbox, Phase 6 `T`), and FEh (overlay off at boot). I and O can reach any port. The protocols are in `DEVICE_SPECS.md`.
 - The ROM does no console chip initialization. The console is a Pi FIFO device behind READY.
-- **CONOUT is `OUT 00h` followed by `RET`.** It MUST NOT poll TX-ready: status bit 1 always reads 1, and OUT 00 never waits on the terminal (`DEVICE_SPECS.md`, Console). Current code polls (`rom/monitor.asm:175-183`; ROM change pending, TODO.md).
+- **CONOUT is `OUT 00h` followed by `RET`.** It MUST NOT poll TX-ready: status bit 1 always reads 1, and OUT 00 never waits on the terminal (`DEVICE_SPECS.md`, Console).
 - The only polling loops in the ROM wait for a person or a background service, never for a byte transfer: CONIN and E poll RX-ready (port 02h, bit 0), and T polls mailbox status (port 12h). Every other device access assumes an instant answer, which READY provides on hardware.
 - The boot's first Pi-window access is the banner's first `OUT 00h`. If the Pi's device service is not running yet, that access waits under READY with no timeout (`DEVICE_SPECS.md`, READY Contract). No ROM code handles the stall.
 - The I and O commands run self-modified `IN` and `OUT` stubs in workspace RAM. That works on any 8080 and needs no special hardware.

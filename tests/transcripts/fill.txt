@@ -31,3 +31,30 @@ Invalid hex value
 Invalid hex value
 > F ZZ 0300 11
 Invalid hex value
+
+# end < start is Invalid range and writes nothing (MONITOR_SPEC 6.4). The range
+# check runs after all three arguments parse, so a bad byte wins (4.4).
+> F 0300 030F 00
+> F 0300 0200 AA
+Invalid range
+> F 0300 0200 ZZ
+Invalid hex value
+# The byte is 00-FF; leading zeros are fine, a value above FF is not.
+> F 0200 0200 100
+Invalid hex value
+> F 0200 0200 01AA
+Invalid hex value
+# Five digits are an error, not a truncation (the review repro fills 0200-020F with AA).
+> F 10200 1020F 1AA
+Invalid hex value
+> F 0200 0200 000AA
+Invalid hex value
+> F 0200 02G0 AA
+Invalid hex value
+> F 0200 0200 AA,
+Invalid hex value
+> D 0200 020F
+0200: AA AA AA AA AA AA AA AA  AA AA AA AA AA AA AA AA  ................
+> D 02F0 0300
+02F0: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+0300: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................

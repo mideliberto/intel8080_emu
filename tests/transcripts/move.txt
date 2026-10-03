@@ -43,3 +43,29 @@ Invalid hex value
 Invalid hex value
 > M 0200 ZZ 1
 Invalid hex value
+
+# Overlap with dst > src copies backward, so the destination gets the original
+# source (MONITOR_SPEC 6.9). A forward copy would smear 11 over all six bytes.
+> F 0490 0493 11
+> F 0494 0497 22
+> M 0490 0492 6
+> D 0490 0490
+0490: 11 11 11 11 11 11 22 22  00 00 00 00 00 00 00 00  ......""........
+
+# Count 0 is Invalid range and copies nothing; it is checked after all three parse.
+> M 0490 04A0 0
+Invalid range
+> M 0490 04A0 ZZ
+Invalid hex value
+> M 0490 104A0 1
+Invalid hex value
+> M 0490 04A0 1,
+Invalid hex value
+> D 04A0 04A0
+04A0: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................
+
+# A count whose low byte is 00 is not 0: 0100 bytes, 0700 untouched.
+> F 0500 05FF 44
+> M 0500 0600 100
+> D 06F8 06F8
+06F8: 44 44 44 44 44 44 44 44  11 11 11 11 11 11 11 11  DDDDDDDD........

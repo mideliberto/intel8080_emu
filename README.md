@@ -16,7 +16,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Storage device (24-bit, 16MB) | ✅ |
 | Monitor ROM v0.3 (14 commands) | ✅ |
 | Host-side debugger (breakpoints, watchpoints, I/O breaks, port trace, trace ring, ROM symbols) | ✅ |
-| 201 tests (7 host + 130 CPU + 36 device + 16 monitor + 12 debugger), plus 4 exercisers (`#[ignore]`) | ✅ |
+| 208 tests (7 host + 130 CPU + 36 device + 23 monitor + 12 debugger), plus 4 exercisers (`#[ignore]`) | ✅ |
 | Intel HEX loader (Phase 5) | 🔲 Next |
 | Service Mailbox: time, HTTP, Claude (Phases 6-9) | 🔲 Future |
 

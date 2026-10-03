@@ -24,6 +24,8 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 
+use intel8080_emu::cpu::Transfer;
+use intel8080_emu::debugger::Debugger;
 use intel8080_emu::io::build_bus;
 use intel8080_emu::io::devices::console::Console;
 use intel8080_emu::io::IoDevice;
@@ -42,6 +44,8 @@ struct Mon {
     cpu: Intel8080,
     con: Rc<RefCell<Console>>,
     dir: tempfile::TempDir,
+    /// Every IN and OUT since power-on, in order.
+    ports: Vec<Transfer>,
 }
 
 /// Power on with junk RAM and the port map main.rs uses (build_bus); returns the
@@ -60,7 +64,7 @@ fn power_on(overlay: bool) -> (Mon, Result<Vec<u8>, String>) {
     if !overlay {
         cpu.rom_overlay_enabled = false;
     }
-    let mut m = Mon { cpu, con, dir };
+    let mut m = Mon { cpu, con, dir, ports: Vec::new() };
     let banner = m.step(b"");
     (m, banner)
 }
@@ -127,6 +131,7 @@ impl Mon {
                     BUDGET, show(input), self.cpu.pc, show(self.con.borrow().output())));
             }
             self.cpu.execute_one();
+            self.ports.extend(self.cpu.transfers().iter().filter(|t| matches!(t, Transfer::In(..) | Transfer::Out(..))));
             let mut con = self.con.borrow_mut();
             let at_prompt = con.read(0x02) & 0x01 == 0 && con.output().ends_with(b"> ");
             let len = con.output().len();
@@ -181,9 +186,25 @@ impl Mon {
         }
     }
 
+    /// Run until PC = `addr` (input already typed).
+    fn run_to(&mut self, addr: u16) {
+        let start = self.cpu.cycles;
+        while self.cpu.pc != addr {
+            assert!(!self.cpu.halted && self.cpu.cycles - start < BUDGET, "never reached {:04X}", addr);
+            self.cpu.execute_one();
+        }
+    }
+
     fn mem(&mut self, addr: u16, n: usize) -> Vec<u8> {
         (0..n).map(|i| self.cpu.read_byte(addr.wrapping_add(i as u16))).collect()
     }
+}
+
+/// A ROM label's address, from rom/monitor.sym (built and committed with monitor.bin).
+fn sym(name: &str) -> u16 {
+    let text = std::fs::read_to_string("rom/monitor.sym").unwrap();
+    let line = text.lines().find(|l| l.get(5..) == Some(name)).unwrap_or_else(|| panic!("no symbol {}", name));
+    u16::from_str_radix(&line[..4], 16).unwrap()
 }
 
 // ---------- Boot ----------
@@ -205,6 +226,8 @@ fn boot_banner() {
 #[test]
 fn boot_assumes_nothing() {
     let mut m = boot();
+    // Boot wrote nothing in the user area (ARCHITECTURE 1: 0100-EEFF only on command).
+    assert!(m.mem(0x0100, 0xEE00).iter().all(|&b| b == JUNK));
     // The overlay is off and 0000-007F was left alone: D shows RAM junk, not ROM.
     assert!(!m.cpu.rom_overlay_enabled);
     assert_eq!(m.run("D 0000 000F"),
@@ -213,6 +236,23 @@ fn boot_assumes_nothing() {
     let mut m = boot();
     assert!(m.run("D").starts_with("0000: 76 "));
     assert_eq!(show(&m.step(b"E\r.").unwrap()), "E\\r\\n0000: 76-\\r\\n");
+}
+
+#[test]
+fn boot_io_is_out_fe_then_console_output() {
+    // ARCHITECTURE 3.2 rule 2: from reset to the first prompt the ROM runs OUT FE and
+    // OUT 00 and nothing else. CONOUT does not poll (MONITOR_SPEC 11). Then the prompt
+    // waits in CONIN, polling IN 02.
+    let (m, banner) = power_on(true);
+    let banner = banner.unwrap();
+    assert_eq!(m.ports[0], Transfer::Out(0xFE, 0x00));
+    let printed: Vec<u8> = m.ports[1..].iter().map_while(|t| match t {
+        Transfer::Out(0x00, v) => Some(*v),
+        _ => None,
+    }).collect();
+    assert_eq!(printed, [&banner[..], b"> "].concat());
+    let rest = &m.ports[1 + printed.len()..];
+    assert!(!rest.is_empty() && rest.iter().all(|t| *t == Transfer::In(0x02, 0x02)), "{:?}", &rest[..rest.len().min(4)]);
 }
 
 #[test]
@@ -260,6 +300,22 @@ fn dump() {
 }
 
 #[test]
+fn dump_counts_lines_to_ffff() {
+    // MONITOR_SPEC 6.2 Termination: stop when the next line start carries past FFFF
+    // or passes end. Not a transcript: thousands of lines of junk RAM and ROM.
+    let mut m = boot();
+    let lines = |out: String| -> Vec<String> { out.split("\\r\\n").filter(|l| !l.is_empty()).map(|l| l[..6].to_string()).collect() };
+    let d = lines(m.run("D 0000 F000"));
+    assert_eq!((d.len(), d[0].as_str(), d[0xF00].as_str()), (0xF01, "0000: ", "F000: "));
+    let d = lines(m.run("D 0000 FFFF"));
+    assert_eq!((d.len(), d[0xFFF].as_str()), (0x1000, "FFF0: "));
+    assert_eq!(lines(m.run("D"))[0], "0000: ");
+    // One argument caps the end at FFFF. The last line wraps, and D goes on from 0001.
+    assert_eq!(lines(m.run("D FFE1")), ["FFE1: ", "FFF1: "]);
+    assert_eq!(lines(m.run("D"))[0], "0001: ");
+}
+
+#[test]
 fn examine() {
     let mut m = boot();
     m.play("examine");
@@ -282,7 +338,13 @@ fn move_block() {
 
 #[test]
 fn compare() {
-    boot().play("compare");
+    let mut m = boot();
+    m.play("compare");
+    // C 0000 FFFF compares 65536 bytes (MONITOR_SPEC 6.1): the last pair is FFFF (ROM
+    // padding) against 0000 (00 after compare.txt). Not a transcript: the ROM and stack
+    // page mismatches are thousands of lines, and the stack page ones are an open question.
+    let out = m.run("C 0000 FFFF 0001");
+    assert!(out.ends_with("\\r\\nFFFF:FF 0000:00\\r\\n"), "{}", &out[out.len().saturating_sub(80)..]);
 }
 
 #[test]
@@ -296,6 +358,11 @@ fn io_ports() {
 }
 
 #[test]
+fn go() {
+    boot().play("go");
+}
+
+#[test]
 fn storage() {
     let mut m = boot();
     m.play("storage");
@@ -306,25 +373,118 @@ fn storage() {
     assert_eq!(disk[0x100..0x10002], vec![0x00; 0xFF02]);
     assert_eq!(disk[0x10002..0x10005], [0xA0, 0xA1, 0xA2]);
     assert_eq!(m.cpu.io_bus_mut().read(0x0C) & 0x01, 0, "X - left the file mounted");
+    assert!(!m.dir.path().join("ATEST.BIN").exists(), "X kept a stale name character");
 }
 
-// ---------- G (not a transcript: the program ends in HLT, not at a prompt) ----------
+#[test]
+fn mount_failed() {
+    // Mount status 01 (open failed) prints Mount failed (MONITOR_SPEC 6.13). A directory
+    // with the name can't be opened as a file (DEVICE_SPECS 7, Mount step 4).
+    let mut m = boot();
+    std::fs::create_dir(m.dir.path().join("SUB")).unwrap();
+    assert_eq!(m.run("X SUB"), "Mount failed\\r\\n");
+    assert_eq!(m.run("X"), "No storage mounted\\r\\n");
+}
 
 #[test]
-fn go_runs_code() {
+fn load_and_write_port_sequences() {
+    // MONITOR_SPEC 6.8, 6.12: status, then the address, the data, the flush (W), and
+    // status again. The flush is not observable in the file; it is on the port.
+    let mut m = boot();
+    m.run("F 0200 0202 5A");
+    assert_eq!(m.run("X T.BIN"), "Mounted\\r\\n");
+    let storage = |m: &Mon, from: usize| -> Vec<Transfer> {
+        m.ports[from..].iter().filter(|t| matches!(t, Transfer::In(0x08..=0x0C, _) | Transfer::Out(0x08..=0x0C, _))).copied().collect()
+    };
+    use Transfer::{In, Out};
+    let n = m.ports.len();
+    assert_eq!(m.run("W 0200 012345 3"), "Written\\r\\n");
+    assert_eq!(storage(&m, n), [In(0x0C, 0x83), Out(0x08, 0x45), Out(0x09, 0x23), Out(0x0A, 0x01),
+        Out(0x0B, 0x5A), Out(0x0B, 0x5A), Out(0x0B, 0x5A), Out(0x0C, 0x02), In(0x0C, 0x83)]);
+    let n = m.ports.len();
+    assert_eq!(m.run("L 012345 0300 3"), "Loaded\\r\\n");
+    assert_eq!(storage(&m, n), [In(0x0C, 0x83), Out(0x08, 0x45), Out(0x09, 0x23), Out(0x0A, 0x01),
+        In(0x0B, 0x5A), In(0x0B, 0x5A), In(0x0B, 0x5A), In(0x0C, 0x83)]);
+    assert_eq!(m.mem(0x0300, 3), [0x5A; 3]);
+}
+
+#[test]
+fn storage_error_when_the_file_goes_away_mid_transfer() {
+    // L and W read status 0C after the transfer (W: after the flush) and print Storage
+    // error when bit 0 is 0 (MONITOR_SPEC 6.8, 6.12). The device unmounts on a host I/O
+    // error or a Pi service restart (DEVICE_SPECS 6); neither can be caused from here,
+    // so the host unmounts it in the middle of the copy loop.
+    for (line, at) in [("L 0 0200 10", "CL_LOOP"), ("W 0200 0 10", "CW_LOOP")] {
+        let mut m = boot();
+        assert_eq!(m.run("X T.BIN"), "Mounted\\r\\n");
+        m.con.borrow_mut().push_input(format!("{}\r", line).as_bytes());
+        m.run_to(sym(at));
+        m.cpu.io_bus_mut().write(0x0E, 0x02);
+        assert_eq!(show(&m.step(b"").unwrap()), "Storage error\\r\\n", "{}", line);
+    }
+}
+
+// ---------- G entry (not a transcript: the program is a HLT) ----------
+
+#[test]
+fn go_entry_contract() {
+    // MONITOR_SPEC 8: on entry SP = EFFE, the word there is WARM, interrupts are off and
+    // the overlay is off. The return through it is in go.txt. The error before G leaves
+    // two pushes and a return address behind: WARM must reset SP.
     for (line, at) in [("G 0300", 0x0300u16), ("G", 0x0100)] {
         let mut m = boot();
-        // MVI A,'!' / OUT 00 / HLT
-        for (i, b) in [0x3E, b'!', 0xD3, 0x00, 0x76].iter().enumerate() {
-            m.run(&format!("F {:04X} {:04X} {:02X}", at + i as u16, at + i as u16, b));
-        }
-        m.con.borrow_mut().take_output();
+        m.run(&format!("F {:04X} {:04X} 76", at, at));
+        assert_eq!(m.run("C 0200 0100 0300"), "Invalid range\\r\\n");
         m.con.borrow_mut().push_input(format!("{}\r", line).as_bytes());
         let start = m.cpu.cycles;
         while !m.cpu.halted && m.cpu.cycles - start < BUDGET {
             m.cpu.execute_one();
         }
-        assert_eq!(m.cpu.pc, at + 5, "{}: halted at the wrong place", line);
-        assert_eq!(show(m.con.borrow().output()), format!("{}\\r\\n!", line));
+        assert_eq!(m.cpu.pc, at + 1, "{}: halted at the wrong place", line);
+        assert_eq!((m.cpu.sp, m.cpu.read_word(0xEFFE)), (0xEFFE, sym("WARM")), "{}", line);
+        assert!(!m.cpu.interrupts_enabled && !m.cpu.rom_overlay_enabled);
+    }
+}
+
+// ---------- Argument errors, under the debugger ----------
+
+#[test]
+fn argument_errors_write_no_port_and_no_memory_outside_the_workspace() {
+    // MONITOR_SPEC 4.4 rule 4. The debugger stops on any write to 0000-007F, 0100-EEFF or
+    // F000-FFFF and on an OUT to any port but the console; each line must instead reach
+    // WARM having printed one argument error. The stack page is the monitor's.
+    let lines = [
+        "C", "C 0200", "C 0200 0210 ZZ", "C 0210 0200 0300", "C 10200 0210 0300",
+        "D ZZ", "D 0300 0200", "D 0200 02G0",
+        "E ZZ", "E 10200",
+        "F 0200 0300", "F 0300 0200 AA", "F 0300 0200 ZZ", "F 0200 0300 100", "F 10200 1020F 1AA", "F 0200 02G0 AA",
+        "G ZZ", "G 01ZZ", "G 10100",
+        "H 1", "H 10000 1",
+        "I", "I 100",
+        "M 0200 0300", "M 0200 0300 0", "M 0200 0300 ZZ",
+        "O 08", "O 08 100", "O 100 00", "O 0D 4Z",
+        "S 0200 0210", "S 0200 0210 AA ZZ", "S 0300 0200 41", "S 0200 0210 100",
+        "L 0", "L 0 0200 0", "L 0 0200 ZZ", "L 1234567 0200", "L 0 10200",
+        "W 0200", "W 0200 0 0", "W 0200 0 ZZ", "W 0200 1000000",
+    ];
+    let errors = ["Invalid address", "Invalid hex value", "Invalid port/value", "Invalid range"];
+    let mut m = boot();
+    assert_eq!(m.run("X T.BIN"), "Mounted\\r\\n");
+    let mut dbg = Debugger::new();
+    dbg.load_symbols(&std::fs::read_to_string("rom/monitor.sym").unwrap()).unwrap();
+    let watches = ["b WARM", "w 0000-007F w", "w 0100-EEFF w", "w F000-FFFF w"].map(String::from);
+    for cmd in watches.into_iter().chain((0x01..=0xFF).map(|p| format!("io {:02X} out", p))) {
+        assert_eq!(dbg.command(&mut m.cpu, &cmd).1, "", "{}", cmd);
+    }
+    for line in lines {
+        m.con.borrow_mut().take_output();
+        m.con.borrow_mut().push_input(format!("{}\r", line).as_bytes());
+        dbg.command(&mut m.cpu, "c");
+        let stop = dbg.run(&mut m.cpu, 1_000_000).unwrap_or_else(|| panic!("{}: no stop, PC={:04X}", line, m.cpu.pc));
+        assert_eq!(stop, format!("break {:04X} WARM", sym("WARM")), "{}\n{}", line, dbg.report(&m.cpu, &stop));
+        // The stop at WARM comes before the prompt, so the next line's output starts with it.
+        let out = String::from_utf8(m.con.borrow_mut().take_output()).unwrap();
+        let msg = out.trim_start_matches("> ").strip_prefix(&format!("{}\r\n", line)).and_then(|o| o.strip_suffix("\r\n"));
+        assert!(msg.is_some_and(|msg| errors.contains(&msg)), "{}: {:?}", line, out);
     }
 }

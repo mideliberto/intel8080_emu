@@ -1,15 +1,22 @@
 ; monitor.asm - Intel 8080 Monitor ROM
-; Assemble with: make
-; 
-; Memory Map:
-;   0x0000-0x00FF: System workspace (RAM)
-;   0x0100-0xEFFF: User program area (RAM)
-;   0xF000-0xFFFF: Monitor ROM (this file)
+; Build: make (asl + p2bin). Spec: docs/MONITOR_SPEC.md (commands, messages,
+; argument grammar, routine contracts), docs/ARCHITECTURE.md (memory map, boot),
+; docs/DEVICE_SPECS.md (ports).
 ;
-; I/O Ports:
-;   0x00: Console data out (write only)
-;   0x01: Console data in (read only)
-;   0x02: Console status (bit 0 = RX ready, bit 1 = TX ready)
+; Memory map (ARCHITECTURE 1):
+;   0000-007F  unused, not initialized
+;   0080-00FF  monitor workspace (equates below)
+;   0100-EEFF  user area
+;   EF00-EFFF  monitor stack (SP starts at F000)
+;   F000-FFFF  this ROM (also at 0000 through the overlay until OUT FE)
+;
+; Ports: 00-02 console, 08-0C storage, 0D-0F mount, FE overlay off.
+;
+; Routine contracts: the header above each routine lists its inputs, outputs
+; and the registers it trashes. A register that a header lists neither as an
+; output nor as trashed is preserved. Commands are entered by JMP, end by
+; JMP WARM (or an error tail, which prints and enters WARM), and need not
+; balance the stack: WARM resets SP.
 
         CPU     8080
         ORG     0F000H
@@ -20,16 +27,16 @@
 
 CONSOLE_DATA_OUT    EQU     00H
 CONSOLE_DATA_IN     EQU     01H
-CONSOLE_STATUS      EQU     02H
+CONSOLE_STATUS      EQU     02H         ; bit 0 = RX ready
 
-SYSTEM_CONTROL      EQU     0FEH        ; ROM overlay control
+SYSTEM_CONTROL      EQU     0FEH        ; any OUT: overlay off
 
 ; Storage Device Ports (0x08-0x0C)
 STORAGE_ADDR_LO     EQU     08H
 STORAGE_ADDR_MID    EQU     09H
 STORAGE_ADDR_HI     EQU     0AH
 STORAGE_DATA        EQU     0BH
-STORAGE_CTRL        EQU     0CH         ; Write: control, Read: status
+STORAGE_CTRL        EQU     0CH         ; Write: control, Read: status (bit 0 = mounted)
 
 ; Storage Mount Ports (0x0D-0x0F)
 MOUNT_FILENAME      EQU     0DH
@@ -42,14 +49,14 @@ CR              EQU     0DH
 LF              EQU     0AH
 BS              EQU     08H
 SPACE           EQU     20H
+DEL             EQU     7FH
 
 ; ============================================
-; WORKSPACE (RAM at 0x0080-0x00FF)
+; WORKSPACE (RAM at 0x0080-0x00FF, ARCHITECTURE 1.1)
 ; ============================================
 
 LINE_BUFFER     EQU     0080H       ; 80 bytes for command line
-LINE_LENGTH     EQU     80          ; Max 80 chars
-BUFFER_PTR      EQU     00D0H       ; Current position in buffer (2 bytes)
+LINE_LENGTH     EQU     80          ; 79 characters + NUL
 LAST_DUMP_ADDR  EQU     00D2H       ; Last dump address (2 bytes)
 LAST_EXAM_ADDR  EQU     00D4H       ; Last examine address (2 bytes)
 
@@ -66,7 +73,7 @@ SEARCH_END      EQU     00E5H       ; 2 bytes for end address
 STOR_ADDR       EQU     00E7H       ; 3 bytes: storage address (lo, mid, hi)
 
 ; ============================================
-; COLD START
+; COLD START (ARCHITECTURE 3.2)
 ; ============================================
 
 COLD_START:
@@ -79,48 +86,49 @@ COLD_START:
 BOOT_CONTINUE:
         XRA     A                   ; A = 0x00
         OUT     SYSTEM_CONTROL      ; Disable overlay, expose RAM at 0x0000
-        
+
         ; Initialize workspace (now writing to actual RAM)
         LXI     H,0000H
         SHLD    LAST_DUMP_ADDR      ; Default dump address = 0
         SHLD    LAST_EXAM_ADDR      ; Default exam address = 0
-        
-        ; Initialize I/O stubs
-        MVI     A,0DBH              ; IN opcode
-        STA     IO_IN_STUB
-        MVI     A,00H               ; Default port 0
-        STA     IO_IN_STUB+1
-        MVI     A,0C9H              ; RET opcode
+
+        ; I/O stubs: DB 00 C9 (IN 00 / RET) and D3 00 C9 (OUT 00 / RET)
+        MVI     L,0DBH
+        SHLD    IO_IN_STUB
+        MVI     L,0D3H
+        SHLD    IO_OUT_STUB
+        MVI     A,0C9H
         STA     IO_IN_STUB+2
-        
-        MVI     A,0D3H              ; OUT opcode
-        STA     IO_OUT_STUB
-        MVI     A,00H               ; Default port 0
-        STA     IO_OUT_STUB+1
-        MVI     A,0C9H              ; RET opcode
         STA     IO_OUT_STUB+2
-        
-        CALL    PRINT_BANNER        ; Show startup message
+
+        LXI     H,MSG_BANNER        ; Print the banner, then enter WARM
 
 ; ============================================
 ; MAIN LOOP
 ; ============================================
 
+; PRINT_WARM - Print the string at HL, then enter WARM. Every message that
+; ends a command (and every error) comes through here. Entered by JMP.
+PRINT_WARM:
+        CALL    PRINT_STRING
+
+; WARM - Reset the stack and prompt. Commands end here, and G pushes this
+; address so a program can return with RET (MONITOR_SPEC 8).
+WARM:
+        LXI     SP,STACK_TOP
+
 MAIN_LOOP:
         MVI     A,'>'               ; Print prompt
         CALL    CONOUT
-        MVI     A,' '
-        CALL    CONOUT
-        
+        CALL    PRINT_SPACE
+
         CALL    READ_LINE           ; Read command into LINE_BUFFER
-        
+
         LXI     H,LINE_BUFFER       ; Point to start of buffer
-        CALL    SKIP_SPACES         ; Skip leading spaces
-        
-        MOV     A,M                 ; Get command character
+        CALL    SKIP_SPACES         ; A = first non-space character
         ORA     A                   ; Empty line?
         JZ      MAIN_LOOP           ; Yes, just prompt again
-        
+
         ; Convert to uppercase if lowercase
         CPI     'a'
         JC      NOT_LOWER
@@ -128,9 +136,9 @@ MAIN_LOOP:
         JNC     NOT_LOWER
         SUI     20H                 ; Convert to uppercase
 NOT_LOWER:
-        
+
         INX     H                   ; Point past command char
-        
+
         ; Command dispatch
         CPI     'C'
         JZ      CMD_COMPARE
@@ -160,29 +168,41 @@ NOT_LOWER:
         JZ      CMD_MOUNT
         CPI     '?'
         JZ      CMD_HELP
-        
-        ; Unknown command
+
         LXI     H,MSG_UNKNOWN
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
+        JMP     PRINT_WARM
+
+; Error tails (MONITOR_SPEC 5). Entered by JMP from any depth: WARM resets SP.
+ERR_HEX:
+        LXI     H,MSG_BAD_HEX
+        JMP     PRINT_WARM
+ERR_ADDR:
+        LXI     H,MSG_BAD_ADDR
+        JMP     PRINT_WARM
+ERR_PORT:
+        LXI     H,MSG_BAD_PORT
+        JMP     PRINT_WARM
+ERR_RANGE:
+        LXI     H,MSG_RANGE
+        JMP     PRINT_WARM
+ERR_NOSTOR:
+        LXI     H,MSG_NO_STORAGE
+        JMP     PRINT_WARM
 
 ; ============================================
 ; CONSOLE I/O ROUTINES
 ; ============================================
 
-; CONOUT - Output character in A
-; Preserves: all registers
+; CONOUT - Output character in A. No TX poll: the console never makes
+; OUT 00 wait (MONITOR_SPEC 11).
+; Input: A = character
+; Trashes: nothing
 CONOUT:
-        PUSH    PSW
-CONOUT_WAIT:
-        IN      CONSOLE_STATUS
-        ANI     02H
-        JZ      CONOUT_WAIT
-        POP     PSW
         OUT     CONSOLE_DATA_OUT
         RET
 
-; CONIN - Input character to A
+; CONIN - Wait for a console byte
+; Output: A = byte
 ; Trashes: flags
 CONIN:
         IN      CONSOLE_STATUS
@@ -191,29 +211,14 @@ CONIN:
         IN      CONSOLE_DATA_IN
         RET
 
-; CONST - Console status
-; Returns: A = 0xFF if char available, 0x00 if not
-; Trashes: flags
-CONST:
-        IN      CONSOLE_STATUS
-        ANI     01H
-        RZ                          ; Return 0 if no char
-        MVI     A,0FFH              ; Return FF if char available
-        RET
-
 ; ============================================
 ; PRINT ROUTINES
 ; ============================================
 
-; PRINT_BANNER - Display startup message
-; Trashes: A, HL, flags
-PRINT_BANNER:
-        LXI     H,MSG_BANNER
-        CALL    PRINT_STRING
-        RET
-
 ; PRINT_STRING - Print null-terminated string at HL
-; Trashes: A, HL, flags
+; Input: HL = string
+; Output: HL = address of the NUL
+; Trashes: A, flags
 PRINT_STRING:
         MOV     A,M                 ; Get character
         ORA     A                   ; Check for null
@@ -228,15 +233,29 @@ PRINT_CRLF:
         MVI     A,CR
         CALL    CONOUT
         MVI     A,LF
-        CALL    CONOUT
-        RET
+        JMP     CONOUT
 
 ; PRINT_SPACE - Print a space
 ; Trashes: A, flags
 PRINT_SPACE:
         MVI     A,SPACE
-        CALL    CONOUT
-        RET
+        JMP     CONOUT
+
+; PRINT_ADDR - Print HL as four hex digits and ':'
+; Input: HL = address
+; Trashes: A, flags
+PRINT_ADDR:
+        CALL    PRINT_HEX_WORD
+        MVI     A,':'
+        JMP     CONOUT
+
+; PRINT_HEX_WORD - Print HL as four hex digits
+; Input: HL = word to print
+; Trashes: A, flags
+PRINT_HEX_WORD:
+        MOV     A,H
+        CALL    PRINT_HEX_BYTE
+        MOV     A,L                 ; fall into PRINT_HEX_BYTE
 
 ; PRINT_HEX_BYTE - Print A as two hex digits
 ; Input: A = byte to print
@@ -248,9 +267,7 @@ PRINT_HEX_BYTE:
         RRC
         RRC
         CALL    PRINT_HEX_NIBBLE    ; Print high nibble
-        POP     PSW                 ; Restore original
-        CALL    PRINT_HEX_NIBBLE    ; Print low nibble
-        RET
+        POP     PSW                 ; Restore original, fall into PRINT_HEX_NIBBLE
 
 ; PRINT_HEX_NIBBLE - Print low nibble of A as hex digit
 ; Input: A = value (low 4 bits used)
@@ -262,51 +279,44 @@ PRINT_HEX_NIBBLE:
         ADI     07H                 ; Adjust for A-F
 PHN_DIGIT:
         ADI     '0'                 ; Convert to ASCII
-        CALL    CONOUT
-        RET
-
-; PRINT_HEX_WORD - Print HL as four hex digits
-; Input: HL = word to print
-; Trashes: A, flags
-PRINT_HEX_WORD:
-        MOV     A,H
-        CALL    PRINT_HEX_BYTE
-        MOV     A,L
-        CALL    PRINT_HEX_BYTE
-        RET
+        JMP     CONOUT
 
 ; ============================================
 ; INPUT ROUTINES
 ; ============================================
 
-; READ_LINE - Read line into LINE_BUFFER
-; Handles: BS (backspace), CR (end of line)
-; Returns: LINE_BUFFER contains null-terminated string
+; READ_LINE - Read a line into LINE_BUFFER (MONITOR_SPEC 2)
+; CR or LF ends the line (echo CR LF). BS and DEL delete a character (echo
+; BS SP BS). 20-7E and 80-FF are stored and echoed while fewer than 79 are
+; stored, then discarded silently. Other control bytes are ignored.
+; Output: LINE_BUFFER holds the line, NUL-terminated
 ; Trashes: A, B, C, HL, flags
 READ_LINE:
         LXI     H,LINE_BUFFER       ; Point to buffer start
         MVI     B,0                 ; Character count
-        
+
 RL_LOOP:
         CALL    CONIN               ; Get character
         MOV     C,A                 ; Save it in C
-        
+
         CPI     CR                  ; Enter pressed?
         JZ      RL_DONE
         CPI     LF
         JZ      RL_DONE
-        
+
         CPI     BS                  ; Backspace?
         JZ      RL_BACKSPACE
-        
+        CPI     DEL                 ; DEL is a backspace too
+        JZ      RL_BACKSPACE
+
         CPI     SPACE               ; Ignore control chars
         JC      RL_LOOP
-        
+
         ; Check buffer full
         MOV     A,B
         CPI     LINE_LENGTH-1       ; Room for char + null?
         JNC     RL_LOOP             ; Buffer full, ignore
-        
+
         ; Store and echo character
         MOV     M,C                 ; Store in buffer
         INX     H                   ; Advance pointer
@@ -314,37 +324,35 @@ RL_LOOP:
         MOV     A,C                 ; Echo character
         CALL    CONOUT
         JMP     RL_LOOP
-        
+
 RL_BACKSPACE:
         MOV     A,B                 ; Check if buffer empty
         ORA     A
         JZ      RL_LOOP             ; Nothing to delete
-        
+
         DCX     H                   ; Back up pointer
         DCR     B                   ; Decrement count
-        
+
         ; Erase character on screen: BS, space, BS
         MVI     A,BS
         CALL    CONOUT
-        MVI     A,SPACE
-        CALL    CONOUT
+        CALL    PRINT_SPACE
         MVI     A,BS
         CALL    CONOUT
         JMP     RL_LOOP
-        
+
 RL_DONE:
         MVI     M,0                 ; Null terminate
-        CALL    PRINT_CRLF          ; Echo newline
-        RET
+        JMP     PRINT_CRLF          ; Echo newline
 
 ; ============================================
-; PARSING ROUTINES
+; PARSING ROUTINES (MONITOR_SPEC 4)
 ; ============================================
 
 ; SKIP_SPACES - Skip spaces in buffer
 ; Input: HL = pointer into buffer
-; Output: HL = pointer to first non-space (or null)
-; Trashes: A, flags
+; Output: HL = first non-space, A = that character (NUL at end of line)
+; Trashes: flags
 SKIP_SPACES:
         MOV     A,M
         CPI     SPACE
@@ -352,227 +360,161 @@ SKIP_SPACES:
         INX     H
         JMP     SKIP_SPACES
 
-; READ_HEX_WORD - Parse hex number from buffer
-; Input: HL = pointer into buffer
-; Output: DE = parsed value, HL = advanced past number
-;         Carry set if no valid hex digits found
-; Trashes: A, BC, flags
+; READ_HEX_WORD - Parse a word argument (1-4 hex digits)
+; READ_HEX_ADDR24 - Parse a storage address (1-6 hex digits) into STOR_ADDR
+; Both skip leading spaces on entry. A token is a run of non-space characters.
+; Input: HL = pointer into the line
+; Output, three cases:
+;   valid:   CY=0 Z=0. READ_HEX_WORD: DE = value. READ_HEX_ADDR24: STOR_ADDR =
+;            value (lo, mid, hi). HL = the space or NUL after the token.
+;   absent:  CY=1 Z=1. Only spaces were left; HL = the NUL.
+;   invalid: CY=1 Z=0. The token has no digits, too many digits, or a
+;            character other than a hex digit before the space or NUL that
+;            must end it. HL is somewhere in the token.
+; Callers of a required argument test only CY. Callers of an optional one
+; test Z (absent) first, then CY (invalid): present-invalid is never absent.
+; Trashes: A, B, C, flags; READ_HEX_ADDR24 also DE
+READ_HEX_ADDR24:
+        MVI     B,7                 ; 6 digits allowed
+        CALL    RH_START
+        RC
+        XCHG
+        SHLD    STOR_ADDR           ; lo, mid
+        XCHG
+        MOV     A,C
+        STA     STOR_ADDR+2         ; hi
+        JMP     RH_OK
+
 READ_HEX_WORD:
-        CALL    SKIP_SPACES         ; Skip leading spaces
-        LXI     D,0                 ; Initialize result
-        MVI     B,0                 ; Digit count
-        
-RHW_LOOP:
-        MOV     A,M                 ; Get character
-        CALL    TO_HEX_DIGIT        ; Convert to 0-15
-        JC      RHW_DONE            ; Not a hex digit, done
-        
-        ; Shift DE left 4 bits and add new digit
-        ; DE = DE * 16 + A
-        PUSH    PSW                 ; Save digit
-        
-        ; Get E's high nibble (will go to D's low nibble)
-        MOV     A,E
-        ANI     0F0H                ; Isolate high nibble
-        RRC
-        RRC
-        RRC
-        RRC                         ; Move to low nibble position
-        MOV     C,A                 ; Save it
-        
-        ; Shift D left 4 bits
-        MOV     A,D
-        ADD     A
-        ADD     A
-        ADD     A
-        ADD     A                   ; D << 4
-        ORA     C                   ; OR in E's high nibble
-        MOV     D,A
-        
-        ; Shift E left 4 bits
-        MOV     A,E
-        ADD     A
-        ADD     A
-        ADD     A
-        ADD     A                   ; E << 4
-        MOV     E,A
-        
-        ; Add new digit
-        POP     PSW
-        ORA     E
-        MOV     E,A
-        
-        INX     H                   ; Advance buffer pointer
-        INR     B                   ; Count digit
-        JMP     RHW_LOOP
-        
-RHW_DONE:
-        MOV     A,B                 ; Check digit count
+        MVI     B,5                 ; 4 digits allowed
+RH_START:
+        CALL    SKIP_SPACES
         ORA     A
-        STC                         ; Set carry (no digits)
-        RZ                          ; Return with carry if no digits
-        ORA     A                   ; Clear carry (success)
+        STC
+        RZ                          ; absent: CY=1 Z=1
+        LXI     D,0                 ; C:D:E = value
+        MVI     C,0
+RH_LOOP:
+        MOV     A,M
+        CALL    TO_HEX_DIGIT
+        JC      RH_END              ; not a digit: the token must end here
+        DCR     B
+        JZ      RH_BAD              ; one digit too many
+        XCHG                        ; HL = value low 16, DE = line pointer
+        PUSH    PSW                 ; save the digit
+        DAD     H                   ; C:HL <<= 4
+        MOV     A,C
+        RAL
+        MOV     C,A
+        DAD     H
+        MOV     A,C
+        RAL
+        MOV     C,A
+        DAD     H
+        MOV     A,C
+        RAL
+        MOV     C,A
+        DAD     H
+        MOV     A,C
+        RAL
+        MOV     C,A
+        POP     PSW
+        ORA     L                   ; add the digit
+        MOV     L,A
+        XCHG                        ; DE = value low 16, HL = line pointer
+        INX     H
+        JMP     RH_LOOP
+
+RH_END:
+        MOV     A,M                 ; a space or the NUL ends the token
+        CPI     SPACE
+        JZ      RH_OK
+        ORA     A                   ; anything else (including a first
+        JNZ     RH_BAD              ; character that is not a digit) is invalid
+RH_OK:
+        ORI     0FFH                ; valid: CY=0 Z=0
         RET
+RH_BAD:
+        ORI     0FFH                ; invalid: CY=1 Z=0
+        STC
+        RET
+
+; READ_HEX_BYTE - Parse a byte argument: a word (READ_HEX_WORD) whose value
+; is 00-FF. Skips leading spaces. Leading zeros are allowed (00AA); a value
+; above FF is invalid, as are the READ_HEX_WORD error cases.
+; Input: HL = pointer into the line
+; Output: as READ_HEX_WORD (valid, absent, invalid), with E = the byte and
+;         D = 0 when valid
+; Trashes: A, B, C, flags
+READ_HEX_BYTE:
+        CALL    READ_HEX_WORD
+        RC
+        MOV     A,D
+        ORA     A
+        JZ      RH_OK
+        JMP     RH_BAD
 
 ; TO_HEX_DIGIT - Convert ASCII to hex value
 ; Input: A = ASCII character
-; Output: A = hex value (0-15), Carry clear
-;         Carry set if not a hex digit
+; Output: A = hex value (0-15) and CY=0, or CY=1 if not 0-9 A-F a-f
 ; Trashes: flags
 TO_HEX_DIGIT:
-        CPI     '0'
-        JC      THD_FAIL            ; Below '0'
-        CPI     '9'+1
-        JC      THD_DIGIT           ; '0'-'9'
-        
-        CPI     'A'
-        JC      THD_FAIL            ; Between '9' and 'A'
-        CPI     'F'+1
-        JC      THD_ALPHA           ; 'A'-'F'
-        
-        CPI     'a'
-        JC      THD_FAIL            ; Between 'F' and 'a'
-        CPI     'f'+1
-        JNC     THD_FAIL            ; Above 'f'
-        
-        ; 'a'-'f': convert to uppercase first
-        SUI     20H
-        
-THD_ALPHA:
-        SUI     'A'-10              ; Convert 'A'-'F' to 10-15
-        ORA     A                   ; Clear carry
-        RET
-        
-THD_DIGIT:
-        SUI     '0'                 ; Convert '0'-'9' to 0-9
-        ORA     A                   ; Clear carry
-        RET
-        
-THD_FAIL:
-        STC                         ; Set carry = not hex
+        SUI     '0'
+        RC                          ; below '0'
+        CPI     10
+        CMC
+        RNC                         ; '0'-'9': 0-9, carry clear
+        ANI     0DFH                ; fold 'a'-'f' onto 'A'-'F'
+        SUI     'A'-'0'
+        RC                          ; between '9' and 'A'
+        CPI     6
+        CMC
+        RC                          ; above 'F'
+        ADI     10                  ; 10-15, carry clear
         RET
 
-; READ_HEX_ADDR24 - Parse 24-bit hex number from buffer
-; Input: HL = pointer into buffer
-; Output: STOR_ADDR filled (3 bytes: lo, mid, hi), HL advanced
-;         Carry set if no valid hex digits found
-; Trashes: A, BC, flags
-READ_HEX_ADDR24:
-        CALL    SKIP_SPACES
-        ; Clear storage address
-        XRA     A
-        STA     STOR_ADDR
-        STA     STOR_ADDR+1
-        STA     STOR_ADDR+2
-        MVI     B,0                 ; Digit count
-        
-RHA_LOOP:
-        MOV     A,M
-        CALL    TO_HEX_DIGIT
-        JC      RHA_DONE
-        
-        ; Shift 24-bit value left 4, add new digit
-        PUSH    PSW                 ; Save new digit
-        
-        ; Shift high byte left 4, get high nibble from mid
-        LDA     STOR_ADDR+2
-        ADD     A
-        ADD     A
-        ADD     A
-        ADD     A
-        MOV     C,A                 ; C = high << 4
-        LDA     STOR_ADDR+1
-        ANI     0F0H
-        RRC
-        RRC
-        RRC
-        RRC
-        ORA     C
-        STA     STOR_ADDR+2
-        
-        ; Shift mid byte left 4, get high nibble from low
-        LDA     STOR_ADDR+1
-        ADD     A
-        ADD     A
-        ADD     A
-        ADD     A
+; RANGE - Byte count of an inclusive range (MONITOR_SPEC 4.3)
+; Input: HL = start, DE = end
+; Output: BC = end - start + 1, where 0 means 65536
+; Exits to ERR_RANGE (no return) if end < start.
+; Trashes: A, flags
+RANGE:
+        MOV     A,E
+        SUB     L
         MOV     C,A
-        LDA     STOR_ADDR
-        ANI     0F0H
-        RRC
-        RRC
-        RRC
-        RRC
-        ORA     C
-        STA     STOR_ADDR+1
-        
-        ; Shift low byte left 4, add new digit
-        LDA     STOR_ADDR
-        ADD     A
-        ADD     A
-        ADD     A
-        ADD     A
-        MOV     C,A
-        POP     PSW                 ; Get new digit
-        ORA     C
-        STA     STOR_ADDR
-        
-        INX     H
-        INR     B
-        JMP     RHA_LOOP
-        
-RHA_DONE:
-        MOV     A,B
-        ORA     A
-        STC
-        RZ                          ; Return with carry if no digits
-        ORA     A                   ; Clear carry
+        MOV     A,D
+        SBB     H
+        MOV     B,A
+        JC      ERR_RANGE
+        INX     B
         RET
 
 ; ============================================
-; COMMANDS
+; COMMANDS (MONITOR_SPEC 6)
 ; ============================================
 
-; CMD_COMPARE - Compare memory regions
-; Syntax: C start end dest
-; Compares [start,end] with [dest, dest+(end-start)]
-; Shows differences as: addr1:val1 addr2:val2
+; CMD_COMPARE - C start end dest
+; Prints AAAA:XX BBBB:YY for each mismatch. dest wraps past FFFF.
 CMD_COMPARE:
-        CALL    SKIP_SPACES
         CALL    READ_HEX_WORD
-        JC      CC_ERROR
+        JC      ERR_HEX
         PUSH    D                   ; Stack: start
-        
-        CALL    SKIP_SPACES
+
         CALL    READ_HEX_WORD
-        JC      CC_POP1_ERROR
+        JC      ERR_HEX
         PUSH    D                   ; Stack: end, start
-        
-        CALL    SKIP_SPACES
+
         CALL    READ_HEX_WORD
-        JC      CC_POP2_ERROR
-        ; DE = dest, stack: end, start
-        
-        ; Now all args parsed. Compute count and set up registers.
+        JC      ERR_HEX             ; DE = dest
+
         POP     B                   ; BC = end
         POP     H                   ; HL = start
         PUSH    D                   ; Save dest
-        
-        ; count = end - start + 1 = BC - HL + 1
-        MOV     A,C
-        SUB     L
-        MOV     E,A
-        MOV     A,B
-        SBB     H
-        MOV     D,A
-        INX     D                   ; DE = count
-        
-        MOV     B,D
-        MOV     C,E                 ; BC = count
+        MOV     D,B
+        MOV     E,C                 ; DE = end
+        CALL    RANGE               ; BC = count
         POP     D                   ; DE = dest
-        
-        ; Now: HL = start, DE = dest, BC = count
-        
+
 CC_LOOP:
         MOV     A,M                 ; A = first byte
         PUSH    H                   ; Save first pointer
@@ -581,152 +523,87 @@ CC_LOOP:
         CMP     M                   ; Compare with second byte
         XCHG                        ; HL = first, DE = dest
         JZ      CC_NEXT
-        
-        ; Mismatch
-        ; HL=first ptr, DE=second ptr, stack: count, first ptr
+
+        ; Mismatch. Relies on B surviving the print routines.
         PUSH    D                   ; Save second
-        MOV     B,M                 ; B = first byte (re-read)
-        CALL    PRINT_HEX_WORD      ; Print first addr
-        MVI     A,':'
-        CALL    CONOUT
+        MOV     B,M                 ; B = first byte
+        CALL    PRINT_ADDR
         MOV     A,B
         CALL    PRINT_HEX_BYTE
         CALL    PRINT_SPACE
-        
+
         POP     H                   ; HL = second pointer
         MOV     B,M                 ; B = second byte
         PUSH    H                   ; Save second again
-        CALL    PRINT_HEX_WORD
-        MVI     A,':'
-        CALL    CONOUT
+        CALL    PRINT_ADDR
         MOV     A,B
         CALL    PRINT_HEX_BYTE
         CALL    PRINT_CRLF
-        
+
         POP     D                   ; DE = second ptr
-        POP     B                   ; BC = count
-        POP     H                   ; HL = first ptr
-        JMP     CC_ADVANCE
-        
 CC_NEXT:
         POP     B                   ; BC = count
         POP     H                   ; HL = first ptr
-        
-CC_ADVANCE:
         INX     H                   ; first++
         INX     D                   ; second++
         DCX     B                   ; count--
         MOV     A,B
         ORA     C
         JNZ     CC_LOOP
-        JMP     MAIN_LOOP
+        JMP     WARM
 
-CC_POP2_ERROR:
-        POP     D
-CC_POP1_ERROR:
-        POP     D
-CC_ERROR:
-        LXI     H,MSG_BAD_HEX
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-
-; CMD_DUMP - Dump memory
-; Syntax: D [start] [end]
-; If no args, continues from last address
-; If one arg, dumps 128 bytes from start
-; If two args, dumps from start to end
+; CMD_DUMP - D [start [end]]
+; No args: LAST_DUMP_ADDR for 80h bytes; one arg: start for 80h bytes (both
+; capped at FFFF); two args: start to end. Whole 16-byte lines; LAST_DUMP_ADDR
+; = the next line start (wrapped) when done.
 CMD_DUMP:
-        CALL    SKIP_SPACES
-        MOV     A,M
-        ORA     A                   ; End of line?
+        CALL    READ_HEX_WORD
         JZ      CD_NO_ARGS
-        
-        ; Parse start address
-        CALL    READ_HEX_WORD
-        JC      CD_ERROR            ; No valid address
+        JC      ERR_ADDR
         PUSH    D                   ; Save start address
-        
-        CALL    SKIP_SPACES
-        MOV     A,M
-        ORA     A                   ; End of line?
-        JZ      CD_ONE_ARG
-        
-        ; Parse end address
-        CALL    READ_HEX_WORD
-        JC      CD_POP_ERROR        ; Invalid end address
-        
-        ; Two args: start in stack, end in DE
-        POP     H                   ; HL = start
-        JMP     CD_DUMP_RANGE
-        
-CD_NO_ARGS:
-        ; Continue from last address
-        LHLD    LAST_DUMP_ADDR
-        LXI     D,007FH             ; 128 bytes
-        DAD     D                   ; HL = start + 127 = end
-        JNC     CD_NO_WRAP1         ; No overflow, HL is valid end
-        LXI     H,0FFFFH            ; Cap at FFFF
-CD_NO_WRAP1:
-        XCHG                        ; DE = end
-        LHLD    LAST_DUMP_ADDR      ; HL = start
-        JMP     CD_DUMP_RANGE
-        
-CD_ONE_ARG:
-        POP     H                   ; HL = start
-        PUSH    H                   ; Save start again
-        LXI     D,007FH
-        DAD     D                   ; HL = start + 127 = end
-        JNC     CD_NO_WRAP2         ; No overflow
-        LXI     H,0FFFFH            ; Cap at FFFF
-CD_NO_WRAP2:
-        XCHG                        ; DE = end
-        POP     H                   ; HL = start
-        JMP     CD_DUMP_RANGE
-        
-CD_POP_ERROR:
-        POP     D                   ; Clean up stack
-CD_ERROR:
-        LXI     H,MSG_BAD_ADDR
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
 
-; CD_DUMP_RANGE - Dump memory from HL to DE
-; Input: HL = start address, DE = end address
+        CALL    READ_HEX_WORD
+        JZ      CD_ONE_ARG
+        JC      ERR_ADDR            ; DE = end
+
+        POP     H                   ; HL = start
+        JMP     CD_DUMP_RANGE
+
+CD_NO_ARGS:
+        LHLD    LAST_DUMP_ADDR      ; Continue from last address
+        PUSH    H
+CD_ONE_ARG:
+        POP     D                   ; DE = start
+        LXI     H,007FH
+        DAD     D                   ; HL = start + 7F = end
+        JNC     CD_NO_CAP
+        LXI     H,0FFFFH            ; Cap at FFFF
+CD_NO_CAP:
+        XCHG                        ; HL = start, DE = end
+
 CD_DUMP_RANGE:
-        PUSH    D                   ; Save end address
+        CALL    RANGE               ; BC = end - start + 1
+        DCX     B                   ; BC = end - start
 
 CD_LINE:
-        ; Print address
-        CALL    PRINT_HEX_WORD
-        MVI     A,':'
-        CALL    CONOUT
+        PUSH    B
+        CALL    PRINT_ADDR
         CALL    PRINT_SPACE
-        
-        ; Print 16 hex bytes
         PUSH    H                   ; Save line start for ASCII
-        MVI     C,16                ; Byte counter
-        
+        MVI     E,16                ; Byte counter
 CD_HEX_BYTE:
-        MOV     A,M                 ; Get byte
+        MOV     A,M
         CALL    PRINT_HEX_BYTE
         CALL    PRINT_SPACE
-        
-        ; Extra space after 8th byte
-        MOV     A,C
+        MOV     A,E
         CPI     9
-        JNZ     CD_NO_GAP
-        CALL    PRINT_SPACE
-CD_NO_GAP:
-        
+        CZ      PRINT_SPACE         ; Extra space after 8th byte
         INX     H
-        DCR     C
+        DCR     E
         JNZ     CD_HEX_BYTE
-        
-        ; Print ASCII representation
         CALL    PRINT_SPACE
-        POP     H                   ; Restore line start
-        MVI     C,16
-        
+        POP     H
+        MVI     E,16
 CD_ASCII:
         MOV     A,M
         CPI     SPACE               ; Printable? (>= 0x20)
@@ -738,716 +615,489 @@ CD_DOT:
 CD_PRINT_CHAR:
         CALL    CONOUT
         INX     H
-        DCR     C
+        DCR     E
         JNZ     CD_ASCII
-        
         CALL    PRINT_CRLF
-        
-        ; Check if done (HL > end address OR wrapped)
-        POP     D                   ; DE = end address
-        PUSH    D                   ; Keep it on stack
-        
-        ; Detect wrap-around: if H is 00 and D is FF, we wrapped past FFFF
-        MOV     A,H
-        ORA     A
-        JNZ     CD_NO_WRAP3         ; H != 0, no wrap
-        MOV     A,D
-        CPI     0F0H                ; Were we dumping high memory?
-        JNC     CD_DONE             ; Yes and H=0, we wrapped, done
-        
-CD_NO_WRAP3:
-        ; Compare HL to DE: if HL > DE, we're done
-        MOV     A,D
-        CMP     H
-        JC      CD_DONE             ; D < H, done
-        JNZ     CD_LINE             ; D > H, continue
-        MOV     A,E
-        CMP     L
-        JC      CD_DONE             ; E < L, done (D == H)
-        JMP     CD_LINE             ; E >= L, continue
-        
-CD_DONE:
-        POP     D                   ; Clean up stack
-        SHLD    LAST_DUMP_ADDR      ; Save for next time
-        JMP     MAIN_LOOP
+        POP     B
+        MOV     A,C                 ; BC -= 16; done on borrow
+        SUI     16
+        MOV     C,A
+        MOV     A,B
+        SBI     0
+        MOV     B,A
+        JNC     CD_LINE
+        SHLD    LAST_DUMP_ADDR      ; HL = next line start
+        JMP     WARM
 
-; CMD_EXAMINE - Examine/modify memory
-; Syntax: E [addr]
-; Shows "ADDR: XX-" and waits for input
-; Enter hex to modify, CR to advance, period to exit
+; CMD_EXAMINE - E [addr]
+; Prints AAAA: XX- and reads keys: up to 2 hex digits, BS/DEL delete one, CR
+; stores (if any digits) and advances, '.' exits. Everything else is ignored.
 CMD_EXAMINE:
-        CALL    SKIP_SPACES
-        MOV     A,M
-        ORA     A                   ; Any address given?
+        CALL    READ_HEX_WORD
         JZ      CE_USE_LAST
-        
-        CALL    READ_HEX_WORD       ; Parse address into DE
-        JC      CE_ERROR            ; Invalid hex
+        JC      ERR_ADDR
         XCHG                        ; HL = address to examine
         JMP     CE_LOOP
-        
+
 CE_USE_LAST:
         LHLD    LAST_EXAM_ADDR
-        
+
 CE_LOOP:
-        CALL    PRINT_HEX_WORD      ; Print address
-        MVI     A,':'
-        CALL    CONOUT
-        MVI     A,' '
-        CALL    CONOUT
+        CALL    PRINT_ADDR
+        CALL    PRINT_SPACE
         MOV     A,M                 ; Get current byte
         CALL    PRINT_HEX_BYTE
         MVI     A,'-'
         CALL    CONOUT
-        
-        CALL    READ_EXAM_BYTE      ; Get user input
-        JC      CE_EXIT             ; Carry = exit requested
-        MOV     A,B                 ; Check digit count
-        ORA     A
-        JZ      CE_NEXT             ; No digits = don't modify
-        MOV     A,C                 ; Get the value from C
-        MOV     M,A                 ; Store it
-        
-CE_NEXT:
-        INX     H
-        CALL    PRINT_CRLF
-        JMP     CE_LOOP
-        
-CE_EXIT:
-        SHLD    LAST_EXAM_ADDR
-        CALL    PRINT_CRLF
-        JMP     MAIN_LOOP
-        
-CE_ERROR:
-        LXI     H,MSG_BAD_ADDR
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
+        LXI     B,0                 ; B = digit count, C = value
 
-; CMD_FILL - Fill memory with value
-; Syntax: F start end value
-CMD_FILL:
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD
-        JC      CF_ERROR
-        PUSH    D                   ; Save start
-        
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD
-        JC      CF_POP1_ERROR
-        PUSH    D                   ; Save end
-        
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD
-        JC      CF_POP2_ERROR
-        
-        ; E = value, stack: end, start
-        POP     B                   ; BC = end
-        POP     H                   ; HL = start
-        
-CF_LOOP:
-        MOV     M,E
-        MOV     A,H
-        CMP     B
-        JNZ     CF_NEXT
-        MOV     A,L
-        CMP     C
-        JZ      CF_DONE
-CF_NEXT:
-        INX     H
-        MOV     A,H
-        ORA     L                   ; Wrapped to 0000?
-        JNZ     CF_LOOP
-        ; Wrapped - done
-CF_DONE:
-        JMP     MAIN_LOOP
-
-CF_POP2_ERROR:
-        POP     D
-CF_POP1_ERROR:
-        POP     D
-CF_ERROR:
-        LXI     H,MSG_BAD_HEX
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-
-; CMD_GO - Execute at address
-; Syntax: G [addr]
-; If no address, defaults to 0100H (TPA)
-CMD_GO:
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD       ; Parse address into DE
-        JC      CG_DEFAULT          ; No address given
-        XCHG                        ; HL = parsed address
-        PCHL                        ; Jump and never return
-        
-CG_DEFAULT:
-        LXI     H,0100H             ; Default to TPA
-        PCHL
-
-; CMD_HEX_MATH - Hex addition and subtraction
-; Syntax: H num1 num2
-; Output: sum difference
-CMD_HEX_MATH:
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD       ; First number -> DE
-        JC      CH_ERROR
-        PUSH    D                   ; Save first number
-        
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD       ; Second number -> DE
-        JC      CH_POP_ERROR
-        
-        ; DE = second, stack = first
-        POP     H                   ; HL = first
-        PUSH    H                   ; Save first again
-        PUSH    D                   ; Save second
-        
-        DAD     D                   ; HL = first + second
-        CALL    PRINT_HEX_WORD
-        CALL    PRINT_SPACE
-        
-        POP     D                   ; DE = second
-        POP     H                   ; HL = first
-        
-        ; HL = first - second
-        MOV     A,L
-        SUB     E
-        MOV     L,A
-        MOV     A,H
-        SBB     D
-        MOV     H,A
-        
-        CALL    PRINT_HEX_WORD
-        CALL    PRINT_CRLF
-        JMP     MAIN_LOOP
-
-CH_POP_ERROR:
-        POP     D                   ; Clean stack
-CH_ERROR:
-        LXI     H,MSG_BAD_HEX
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-
-; CMD_INPUT - Read from I/O port
-; Syntax: I port
-CMD_INPUT:
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD       ; Port -> DE (use E only)
-        JC      CI_ERROR
-        
-        MOV     A,E                 ; Get port number (0-255)
-        STA     IO_IN_STUB+1        ; Patch the IN instruction
-        CALL    IO_IN_STUB          ; Execute: IN port / RET
-        
-        CALL    PRINT_HEX_BYTE      ; Print result
-        CALL    PRINT_CRLF
-        JMP     MAIN_LOOP
-
-CI_ERROR:
-        LXI     H,MSG_BAD_PORT
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-
-; CMD_MOVE - Move memory block (forward copy)
-; Syntax: M source dest count
-; Note: Overlapping regions where dest > source produce undefined results
-CMD_MOVE:
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD
-        JC      CM_ERROR
-        PUSH    D                   ; Save source
-        
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD
-        JC      CM_POP1_ERROR
-        PUSH    D                   ; Save dest
-        
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD
-        JC      CM_POP2_ERROR
-        
-        ; DE = count, stack: dest, source
-        MOV     A,D
-        ORA     E
-        JZ      CM_DONE_QUICK       ; Zero count
-        
-        MOV     B,D
-        MOV     C,E                 ; BC = count
-        POP     D                   ; DE = dest
-        POP     H                   ; HL = source
-        
-CM_LOOP:
-        MOV     A,M                 ; Get source byte
-        XCHG
-        MOV     M,A                 ; Store to dest
-        XCHG
-        INX     H
-        INX     D
-        DCX     B
-        MOV     A,B
-        ORA     C
-        JNZ     CM_LOOP
-        JMP     MAIN_LOOP
-
-CM_DONE_QUICK:
-        POP     D
-        POP     D
-        JMP     MAIN_LOOP
-
-CM_POP2_ERROR:
-        POP     D
-CM_POP1_ERROR:
-        POP     D
-CM_ERROR:
-        LXI     H,MSG_BAD_HEX
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-
-; CMD_OUTPUT - Write to I/O port
-; Syntax: O port value
-CMD_OUTPUT:
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD       ; Port -> DE
-        JC      CO_ERROR
-        MOV     A,E
-        STA     IO_OUT_STUB+1       ; Patch port
-        
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD       ; Value -> DE
-        JC      CO_ERROR
-        
-        MOV     A,E                 ; Value to output
-        CALL    IO_OUT_STUB         ; Execute: OUT port / RET
-        JMP     MAIN_LOOP
-
-CO_ERROR:
-        LXI     H,MSG_BAD_PORT
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-
-; CMD_SEARCH - Search memory for byte pattern
-; Syntax: S start end b1 [b2 ... b8]
-CMD_SEARCH:
-        ; Parse start address
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD
-        JC      CS_ERROR
-        PUSH    D                   ; Save start on stack
-        
-        ; Parse end address
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD
-        JC      CS_POP1_ERROR
-        XCHG
-        SHLD    SEARCH_END          ; Store end address
-        XCHG
-        
-        ; Parse pattern bytes (1-8)
-        LXI     D,SEARCH_PATTERN    ; DE = pattern buffer
-        LXI     B,0                 ; B = byte count
-        
-CS_PARSE_LOOP:
-        CALL    SKIP_SPACES
-        MOV     A,M
-        ORA     A                   ; End of line?
-        JZ      CS_PARSE_DONE
-        
-        PUSH    B                   ; Save count
-        PUSH    D                   ; Save pattern pointer
-        CALL    READ_HEX_WORD       ; Value in DE (use E only)
-        MOV     A,E                 ; Get the byte
-        POP     D                   ; Restore pattern pointer
-        POP     B                   ; Restore count
-        JC      CS_PARSE_DONE       ; No more valid hex
-        
-        STAX    D                   ; Store byte in pattern
-        INX     D
-        INR     B
-        
-        MOV     A,B
-        CPI     8                   ; Max 8 bytes
-        JC      CS_PARSE_LOOP
-        
-CS_PARSE_DONE:
-        MOV     A,B
-        ORA     A                   ; Zero bytes?
-        JZ      CS_POP1_ERROR       ; Error - need at least 1
-        
-        STA     SEARCH_LENGTH       ; Save pattern length
-        POP     H                   ; HL = start address
-        
-        ; Search loop
-        ; Register usage: HL = current search address
-CS_SEARCH_LOOP:
-        ; Compare pattern at current address
-        PUSH    H                   ; Save current address
-        LXI     D,SEARCH_PATTERN    ; DE = pattern
-        LDA     SEARCH_LENGTH
-        MOV     B,A                 ; B = length counter
-        
-CS_COMPARE:
-        LDAX    D                   ; A = pattern byte
-        CMP     M                   ; Compare with memory
-        JNZ     CS_NO_MATCH
-        INX     H
-        INX     D
-        DCR     B
-        JNZ     CS_COMPARE
-        
-        ; Match found - print address
-        POP     H                   ; Restore search address
-        PUSH    H                   ; Keep it on stack for advance
-        CALL    PRINT_HEX_WORD
-        CALL    PRINT_CRLF
-        
-CS_NO_MATCH:
-        POP     H                   ; HL = current search position
-        
-        ; Put current in DE, end in HL for comparison
-        XCHG                        ; DE = current
-        LHLD    SEARCH_END          ; HL = end
-        
-        ; Check: current > end?
-        MOV     A,H
-        CMP     D
-        JC      CS_DONE             ; end.H < current.H, done
-        JNZ     CS_ADVANCE          ; end.H > current.H, continue
-        MOV     A,L
-        CMP     E
-        JC      CS_DONE             ; end.L < current.L, done
-        
-CS_ADVANCE:
-        XCHG                        ; HL = current, DE = end (D = end.H)
-        INX     H                   ; Next address
-        
-        ; Wrap check: H==0 and end.H >= F0 means we wrapped past FFFF
-        MOV     A,H
-        ORA     A
-        JNZ     CS_SEARCH_LOOP      ; H != 0, no wrap
-        MOV     A,D                 ; D still has end.H from XCHG
-        CPI     0F0H
-        JC      CS_SEARCH_LOOP      ; end < F000, no wrap concern
-        ; Fell through = wrapped past FFFF
-        
-CS_DONE:
-        JMP     MAIN_LOOP
-
-CS_POP1_ERROR:
-        POP     D
-CS_ERROR:
-        LXI     H,MSG_BAD_HEX
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-
-; CMD_HELP - Show help
-; Syntax: ?
-CMD_HELP:
-        LXI     H,MSG_HELP
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-
-; ============================================
-; HELPER ROUTINES
-; ============================================
-
-; READ_EXAM_BYTE - Read byte value for examine command
-; Reads up to 2 hex digits from console
-; Output: Carry set = exit (period pressed)
-;         Carry clear: B = digit count, C = value
-;         (caller checks B: 0 = no modification, >0 = store C)
-; Trashes: A, B, C, D, flags
-READ_EXAM_BYTE:
-        MVI     B,0                 ; Digit count
-        MVI     C,0                 ; Accumulated value
-        
-REB_LOOP:
+CE_KEY:
         CALL    CONIN
-        MOV     D,A                 ; Save original for echo
-        
-        CPI     '.'                 ; Exit?
-        JZ      REB_EXIT
-        CPI     CR                  ; Enter?
-        JZ      REB_DONE
-        CPI     LF                  ; Also LF
-        JZ      REB_DONE
-        CPI     BS                  ; Backspace?
-        JZ      REB_BS
-        
-        CALL    TO_HEX_DIGIT        ; Convert to 0-15
-        JC      REB_LOOP            ; Not hex, ignore
-        
-        ; Valid hex digit in A
-        PUSH    PSW
-        MOV     A,C
-        ADD     A                   ; Shift left 4
-        ADD     A
-        ADD     A
-        ADD     A
-        MOV     C,A
-        POP     PSW
-        ORA     C                   ; Add new digit
-        MOV     C,A
-        
-        INR     B                   ; Count digit
-        MOV     A,D                 ; Echo original char
-        CALL    CONOUT
-        
+        CPI     '.'
+        JZ      CE_EXIT
+        CPI     CR
+        JZ      CE_ENTER
+        CPI     BS
+        JZ      CE_BS
+        CPI     DEL
+        JZ      CE_BS
+        MOV     D,A                 ; Save the key for the echo
+        CALL    TO_HEX_DIGIT
+        JC      CE_KEY              ; Not hex: ignore
+        MOV     E,A
         MOV     A,B
-        CPI     2                   ; Two digits entered?
-        JC      REB_LOOP            ; No, keep reading
-        ; 2 digits entered - just return, let CR/LF be next empty input
-        
-REB_DONE:
-        ; Carry clear, B = digit count, C = value
-        ORA     A                   ; Clear carry
-        RET
-        
-REB_EXIT:
-        STC                         ; Set carry = exit
-        RET
-        
-REB_BS:
+        CPI     2
+        JNC     CE_KEY              ; Two digits already: ignore
+        INR     B
+        MOV     A,C                 ; C = C * 16 + digit
+        ADD     A
+        ADD     A
+        ADD     A
+        ADD     A
+        ORA     E
+        MOV     C,A
+        MOV     A,D                 ; Echo the key as typed
+        CALL    CONOUT
+        JMP     CE_KEY
+
+CE_BS:
         MOV     A,B
         ORA     A
-        JZ      REB_LOOP            ; Nothing to delete
-        
+        JZ      CE_KEY              ; Nothing to delete
         DCR     B
-        MOV     A,C                 ; Undo the shift
+        MOV     A,C                 ; C = C / 16
         RRC
         RRC
         RRC
         RRC
         ANI     0FH
         MOV     C,A
-        
         MVI     A,BS                ; Erase on screen
         CALL    CONOUT
-        MVI     A,' '
-        CALL    CONOUT
+        CALL    PRINT_SPACE
         MVI     A,BS
         CALL    CONOUT
-        JMP     REB_LOOP
+        JMP     CE_KEY
+
+CE_ENTER:
+        MOV     A,B
+        ORA     A
+        JZ      CE_NEXT             ; No digits: don't modify
+        MOV     M,C
+CE_NEXT:
+        INX     H
+        CALL    PRINT_CRLF
+        JMP     CE_LOOP
+
+CE_EXIT:
+        SHLD    LAST_EXAM_ADDR
+        CALL    PRINT_CRLF
+        JMP     WARM
+
+; CMD_FILL - F start end byte. Never wraps.
+CMD_FILL:
+        CALL    READ_HEX_WORD
+        JC      ERR_HEX
+        PUSH    D                   ; Save start
+
+        CALL    READ_HEX_WORD
+        JC      ERR_HEX
+        PUSH    D                   ; Save end
+
+        CALL    READ_HEX_BYTE
+        JC      ERR_HEX
+
+        MOV     A,E                 ; A = byte
+        POP     D                   ; DE = end
+        POP     H                   ; HL = start
+        PUSH    PSW
+        CALL    RANGE               ; BC = count
+        POP     PSW
+        MOV     E,A
+CF_LOOP:
+        MOV     M,E
+        INX     H
+        DCX     B
+        MOV     A,B
+        ORA     C
+        JNZ     CF_LOOP
+        JMP     WARM
+
+; CMD_GO - G [addr]. Bare G runs 0100. Pushes WARM, so the program can
+; return to the prompt with RET (MONITOR_SPEC 8).
+CMD_GO:
+        CALL    READ_HEX_WORD       ; DE = address
+        JZ      CG_DEFAULT
+        JC      ERR_ADDR
+        XCHG                        ; HL = address
+        JMP     CG_RUN
+CG_DEFAULT:
+        LXI     H,0100H
+CG_RUN:
+        LXI     D,WARM
+        PUSH    D                   ; SP = EFFE, (EFFE) = WARM
+        PCHL
+
+; CMD_HEX_MATH - H a b. Prints (a+b) (a-b), mod 10000h.
+CMD_HEX_MATH:
+        CALL    READ_HEX_WORD       ; First number -> DE
+        JC      ERR_HEX
+        PUSH    D                   ; Save first number
+
+        CALL    READ_HEX_WORD       ; Second number -> DE
+        JC      ERR_HEX
+
+        POP     H                   ; HL = first
+        PUSH    H
+        DAD     D                   ; HL = first + second
+        CALL    PRINT_HEX_WORD
+        CALL    PRINT_SPACE
+        POP     H                   ; HL = first
+
+        MOV     A,L                 ; HL = first - second
+        SUB     E
+        MOV     L,A
+        MOV     A,H
+        SBB     D
+        MOV     H,A
+
+        CALL    PRINT_HEX_WORD
+        CALL    PRINT_CRLF
+        JMP     WARM
+
+; CMD_INPUT - I port. Prints the byte read.
+CMD_INPUT:
+        CALL    READ_HEX_BYTE       ; E = port
+        JC      ERR_PORT
+
+        MOV     A,E
+        STA     IO_IN_STUB+1        ; Patch the IN instruction
+        CALL    IO_IN_STUB          ; Execute: IN port / RET
+
+        CALL    PRINT_HEX_BYTE      ; Print result
+        CALL    PRINT_CRLF
+        JMP     WARM
+
+; CMD_MOVE - M src dst count. Copies backward when dst > src, so an
+; overlapping move keeps the source contents (memmove). Addresses wrap.
+CMD_MOVE:
+        CALL    READ_HEX_WORD
+        JC      ERR_HEX
+        PUSH    D                   ; Save source
+
+        CALL    READ_HEX_WORD
+        JC      ERR_HEX
+        PUSH    D                   ; Save dest
+
+        CALL    READ_HEX_WORD
+        JC      ERR_HEX
+
+        MOV     B,D
+        MOV     C,E                 ; BC = count
+        MOV     A,B
+        ORA     C
+        JZ      ERR_RANGE           ; Count 0
+        POP     D                   ; DE = dest
+        POP     H                   ; HL = source
+
+        MOV     A,L                 ; CY = source < dest
+        SUB     E
+        MOV     A,H
+        SBB     D
+        JNC     CM_FORWARD
+
+        DAD     B                   ; Backward: from the last byte down
+        DCX     H                   ; HL = source + count - 1
+        XCHG
+        DAD     B
+        DCX     H                   ; HL = dest + count - 1
+        XCHG
+CM_BACKWARD:
+        MOV     A,M
+        STAX    D
+        DCX     H
+        DCX     D
+        DCX     B
+        MOV     A,B
+        ORA     C
+        JNZ     CM_BACKWARD
+        JMP     WARM
+
+CM_FORWARD:
+        MOV     A,M
+        STAX    D
+        INX     H
+        INX     D
+        DCX     B
+        MOV     A,B
+        ORA     C
+        JNZ     CM_FORWARD
+        JMP     WARM
+
+; CMD_OUTPUT - O port byte. No port is written unless both parse.
+CMD_OUTPUT:
+        CALL    READ_HEX_BYTE       ; E = port
+        JC      ERR_PORT
+        MOV     A,E
+        STA     IO_OUT_STUB+1       ; Patch the port (workspace only)
+
+        CALL    READ_HEX_BYTE       ; E = value
+        JC      ERR_PORT
+
+        MOV     A,E
+        CALL    IO_OUT_STUB         ; Execute: OUT port / RET
+        JMP     WARM
+
+; CMD_SEARCH - S start end b1 [b2 ... b8]
+; Prints each candidate address in start..end where the pattern matches.
+; Candidates never wrap; pattern bytes past FFFF do.
+CMD_SEARCH:
+        CALL    READ_HEX_WORD
+        JC      ERR_HEX
+        PUSH    D                   ; Save start
+
+        CALL    READ_HEX_WORD
+        JC      ERR_HEX
+        XCHG
+        SHLD    SEARCH_END
+        XCHG
+
+        LXI     D,SEARCH_PATTERN    ; DE = pattern pointer
+        MVI     B,0                 ; B = pattern length
+CS_PARSE:
+        PUSH    B
+        PUSH    D
+        CALL    READ_HEX_BYTE
+        MOV     A,E                 ; A = the byte
+        POP     D
+        POP     B
+        JZ      CS_PARSED           ; End of line
+        JC      ERR_HEX             ; Invalid token
+        STAX    D
+        INX     D
+        INR     B
+        MOV     A,B
+        CPI     8                   ; Max 8 bytes; later tokens are ignored
+        JC      CS_PARSE
+
+CS_PARSED:
+        MOV     A,B
+        ORA     A
+        JZ      ERR_HEX             ; No pattern
+        STA     SEARCH_LENGTH
+        LHLD    SEARCH_END
+        XCHG                        ; DE = end
+        POP     H                   ; HL = start
+        CALL    RANGE               ; BC = candidate count
+
+CS_LOOP:
+        PUSH    B                   ; Save count
+        PUSH    H                   ; Save candidate
+        LXI     D,SEARCH_PATTERN
+        LDA     SEARCH_LENGTH
+        MOV     B,A
+CS_COMPARE:
+        LDAX    D                   ; A = pattern byte
+        CMP     M
+        JNZ     CS_NEXT
+        INX     H
+        INX     D
+        DCR     B
+        JNZ     CS_COMPARE
+
+        POP     H                   ; Match: print the candidate
+        PUSH    H
+        CALL    PRINT_HEX_WORD
+        CALL    PRINT_CRLF
+
+CS_NEXT:
+        POP     H
+        POP     B
+        INX     H
+        DCX     B
+        MOV     A,B
+        ORA     C
+        JNZ     CS_LOOP
+        JMP     WARM
+
+; CMD_HELP - ? (arguments ignored)
+CMD_HELP:
+        LXI     H,MSG_HELP
+        JMP     PRINT_WARM
 
 ; ============================================
 ; STORAGE COMMANDS
 ; ============================================
 
-; CMD_MOUNT - Mount storage file
-; Syntax: X [filename]
-;   X TEST.BIN  - Mount file
-;   X -         - Unmount
-;   X           - Show mount status
+; CMD_MOUNT - X [name | -]
+;   X       query: OUT 0E<-03, IN 0F
+;   X -     unmount: OUT 0E<-02 (the rest of the line is ignored)
+;   X name  OUT 0E<-03 (resync), name to OUT 0D, OUT 0E<-01, IN 0F
 CMD_MOUNT:
-        CALL    SKIP_SPACES
-        MOV     A,M
-        ORA     A
-        JZ      CM_QUERY            ; No filename - query status
+        CALL    SKIP_SPACES         ; A = first character
         CPI     '-'
-        JZ      CM_UNMOUNT
-        
-        ; Send filename characters to mount service
-CM_SEND:
+        JZ      CX_UNMOUNT
+        MOV     B,A                 ; B = 0 for a query
+        MVI     A,03H               ; Query; clears a stale name in the device
+        OUT     MOUNT_CTRL
+        MOV     A,B
+        ORA     A
+        JZ      CX_QUERY
+
+CX_SEND:
         MOV     A,M
-        ORA     A                   ; End of string?
-        JZ      CM_DO_MOUNT
-        CPI     ' '                 ; Space ends filename
-        JZ      CM_DO_MOUNT
+        ORA     A                   ; End of line?
+        JZ      CX_MOUNT
+        CPI     SPACE               ; Space ends the name
+        JZ      CX_MOUNT
         OUT     MOUNT_FILENAME
         INX     H
-        JMP     CM_SEND
-        
-CM_DO_MOUNT:
-        MVI     A,01H               ; Mount command
+        JMP     CX_SEND
+
+CX_MOUNT:
+        MVI     A,01H               ; Mount
         OUT     MOUNT_CTRL
-        
-        ; Check result
         IN      MOUNT_STATUS
         ORA     A
-        JZ      CM_OK
-        CPI     01H
-        JZ      CM_NOT_FOUND
-        ; else invalid
+        JZ      CX_MOUNTED
         LXI     H,MSG_INVALID_FILE
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-        
-CM_NOT_FOUND:
-        LXI     H,MSG_NOT_FOUND
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-        
-CM_OK:
-        LXI     H,MSG_MOUNTED
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
+        CPI     02H
+        JZ      PRINT_WARM
+        LXI     H,MSG_MOUNT_FAILED
+        JMP     PRINT_WARM
 
-CM_UNMOUNT:
-        MVI     A,02H               ; Unmount command
+CX_QUERY:
+        IN      MOUNT_STATUS
+        ORA     A
+        JNZ     ERR_NOSTOR
+CX_MOUNTED:
+        LXI     H,MSG_MOUNTED
+        JMP     PRINT_WARM
+
+CX_UNMOUNT:
+        MVI     A,02H               ; Unmount
         OUT     MOUNT_CTRL
         LXI     H,MSG_UNMOUNTED
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-        
-CM_QUERY:
-        MVI     A,03H               ; Query command
-        OUT     MOUNT_CTRL
-        IN      MOUNT_STATUS
-        ORA     A
-        JNZ     CM_NO_MOUNT
-        LXI     H,MSG_MOUNTED
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-CM_NO_MOUNT:
-        LXI     H,MSG_NO_STORAGE
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
+        JMP     PRINT_WARM
 
-
-; CMD_LOAD - Load from storage to memory
-; Syntax: L storage_addr mem_addr [count]
-; Storage addr is 24-bit (up to 6 hex digits), count defaults to 256
+; CMD_LOAD - L stor mem [count]
+; Checks "mounted", parses all three arguments (count default 0100, 0 is
+; Invalid range), then sets the storage address, reads count bytes into
+; mem.., and prints Loaded, or Storage error if the file is gone.
 CMD_LOAD:
-        ; Check mounted
         IN      STORAGE_CTRL
         ANI     01H
-        JZ      CL_NOT_MOUNTED
-        
-        ; Parse 24-bit storage address
-        CALL    READ_HEX_ADDR24
-        JC      CL_ERROR
-        
-        ; Set storage address from STOR_ADDR
+        JZ      ERR_NOSTOR
+
+        CALL    READ_HEX_ADDR24     ; STOR_ADDR = storage address
+        JC      ERR_HEX
+        CALL    READ_HEX_WORD       ; DE = memory address
+        JC      ERR_HEX
+        PUSH    D
+        CALL    READ_HEX_WORD       ; DE = count
+        LXI     B,0100H
+        JZ      CL_COUNTED          ; Absent: 0100
+        JC      ERR_HEX
+        MOV     B,D
+        MOV     C,E
+        MOV     A,B
+        ORA     C
+        JZ      ERR_RANGE           ; Count 0
+CL_COUNTED:
         LDA     STOR_ADDR
         OUT     STORAGE_ADDR_LO
         LDA     STOR_ADDR+1
         OUT     STORAGE_ADDR_MID
         LDA     STOR_ADDR+2
         OUT     STORAGE_ADDR_HI
-        
-        ; Parse memory address
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD
-        JC      CL_ERROR
-        PUSH    D                   ; Save mem addr
-        
-        ; Parse count (optional, default 256)
-        CALL    SKIP_SPACES
-        MOV     A,M
-        ORA     A
-        JZ      CL_DEFAULT_COUNT
-        CALL    READ_HEX_WORD
-        JC      CL_DEFAULT_COUNT
-        MOV     B,D                 ; BC = count
-        MOV     C,E
-        JMP     CL_DO_LOAD
-        
-CL_DEFAULT_COUNT:
-        LXI     B,0100H             ; 256 bytes
-        
-CL_DO_LOAD:
-        POP     D                   ; DE = mem addr
-        
-        ; Copy loop: storage -> memory
+        POP     D                   ; DE = memory address
+
 CL_LOOP:
         IN      STORAGE_DATA        ; Read + auto-increment
-        STAX    D                   ; Store to memory
+        STAX    D
         INX     D
         DCX     B
         MOV     A,B
         ORA     C
         JNZ     CL_LOOP
-        
+
         LXI     H,MSG_LOADED
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-        
-CL_NOT_MOUNTED:
-        LXI     H,MSG_NO_STORAGE
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-        
-CL_ERROR:
-        LXI     H,MSG_BAD_HEX
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
 
-
-; CMD_WRITE - Write memory to storage
-; Syntax: W mem_addr storage_addr [count]
-; Storage addr is 24-bit (up to 6 hex digits), count defaults to 256
-CMD_WRITE:
-        ; Check mounted
+; STOR_CHECK - L and W end here with HL = the success message. Prints it if
+; the file is still mounted (status bit 0), else Storage error.
+STOR_CHECK:
         IN      STORAGE_CTRL
         ANI     01H
-        JZ      CW_NOT_MOUNTED
-        
-        ; Parse memory address (source)
-        CALL    SKIP_SPACES
-        CALL    READ_HEX_WORD
-        JC      CW_ERROR
-        PUSH    D                   ; Save mem addr
-        
-        ; Parse 24-bit storage address (dest)
-        CALL    READ_HEX_ADDR24
-        JC      CW_ERROR_POP
-        
-        ; Set storage address from STOR_ADDR
+        JNZ     PRINT_WARM
+        LXI     H,MSG_STOR_ERROR
+        JMP     PRINT_WARM
+
+; CMD_WRITE - W mem stor [count]
+; As L, in the other direction, then flush (OUT 0C<-02) before the check.
+CMD_WRITE:
+        IN      STORAGE_CTRL
+        ANI     01H
+        JZ      ERR_NOSTOR
+
+        CALL    READ_HEX_WORD       ; DE = memory address
+        JC      ERR_HEX
+        PUSH    D
+        CALL    READ_HEX_ADDR24     ; STOR_ADDR = storage address
+        JC      ERR_HEX
+        CALL    READ_HEX_WORD       ; DE = count
+        LXI     B,0100H
+        JZ      CW_COUNTED          ; Absent: 0100
+        JC      ERR_HEX
+        MOV     B,D
+        MOV     C,E
+        MOV     A,B
+        ORA     C
+        JZ      ERR_RANGE           ; Count 0
+CW_COUNTED:
         LDA     STOR_ADDR
         OUT     STORAGE_ADDR_LO
         LDA     STOR_ADDR+1
         OUT     STORAGE_ADDR_MID
         LDA     STOR_ADDR+2
         OUT     STORAGE_ADDR_HI
-        
-        ; Parse count (optional, default 256)
-        CALL    SKIP_SPACES
-        MOV     A,M
-        ORA     A
-        JZ      CW_DEFAULT_COUNT
-        CALL    READ_HEX_WORD
-        JC      CW_DEFAULT_COUNT
-        MOV     B,D
-        MOV     C,E
-        JMP     CW_DO_WRITE
-        
-CW_DEFAULT_COUNT:
-        LXI     B,0100H
-        
-CW_DO_WRITE:
-        POP     H                   ; HL = mem addr (source)
-        
-        ; Copy loop: memory -> storage
+        POP     H                   ; HL = memory address
+
 CW_LOOP:
-        MOV     A,M                 ; Read from memory
+        MOV     A,M
         OUT     STORAGE_DATA        ; Write + auto-increment
         INX     H
         DCX     B
         MOV     A,B
         ORA     C
         JNZ     CW_LOOP
-        
-        ; Flush
-        MVI     A,02H
+
+        MVI     A,02H               ; Flush
         OUT     STORAGE_CTRL
-        
         LXI     H,MSG_WRITTEN
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-        
-CW_NOT_MOUNTED:
-        LXI     H,MSG_NO_STORAGE
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
-        
-CW_ERROR_POP:
-        POP     D
-CW_ERROR:
-        LXI     H,MSG_BAD_HEX
-        CALL    PRINT_STRING
-        JMP     MAIN_LOOP
+        JMP     STOR_CHECK
 
 ; ============================================
-; STRINGS
+; STRINGS (MONITOR_SPEC 1.1, 5, 6.14)
 ; ============================================
 
 MSG_BANNER:
@@ -1477,43 +1127,32 @@ MSG_HELP:
 
 MSG_UNKNOWN:
         DB      "Unknown command. Type ? for help.",CR,LF,0
-
 MSG_BAD_ADDR:
         DB      "Invalid address",CR,LF,0
-
 MSG_BAD_HEX:
         DB      "Invalid hex value",CR,LF,0
-
 MSG_BAD_PORT:
         DB      "Invalid port/value",CR,LF,0
-
-MSG_MOUNTED:
-        DB      "Mounted",CR,LF,0
-
-MSG_UNMOUNTED:
-        DB      "Unmounted",CR,LF,0
-
-MSG_NOT_FOUND:
-        DB      "File not found",CR,LF,0
-
-MSG_INVALID_FILE:
-        DB      "Invalid filename",CR,LF,0
-
+MSG_RANGE:
+        DB      "Invalid range",CR,LF,0
 MSG_NO_STORAGE:
         DB      "No storage mounted",CR,LF,0
-
+MSG_STOR_ERROR:
+        DB      "Storage error",CR,LF,0
+MSG_MOUNTED:
+        DB      "Mounted",CR,LF,0
+MSG_UNMOUNTED:
+        DB      "Unmounted",CR,LF,0
+MSG_INVALID_FILE:
+        DB      "Invalid filename",CR,LF,0
+MSG_MOUNT_FAILED:
+        DB      "Mount failed",CR,LF,0
 MSG_LOADED:
         DB      "Loaded",CR,LF,0
-
 MSG_WRITTEN:
         DB      "Written",CR,LF,0
 
-; ============================================
-; PADDING
-; ============================================
-
-        IF      $ > 0FFFFH
-        ERROR   "ROM exceeds 4KB!"
-        ENDIF
+; ROM_END - first byte after the ROM contents. make size: ROM_END - F000.
+ROM_END:
 
         END     COLD_START

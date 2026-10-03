@@ -9,9 +9,9 @@
 # A match at end, with the pattern running past end.
 > S 0400 0500 41 41 41
 0500
-# Starting just past the match: no match. (Ending just before it is a
-# tracked ROM bug: S also tests end+1, TODO.md Review findings.)
+# Starting just past the match, or ending just before it: no match.
 > S 0501 0600 41 41 41
+> S 0400 04FF 41
 # Overlapping matches all print, in ascending order.
 > S 0400 0600 41 41
 0500
@@ -38,3 +38,34 @@ Invalid hex value
 Invalid hex value
 > S ZZ 0300 41
 Invalid hex value
+
+# end < start is Invalid range, checked after the pattern parses (MONITOR_SPEC 6.11, 4.4).
+> S 0600 0400 41
+Invalid range
+> S 0600 0400 ZZ
+Invalid hex value
+# A pattern token that is invalid or above FF is an error, not the end of the pattern.
+> S 0400 0600 41 ZZ
+Invalid hex value
+> S 0400 0600 41 100
+Invalid hex value
+> S 0400 0600 41,
+Invalid hex value
+> S 0400 10600 41
+Invalid hex value
+
+# The spec example: 0100-EEFF zeroed, three 77s at 0500, exactly one match.
+> F 0100 EEFF 00
+> F 0500 0502 77
+> S 0100 EEFF 77 77 77
+0500
+# Candidates run 0000..FFFF exactly once; pattern bytes past FFFF wrap to 0000.
+# FFFF is ROM padding (FF). S's own copy of the pattern (SEARCH_PATTERN, 00DC)
+# always matches (6.11).
+> F 0000 007F 00
+> F 0000 0000 22
+> F 0001 0001 33
+> F 0002 0002 44
+> S 0000 FFFF FF 22 33 44
+00DC
+FFFF

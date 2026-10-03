@@ -8,6 +8,19 @@ H 12\x08 \x0834 1
 H 1 1
 0002 0000
 
+# DEL (7F) is a backspace too: it removes one character and echoes BS SP BS;
+# on an empty line it does nothing.
+< H 12\x7F34 1\r
+H 12\x08 \x0834 1
+0135 0133
+< \x7FH 2 2\r
+H 2 2
+0004 0000
+> F 0200 020F 41
+< D 021\x7F00 020F\r
+D 021\x08 \x0800 020F
+0200: 41 41 41 41 41 41 41 41  41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
+
 # Control characters are ignored and not echoed.
 < H\x01 1\x1B 1\x09\x00\r
 H 1 1

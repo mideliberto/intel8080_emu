@@ -36,3 +36,22 @@ Invalid hex value
 Invalid hex value
 > H ZZ 1
 Invalid hex value
+
+# A word is 1-4 digits (MONITOR_SPEC 4.2). Five digits are an error, even with
+# leading zeros: no silent truncation.
+> H FFFF 0FFF
+0FFE F000
+> H 10000 1
+Invalid hex value
+> H 00001 1
+Invalid hex value
+> H 1 00001
+Invalid hex value
+
+# A number must end at a space or the end of the line (4.1).
+> H 01ZZ 1
+Invalid hex value
+> H 1 2,
+Invalid hex value
+> H 1,2 3
+Invalid hex value
