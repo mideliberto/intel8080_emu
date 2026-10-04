@@ -56,7 +56,7 @@ Normative. Every I/O port the 8080 can see, at register level. Where the emulato
    - Every Pi device returns to its power-on state: storage unmounted (flushed durably and closed, address 000000), filename buffer empty, mount status 01, mailbox IDLE with the command buffer and response cleared and any running request aborted (its worker killed; a `GET > FILE` that has not ended leaves `FILE` untouched, section 8, GET), console input FIFO empty, console output buffer empty.
    - An access cut off by RESET may or may not have taken effect. Its device state is then reset as above.
    - No ROM code is involved.
-   - **Emulator:** RESET happens only at process start, when `build_bus` (`src/io/mod.rs`) creates every device in its power-on state. Any future host-side reset (Phase 10) MUST also return every device to its power-on state, by calling `build_bus` again.
+   - **Emulator:** RESET happens only at process start, when `build_bus` (`src/io/mod.rs`) creates every device in its power-on state. Any future host-side reset (Someday, `TODO.md`) MUST also return every device to its power-on state, by calling `build_bus` again.
 9. **Pi service restart:** if the Pi's device service restarts (crash, update or reboot) while the 8080 runs, every Pi device returns to its power-on state and the 8080 is not notified. Clients detect this by checking status:
    - storage: status bit 0 drops to 0 (section 6);
    - mailbox: status reads 00 after an execute (section 8).

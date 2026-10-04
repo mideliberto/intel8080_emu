@@ -22,7 +22,7 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 | D | `D [start [end]]` | Dump memory; default 128 bytes from the last dump address |
 | E | `E [addr]` | Examine/modify; `CR` stores and advances, `.` exits |
 | F | `F start end val` | Fill memory |
-| G | `G [addr]` | Go; bare `G` = 0100. Program returns with `RET` (G pushes WARM) |
+| G | `G [addr]` | Go; bare `G` = 0100. Program returns with `RET` (G pushes G_RETURN, which saves the registers for R) |
 | H | `H num1 num2` | Hex math: prints sum and difference |
 | I | `I port` | Input from port |
 | L | `L stor mem [cnt]` | Load from storage (24-bit `stor`); `cnt` default 0100 |
@@ -30,6 +30,7 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 | N | `N url [> file]` | HTTP GET (to the console, or to a storage file); `Service error` on any failure (mailbox `GET`) |
 | O | `O port val` | Output to port |
 | Q | `Q text` | Ask Claude; the answer in plain ASCII lines of at most 79 characters; `Service error` on any failure (mailbox `ASK`) |
+| R | `R` | Registers A, F, BC, DE, HL saved at the last `G` return (`RET`) |
 | S | `S start end b1 [.. b8]` | Search for 1-8 bytes |
 | T | `T` | Show time (mailbox `TIME`); `Service error` on a mailbox failure |
 | U | `U addr [cnt]` | Unassemble `cnt` instructions, default 8 (mailbox `DIS`) |
@@ -55,11 +56,7 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 
 ### Future commands
 
-| Cmd | Phase | Description |
-|-----|-------|-------------|
-| R | 10 | Registers |
-
-Until a letter ships it prints `Unknown command. Type ? for help.`
+None. Each new command gets its own `MONITOR_SPEC.md` 6.x section in the phase that adds it. Until a letter ships it prints `Unknown command. Type ? for help.`
 
 ---
 
@@ -194,7 +191,8 @@ Detail: [ARCHITECTURE.md](ARCHITECTURE.md) (Workspace Layout).
 | 00E4 | 1 | SEARCH_LENGTH |
 | 00E5-00E6 | 2 | SEARCH_END |
 | 00E7-00E9 | 3 | STOR_ADDR (24-bit: lo, mid, hi) |
-| 00EA-00FF | 22 | Free |
+| 00EA-00F1 | 8 | REGS |
+| 00F2-00FF | 14 | Free |
 
 ---
 

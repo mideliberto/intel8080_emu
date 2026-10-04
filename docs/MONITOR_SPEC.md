@@ -2,14 +2,14 @@
 
 Normative. This is the contract for everything the monitor ROM shows the user: the banner, the prompt, line input, the argument grammar, every command, the messages, the Intel HEX loader, the `G` return contract and the ROM routine contracts. It replaces the deleted `MONITOR_IMPLEMENTATION_STATUS.md`.
 
-**Scope.** Monitor ROM v0.8 (v0.3 plus Phase 5, the HEX loader, Phase 6, the `T` command, Phase 7, the `A` and `U` commands, Phase 8, the `N` command, and Phase 9, the `Q` command) and the 2026-10-02 decisions. Phase 10 gets a one-line placeholder (Future Commands).
+**Scope.** Monitor ROM v0.9 (v0.3 plus Phase 5, the HEX loader, Phase 6, the `T` command, Phase 7, the `A` and `U` commands, Phase 8, the `N` command, Phase 9, the `Q` command, and Phase 10, the R command and the register capture at the G return) and the 2026-10-02 decisions.
 
 **Elsewhere (one fact, one home):**
 - `ARCHITECTURE.md`: the memory map, workspace layout, stack page, reset and boot sequence, WARM entry code, the ROM overlay, the hardware interface (READY, the Pi window), and Host-Side Conveniences (the host key map, Ctrl-C quit, the Ctrl-E debugger hotkey).
 - `DEVICE_SPECS.md`: every port protocol (console, storage, mount, Service Mailbox, system control) and the READY contract as software sees it.
 - `TODO.md`: the work queue and every known difference between the code and this spec.
 
-**Status of this spec.** All decisions are made (2026-10-02 and 2026-10-03; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6, v0.5) is implemented (2026-10-03). 6.16 and 6.17 (`A` and `U`, Phase 7, v0.6) and the section 9 mailbox client are implemented (2026-10-03). 6.18 (`N`, Phase 8, v0.7) is specified (2026-10-03); implemented (2026-10-03). 6.19 (`Q`, Phase 9, v0.8) is specified (2026-10-03); implemented (2026-10-03).
+**Status of this spec.** All decisions are made (2026-10-02 and 2026-10-03; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6, v0.5) is implemented (2026-10-03). 6.16 and 6.17 (`A` and `U`, Phase 7, v0.6) and the section 9 mailbox client are implemented (2026-10-03). 6.18 (`N`, Phase 8, v0.7) is specified (2026-10-03); implemented (2026-10-03). 6.19 (`Q`, Phase 9, v0.8) is specified (2026-10-03); implemented (2026-10-03). 6.20 (`R`, Phase 10, v0.9) and the G_RETURN capture in section 8 are implemented (2026-10-03).
 
 ---
 
@@ -37,7 +37,7 @@ Built: <date> <time><CR><LF>
 Ready.<CR><LF>
 ```
 
-- `<version>` is `0.8` today (`MSG_BANNER` in `rom/monitor.asm`; Phase 9). A phase that changes the command set bumps it in the same commit.
+- `<version>` is `0.9` today (`MSG_BANNER` in `rom/monitor.asm`; Phase 10). A phase that changes the command set bumps it in the same commit.
 - The RAM test build (`ARCHITECTURE.md` 2.1) prints `8080 Monitor v<version> RAM` on that line; nothing else in the banner differs. A test MAY check the ` RAM` marker, but still MUST NOT match the version, date or time.
 - `<date>` and `<time>` are the assembler's `DATE` and `TIME` at build time.
 - Tests MUST NOT match on the version, date or time. A banner check matches only `8080 Monitor v`.
@@ -79,7 +79,7 @@ After READ_LINE returns:
 2. An empty line (nothing, or only spaces) prints the prompt again, with no message.
 3. The first non-space character selects the command. `a`-`z` fold to `A`-`Z`.
 4. `:` selects the Intel HEX loader (Intel HEX Loader). It is not a command letter. Leading spaces before `:` are allowed.
-5. The recognized characters are `A C D E F G H I L M N O Q S T U W X ?` and `:`. `T` came with Phase 6, `A` and `U` with Phase 7, `N` with Phase 8, and `Q` with Phase 9.
+5. The recognized characters are `A C D E F G H I L M N O Q R S T U W X ?` and `:`. `T` came with Phase 6, `A` and `U` with Phase 7, `N` with Phase 8, `Q` with Phase 9, and `R` with Phase 10.
 6. Anything else prints `Unknown command. Type ? for help.` This includes the letters reserved for later phases (Future Commands) until they are implemented.
 
 Arguments start right after the command character. The space between the letter and the first argument is optional, so `D0200` is the same as `D 0200`.
@@ -234,7 +234,7 @@ Example: `E 0200`, then `1` `2` `<CR>` `3` `4` `<CR>` `.`, stores 0200=12 and 02
 
 - A bare `G` jumps to 0100.
 - `G addr` jumps to `addr`. Any address is allowed.
-- G pushes the WARM address before it jumps. The G Return Contract (section 8) applies.
+- G pushes the return address (G_RETURN, section 8) before it jumps. The G Return Contract (section 8) applies.
 - Error: `Invalid address` when `addr` is present but invalid. Nothing executes.
 
 ### 6.6 H: Hex math
@@ -342,6 +342,7 @@ Commands:
   N url [> file]   - HTTP GET
   O port value     - Output to port
   Q text           - Ask Claude
+  R                - Registers
   S start end pat  - Search memory
   T                - Show time
   U addr [cnt]     - Unassemble
@@ -351,7 +352,7 @@ Commands:
   ?                - Help
 ```
 
-- The `:LLAAAATT..CC` line shipped with Phase 5, the `T` line with Phase 6, the `A` and `U` lines with Phase 7, the `N` line with Phase 8, and the `Q` line with Phase 9. Each line ships in the same commit as its feature.
+- The `:LLAAAATT..CC` line shipped with Phase 5, the `T` line with Phase 6, the `A` and `U` lines with Phase 7, the `N` line with Phase 8, the `Q` line with Phase 9, and the `R` line with Phase 10. Each line ships in the same commit as its feature.
 - Arguments after `?` are ignored.
 
 ### 6.15 T: Time
@@ -578,6 +579,45 @@ Phase 9 tests MUST cover every row. *ports* and *server* as in 6.18.1; *server* 
 | `Q`, `Q   `, `q` (`ask.txt`) | `Service error` (each) | mailbox ports written; no request |
 | `?` | the help text with the `Q` line | — |
 
+### 6.20 R: Registers
+
+`R`
+
+Prints the registers that the last program started by `G` held when it returned with `RET` (section 8):
+
+    A=44 F=56 BC=0B0D DE=1234 HL=0081
+
+- The line is `A=`, A, ` F=`, the flags byte, ` BC=`, ` DE=` and ` HL=` with each pair high byte first, then `<CR><LF>`. Bytes take 2 digits and pairs 4 (section 0). The notation is the debugger's (`ARCHITECTURE.md` 7.4, ring line) without SP.
+- F is the raw flags byte (S Z 0 AC 0 P 1 CY, bit 7 to bit 0; `ARCHITECTURE.md` 5.1). It is not decoded.
+- **When the registers are captured.** Only when a program started by `G` executes `RET` to the return address (section 8). They are saved in REGS (`ARCHITECTURE.md` 1.1). Nothing else writes REGS: not cold start, not WARM, not a command, not a `G` that fails to parse (`G ZZ`), not a program that never returns. R itself changes nothing, so R twice prints the same line.
+- **Before the first capture** R prints REGS as cold start left it: cold start does not write REGS, and RAM is undefined at power-on. RAM survives RESET (`ARCHITECTURE.md` 3.1), so after a RESET R still shows the last return before it, if there was one. Nothing marks a stale capture.
+- **Not shown.** SP: the contract fixes it (EFFEh when `RET` runs, F000h after). PC: the monitor cannot know where the `RET` was. INTE: no 8080 instruction reads it.
+- **No breakpoints.** A capture happens only at the top-level `RET`. To look at a point inside a program, end the program there with a `RET` at the top level (SP = EFFEh), or use the host debugger in the emulator.
+- **Read-only.** R does not change registers, and G does not load them: a program's registers on entry stay unspecified (section 8).
+- R uses only the console (port 00h). It has no error case. Tokens after `R` are ignored (4.1).
+- REGS is ordinary workspace RAM (`ARCHITECTURE.md` 1): a program that writes it changes what R prints.
+
+Example (the program at 0300 is `LXI H,4456` / `PUSH H` / `POP PSW` / `LXI B,0B0D` / `LXI D,1234` / `LXI H,0081` / `RET`):
+
+    > :0F030000215644E5F1010D0B113412218100C982
+    > G 0300
+    > R
+    A=44 F=56 BC=0B0D DE=1234 HL=0081
+    >
+
+### 6.20.1 R conformance vectors
+
+Phase 10 tests MUST cover every row. Rows marked *Rust* are tests in `tests/monitor_tests.rs` and run in the emulator only; the others are `tests/transcripts/registers.txt`.
+
+| Input | Expected output | Notes |
+|---|---|---|
+| The 6.20 example, then `R` | `A=44 F=56 BC=0B0D DE=1234 HL=0081` | |
+| Then `H 1234 0081`, `G ZZ`, `r junk` | `12B5 11B3`, `Invalid address`, then the same R line | commands and a failed G do not capture; case folds; arguments ignored |
+| `:0F03100021FF00E5F101FFFF11008021FFEEC981`, `G 0310`, `R`, `R` | `A=00 F=D7 BC=FFFF DE=8000 HL=EEFF` twice | the next return replaces the capture; POP PSW of FF reads back D7 (`ARCHITECTURE.md` 5.1) |
+| `?` | the 6.14 text with the R line | `help.txt` |
+| *Rust:* `R` right after cold start; then the 6.20 example, RESET, cold start, `R` | REGS unchanged by cold start; then the 6.20 example's R line | cold start does not write REGS; RAM survives RESET. Not a transcript: RAM at power-on differs on hardware, and a transcript cannot RESET |
+| *Rust:* `go_entry_contract` | the word at EFFE is `G_RETURN` | replaces `WARM` |
+
 ---
 
 ## 7. Intel HEX Loader
@@ -685,14 +725,16 @@ This section owns the program-facing contract. The WARM entry code and the stack
 
 **On entry to the program:**
 - PC = the target address.
-- SP = EFFEh, and the word at EFFE is the WARM address.
+- SP = EFFEh, and the word at EFFE is the return address, G_RETURN.
 - Interrupts are disabled (the ROM never executes `EI`).
 - A, the flags, BC, DE and HL are unspecified.
 - The overlay is disabled.
 - Console input that READ_LINE has not consumed (for example, the `<LF>` of a CRLF pair) is left in the FIFO for the program.
 - 0000-007F holds no RST vectors and no API table (`ARCHITECTURE.md`, Memory Map).
 
-**To return:** execute `RET` with SP = EFFEh and the word at EFFE intact. `RET` is the only supported exit. The WARM address is not published.
+**To return:** execute `RET` with SP = EFFEh and the word at EFFE intact. `RET` is the only supported exit. The return address is not published.
+
+**G_RETURN** saves A, the flags, BC, DE and HL in REGS (`ARCHITECTURE.md` 1.1), where R (6.20) reads them, then enters WARM. Neither executes `DI`: a program that returns with interrupts enabled leaves them enabled. v1 has no interrupt source (`ARCHITECTURE.md` 5.7).
 
 **WARM** sets SP = F000h and enters MAIN_LOOP, which prints the prompt. It prints no banner and no `<CR><LF>`, and it does not reinitialize the workspace. LAST_DUMP_ADDR and LAST_EXAM_ADDR survive unless the program overwrote them.
 
@@ -713,11 +755,7 @@ The header comment above each routine in `rom/monitor.asm` is that routine's con
 
 ## 10. Future Commands (Placeholders)
 
-These are placeholders, not designs. Each phase writes its own section here when it starts. Until a letter is implemented, it prints `Unknown command. Type ? for help.` A and U (Phase 7) are now 6.16 and 6.17, N (Phase 8) is 6.18, and Q (Phase 9) is 6.19.
-
-| Cmd | Phase | Purpose |
-|---|---|---|
-| R | 10 | Registers. Blocked on capturing registers at return |
+None. Each new command gets its own 6.x section in the phase that adds it.
 
 Quitting the emulator (Ctrl-C) and the debugger (Ctrl-E) are host-side, not monitor commands (`ARCHITECTURE.md`, Host-Side Conveniences).
 

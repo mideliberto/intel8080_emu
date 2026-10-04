@@ -14,9 +14,9 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Memory subsystem with ROM overlay | ✅ |
 | Console device | ✅ |
 | Storage device (24-bit, 16MB) | ✅ |
-| Monitor ROM v0.8 (19 commands + Intel HEX loader) | ✅ |
+| Monitor ROM v0.9 (20 commands + Intel HEX loader) | ✅ |
 | Host-side debugger (breakpoints, watchpoints, I/O breaks, port trace, trace ring, ROM symbols) | ✅ |
-| 336 tests (6 library + 13 host + 130 CPU + 37 device + 56 mailbox + 52 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 9 `#[ignore]` (4 exercisers, 3 GET time limits, 1 live ASK, 1 measurement) | ✅ |
+| 338 tests (6 library + 13 host + 130 CPU + 37 device + 56 mailbox + 54 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 9 `#[ignore]` (4 exercisers, 3 GET time limits, 1 live ASK, 1 measurement) | ✅ |
 | Intel HEX loader (Phase 5) | ✅ |
 | Service Mailbox (ports 10-13) and `TIME` / T (Phase 6) | ✅ |
 | Mailbox `ASM`/`DIS`, A and U (Phase 7) | ✅ |
@@ -24,6 +24,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | RAM test build of the monitor (`rom/monitor_ram.hex`, `G D000`): ROM changes on the board without a burn ([ARCHITECTURE](docs/ARCHITECTURE.md) 2.1) | ✅ |
 | Mailbox `GET` and N: HTTP and HTTPS via `curl` on the Pi (Phase 8) | ✅ |
 | Mailbox `ASK` and Q: Claude via the Messages API, the key on the Pi (Phase 9) | ✅ |
+| R: the registers a program left at its `G` return (Phase 10) | ✅ |
 
 ## Monitor Commands
 
@@ -41,6 +42,7 @@ M src dst cnt         - Move memory block
 N url [> file]        - HTTP GET to the console, or to a storage file
 O port val            - Output to I/O port
 Q text                - Ask Claude (plain ASCII answer)
+R                     - Registers at the last G return
 S start end bytes     - Search for pattern
 T                     - Show time (YYYY-MM-DD HH:MM:SS)
 U addr [cnt]          - Unassemble cnt instructions (default 8)
@@ -50,7 +52,7 @@ X [file | -]          - Mount/unmount storage
 ?                     - Help
 ```
 
-Coming: R (registers). Full contract for every command, argument and message: [docs/MONITOR_SPEC.md](docs/MONITOR_SPEC.md).
+Full contract for every command, argument and message: [docs/MONITOR_SPEC.md](docs/MONITOR_SPEC.md).
 
 ## Storage System
 
@@ -109,7 +111,7 @@ You'll see:
 8080 Emulator
 Built: 2026-10-02 19:20:00        <- emulator build time (build.rs)
 
-8080 Monitor v0.8
+8080 Monitor v0.9
 Built: 10/02/2026 19:13:00        <- ROM assembly time (asl DATE/TIME)
 Ready.
 > 

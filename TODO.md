@@ -3,6 +3,7 @@
 ## Open Decisions (Mike decides before anyone codes against them)
 - The 2026-10-02 set closed 2026-10-02 and the 2026-10-03 sets closed 2026-10-03; see COLLABORATION_LOG Key Decisions. The specs are docs/ARCHITECTURE.md, docs/DEVICE_SPECS.md, docs/MONITOR_SPEC.md, docs/PI_DAEMON.md.
 - [x] Pi daemon spec, 9 questions (build-bus-clock, gpio-seam, reset-check-cost, cdev-interface, listen-default, cross-build, measure-mode, fourth-normative-doc, console-input-arrival, device-send-wording): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Pi Daemon Specified"). Written into docs/PI_DAEMON.md, ARCHITECTURE 6.4/6.6/7.4, DEVICE_SPECS 3/4/8/10, HARDWARE_BUILD 3/5.
+- [x] Phase 10 spec, 5 questions (Q-R-SHIP, Q-R-FORMAT, Q-R-BEFORE, Q-R-BREAK, Q-R-WRITE): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Phase 10 Specified"), with the cross-check fixes for Phase 10 (C9 R after Q in dispatch, help, rule 5 and QUICK_REFERENCE; C10 R in `ask_system.txt`; C14 R in README's command block). Written into MONITOR_SPEC 1.1/3/6.5/6.14/6.20/8/10, ARCHITECTURE 1.1/2.1/3.1/3.2/8, PI_DAEMON 13.2, QUICK_REFERENCE, README.
 - [x] Phase 9 spec, 10 questions (Q-MODEL, Q-FALLBACK, Q-MEMORY, Q-PROMPT-LEN, Q-ABORT, Q-EOL, Q-JSON, Q-CONTEXT, Q-KEY, Q-NONASCII): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Phase 9 Specified"), with the cross-check fixes for Phase 9 (C1 checks at `IN 12` only, C2 `/usr/bin/curl` and GET's spawn, C4 no separate `env_remove` on curl, C6 the CR LF exceptions sentence, C7 the placeholder sentence and test deleted, C8 `Service error` then CR LF, C13 clear keeps `AskConfig`, C14 Q in README's command block). Written into DEVICE_SPECS 3/8/10, MONITOR_SPEC 1.1/2/3/5/6.14/6.15/6.19/9/10/11, PI_DAEMON 1/2/6/10/11/13.2/14/16.5, ARCHITECTURE 8.
 - [x] Phase 8 spec, 7 questions (Q-CLIENT, Q-HUNG, Q-LF, Q-FILE, Q-STATUS, Q-SCOPE, Q-N-82): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Phase 8 Specified"), with the cross-check fixes for Phase 8 (curl `-N` in the stream form, the shared test server `tests/support/http.rs`, the `CN_SEND` label, N in README's command block). Written into DEVICE_SPECS 2/3/8/10, MONITOR_SPEC 2/3/5/6.14/6.15/6.18/9/10/11, PI_DAEMON 1/2/11/12.1/14/15, ARCHITECTURE 6.4/8, HARDWARE_BUILD 5.
 - [ ] **Mike:** CLAUDE.md Build gains "`/usr/bin/curl` 8.4.0+ (mailbox `GET` and `ASK`; their tests run it against a local server; `cargo test -- --ignored` runs the GET time-limit tests; `ANTHROPIC_API_KEY=... cargo test --test mailbox_tests ask_live -- --ignored` is the one live ASK check)". Left to Mike (his file), as the musl gate was.
@@ -46,6 +47,14 @@
 - [x] Verify the cross build on the Mac (PI_DAEMON 2; not a decision): done 2026-10-03. `rustup target add aarch64-unknown-linux-musl`, `.cargo/config.toml` linker = `rust-lld`, `cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d` links a static aarch64 ELF (about 760 KiB, rustc 1.89). The musl `cargo check` and `cargo clippy --bins` gate is clean
 - [ ] On the Pi (bench, PI_DAEMON 14, bring-up step 5): the cross-built binary runs, and local time under musl reads `/etc/localtime`. Fallback if it does not: build natively on the Pi (`cargo build --release --bin pi8080d`)
 - [x] Loose ends (2026-10-03): `cargo clippy --all-targets` clean (Default for Intel8080, Debugger, IoBus, Console; a `MountCase` alias in `device_tests.rs`). Real-terminal tests `tests/terminal_tests.rs` (8): the binary under a pty via `rexpect` (Unix-only dev-dependency), wrapped in `sh` so each test checks the exit status and `stty -g` before = after; raw mode boot, echo and run, Ctrl-C mid `JMP $`, Ctrl-E / bad line / `c`, interactive HLT / `q`, Backspace 7F -> 08 at `IN 01` and in a line edit, a piped `--script c` run leaving the terminal mode alone. No pty: prints `skipped: no pty` and passes; libtest captures that line, so the 266 count looks the same either way (`cargo test --test terminal_tests -- --nocapture` shows it). cargo-mutants `src/main.rs`: 8 missed -> 0 (65 caught, 5 timeouts = arg-loop hangs and a quit/resume swap that hangs the piped tests, 6 unviable)
+
+## Done: Phase 10 - R Command (2026-10-03)
+Built to the spec (Key Decisions, "Phase 10 Specified"). +106 bytes (3010 -> 3116), as the cross-check measured.
+1. [x] ROM v0.9: REGS (00EA-00F1, ARCHITECTURE 1.1), G_RETURN (`G` pushes it; four pushes into REGS, then WARM), CMD_REGS with the `@` template MSG_REGS, dispatch after Q, help line
+2. [x] `ask_system.txt` lists R (cross-check C10: `ask_system_lists_every_command` would go red otherwise)
+3. [x] Tests: `registers.txt` (local, daemon path, RAM build), `help.txt`; `registers` and `regs_are_written_only_by_a_g_return` (cold start leaves REGS alone, a capture survives RESET); `go_entry_contract` expects G_RETURN; `workspace_symbols_match_architecture_1_1` expects 10 names and `00FF REGS+15`
+4. [x] Docs: the stale "Phase 10" host-side reset in DEVICE_SPECS 2 rule 8 (Emulator RESET) now points at Someday, like ARCHITECTURE 3.1; the spec named only the ARCHITECTURE copy
+5. [ ] Seen once while building, not Phase 10 code: `stop_while_reset_is_held_returns_and_flushes` (`tests/pi_daemon_tests.rs`) failed 1 of about 10 full `cargo test` runs, at the `trace.last() == RESET` assert. Likely the 5 ms sleep racing the daemon's RESET edge under parallel-test load; 9 reruns green. Not fixed
 
 ## Done: Phase 9 - Claude Integration (2026-10-03)
 Built to the spec (Key Decisions, "Phase 9 Specified"). +50 bytes (2960 -> 3010), as the sketch measured.
@@ -240,17 +249,20 @@ All done 2026-10-03 (step E): the WARM/error-tail/one-parser/RANGE refactor from
 - [x] IN 02 costs about 1.2 ms of wall time (a 1 ms poll), so console output is throttled to about 850 chars/s. Fixed 2026-10-03: `poll(Duration::ZERO)` every 10,000 steps in the host pump.
 
 ## Blocked
-- [ ] R command - needs register capture on return (Phase 10)
+- None.
 
 ## Someday
 - [ ] ASK with conversation memory (Q-MEMORY: single turn chosen)
 - [ ] ASK prompt from a storage file, `ASK <FILE` (Q-PROMPT-LEN: one line chosen)
 - [ ] Esc aborts a BUSY mailbox request (MB_GET is shared: T, A, U, N and Q; Q-ABORT/Q-HUNG: no abort chosen)
 - [ ] A model flag for ASK (Q-MODEL: a constant chosen)
-- [ ] Phase 10: R command (the debugger shipped early, ARCHITECTURE 7.4)
+- [ ] Debugger reset (must reset the devices too, ARCHITECTURE 3.1): when a need shows up
+- [ ] Debugger writes to registers or memory: when a need shows up
+- [ ] Debugger conditional breakpoints: when a need shows up
+- [ ] RST breakpoints for R (stop inside a program on the board): when bench debugging needs them; costs a 0000-007F vector, a memory-map change (Q-R-BREAK: none chosen)
 - [ ] 8253 timer, TIMER_ISR, RST 7 vector: when something needs a periodic interrupt
 - [ ] Hardware prototype: see docs/HARDWARE_BUILD.md (BOM, 9-step bring-up)
 - [ ] Pi-assisted hardware single-step (needs A8-A15 on the Pi; not in v1)
-- [ ] Interrupt tick source (Pi GPIO vs 8254) when something needs a periodic interrupt
+- [ ] Interrupt tick source (Pi GPIO vs 8254) when something needs a periodic interrupt; G_RETURN and WARM then need a DI (MONITOR_SPEC 8)
 - [ ] ROM burn routine through JP-WE (ARCHITECTURE 6.10 rules 1-6), with its emulator model of the fitted jumper (write cycle, polling reads)
 - [ ] RAM-build debugger symbols (`monitor_ram.sym`): only if debugging the RAM image in the emulator ever needs names

@@ -30,6 +30,7 @@ Monitor commands. Numbers are hex with no suffix or prefix.
   N url [> file]    fetch a URL to the screen, or to a storage file
   O port value      write a port
   Q text            ask Claude (this)
+  R                 registers at the last G return
   S start end pat   search memory
   T                 show the time
   U addr [cnt]      unassemble

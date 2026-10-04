@@ -299,14 +299,14 @@ fn workspace_symbols_match_architecture_1_1() {
             want.push(format!("{} {}", &cols[1][..4], name));
         }
     }
-    assert_eq!(want.len(), 9, "{}", table);
+    assert_eq!(want.len(), 10, "{}", table);
     let sym = std::fs::read_to_string("rom/monitor.sym").unwrap();
     let got: Vec<&str> = sym.lines().filter(|l| l < &"0100").collect();
     assert_eq!(got, want);
     // Named in the debugger; a user-area address is never NAME+n of the workspace.
     let mut r = rom();
     assert_eq!(r.cmd("sym stor_addr+2"), "00E9 STOR_ADDR+2\n");
-    assert_eq!(r.cmd("sym 00FF"), "00FF STOR_ADDR+18\n");
+    assert_eq!(r.cmd("sym 00FF"), "00FF REGS+15\n");
     assert_eq!(r.cmd("sym 0100"), "0100\n");
     assert_eq!(r.cmd("sym EFFF"), "EFFF\n");
     assert_eq!(r.cmd("sym 007F"), "007F\n");

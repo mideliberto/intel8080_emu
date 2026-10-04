@@ -49,9 +49,10 @@ This table and the workspace labels in `rom/monitor.asm` (`ORG 0080H` and one `D
 | 00E4 | 1 | SEARCH_LENGTH | no |
 | 00E5-00E6 | 2 | SEARCH_END | no |
 | 00E7-00E9 | 3 | STOR_ADDR (24-bit: lo, mid, hi) | no |
-| 00EA-00FF | 22 | free | - |
+| 00EA-00F1 | 8 | REGS (A, F, BC, DE, HL at the last `G` return: L H E D C B F A, `MONITOR_SPEC.md` 6.20) | no |
+| 00F2-00FF | 14 | free | - |
 
-24 bytes are free in total. New workspace goes into 00EA-00FF first.
+16 bytes are free in total. New workspace goes into 00F2-00FF first.
 
 The I/O stubs run from RAM as self-modifying code. Real hardware runs it the same way, so it is allowed.
 
@@ -77,7 +78,7 @@ Decided 2026-10-03 (Mike, COLLABORATION_LOG Key Decisions). A ROM change can run
 | Image | `rom/monitor_ram.hex`, committed with `monitor.bin` and `monitor.sym`, so `cargo test` needs no assembler. Intel HEX type 00 records of 16 data bytes (43 characters; the last may be shorter), contiguous from D000, then one type 01 record, which the loader accepts at any address (`MONITOR_SPEC.md` 7.3). Only assembled bytes, no padding. Every record is inside the loader's limits (`MONITOR_SPEC.md` 7.2). |
 | Base and entry | D000. The entry is COLD_START, the first byte: `G D000`. |
 | Size | The ROM's used bytes plus the RAM-only code (47 bytes). The ROM is at most 4096 bytes, so the image always ends far below the stack page. |
-| Memory | While the RAM monitor runs, D000-EEFF (the image range) is monitor-owned too, and the user area is 0100-CFFF. The workspace (0080-00FF) and the stack page (EF00-EFFF) are shared with the resident monitor and unchanged: one monitor runs at a time, and each cold start initializes them (1.1, 3.2). `LXI SP` discards the WARM address that `G` pushed. |
+| Memory | While the RAM monitor runs, D000-EEFF (the image range) is monitor-owned too, and the user area is 0100-CFFF. The workspace (0080-00FF) and the stack page (EF00-EFFF) are shared with the resident monitor and unchanged: one monitor runs at a time, and each cold start initializes them (1.1, 3.2). `LXI SP` discards the G_RETURN address that `G` pushed. |
 | HEX guard | Records must lie inside 0100-CFFF: `MONITOR_SPEC.md` 7.2 step 6 with D000 in place of EF00. The same code, one constant. |
 | F, M, L | A destination that touches D000-EEFF, wrapping past FFFF for M and L, prints `Address out of range` and writes nothing. L checks before it writes a port. RAM build only: the ROM's F, M and L do not guard (`MONITOR_SPEC.md` 6.4, 6.8, 6.9). E, A and programs still write anywhere; a write into the image has undefined results, as in the workspace and the stack page (1). |
 | Overlay write at boot | Kept: the same boot code, `OUT 0FEH` included. The resident cold start has already cleared the overlay, so it changes nothing (4). 3.2 requirement 1 (the `OUT 0FEH` and what follows run from F000-FFFF) governs the reset path only; the RAM build is entered by `G`, with the overlay already clear. |
@@ -126,7 +127,7 @@ There is no software reset.
 - `reset()` models the RESET pin and nothing else. It sets PC=0, INTE=0, halted=false, overlay=1, clears any pending interrupt, and leaves A-L, flags, SP and RAM alone.
 - `Intel8080::new()` builds the struct and calls `reset()`, so there is one home for power-on state.
 - Test harnesses start registers, SP and RAM at values the ROM can't get lucky with. They fill RAM with a non-zero junk byte before boot, so a ROM that relies on zeroed RAM or a preset SP fails its tests. (Decided 2026-10-02.)
-- `new()` starts A-L, SP and RAM at 00 and flags at 02; the monitor harness overwrites them with junk before boot. Devices are created in their power-on state at process start by `build_bus` (`src/io/mod.rs`), which is the emulator's only RESET. Any future host-side reset (Phase 10) MUST reset the devices as well as the CPU.
+- `new()` starts A-L, SP and RAM at 00 and flags at 02; the monitor harness overwrites them with junk before boot. Devices are created in their power-on state at process start by `build_bus` (`src/io/mod.rs`), which is the emulator's only RESET. Any future host-side reset (Someday, TODO.md) MUST reset the devices as well as the CPU.
 
 ### 3.2 Boot Sequence
 
@@ -150,7 +151,7 @@ Requirements:
 2. Boot initializes no device. From reset to the first prompt the ROM executes `OUT 0FEH` and console output (`OUT 00H`) and no other I/O instruction. The first Pi-window access after reset is the banner's first `OUT 00H`.
 3. Boot does not drain console input. RESET flushes the Pi's console FIFO (`DEVICE_SPECS.md` rule 2.8), so no stale bytes are waiting.
 4. The ROM never executes `EI` or `HLT`.
-5. **WARM** sits directly before MAIN_LOOP. It sets SP to 0xF000 and does nothing else. `G` pushes WARM's address before it jumps. The program-facing return contract is in `MONITOR_SPEC.md` (G Return Contract).
+5. **WARM** sits directly before MAIN_LOOP. It sets SP to 0xF000 and does nothing else. `G` pushes G_RETURN's address (`MONITOR_SPEC.md` 8), which ends at WARM. The program-facing return contract is in `MONITOR_SPEC.md` (G Return Contract).
 6. The ROM contains no timing-dependent code (no calibrated delay loops). The emulator runs unthrottled, and the hardware clock (6.1) is a design target, not a ROM dependency.
 
 ---
@@ -685,5 +686,5 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 - **Phase 7 (done 2026-10-03):** mailbox `ASM` and `DIS`, and the `A` and `U` commands (`DEVICE_SPECS.md` 8, `MONITOR_SPEC.md` 6.16-6.17). No memory-map or circuit change.
 - **Phase 8 (done 2026-10-03):** mailbox `GET` and the `N` command (`DEVICE_SPECS.md` 8, `MONITOR_SPEC.md` 6.18). The first background command, its worker a `curl` process. No memory-map or circuit change.
 - **Phase 9 (done 2026-10-03):** mailbox `ASK` and the `Q` command (`DEVICE_SPECS.md` 8, `MONITOR_SPEC.md` 6.19). A second background command on the same `curl` worker; the API key lives on the Pi, never in ROM. No memory-map or circuit change.
-- **Phase 10:** what is left after the debugger (7.4): the monitor's `R` command, which needs the `G` return contract to capture registers.
+- **Phase 10 (done 2026-10-03):** the monitor's `R` command and the G_RETURN capture (`MONITOR_SPEC.md` 6.20, 8) and the REGS workspace row (1.1). No circuit change.
 - **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6); a monitor routine that reprograms the ROM through JP-WE (6.10 rules), with its emulator model.

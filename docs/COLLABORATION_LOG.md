@@ -63,6 +63,20 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-03: Phase 10 Specified: R
+**Decision:** Mike accepted every Phase 10 recommendation, and the Phases 8-11 cross-check fixes that apply to Phase 10. Homes: MONITOR_SPEC 6.20 (R, vectors 6.20.1) and 8 (G_RETURN), ARCHITECTURE 1.1 (REGS).
+- **Q-R-SHIP:** ship R; REGS takes 00EA-00F1 under 1.1's existing rule (new workspace goes into 00EA-00FF first). Free workspace 24 -> 16 bytes.
+- **Capture:** `G` pushes G_RETURN, which saves PSW, BC, DE, HL into REGS (ARCHITECTURE 1.1) and enters WARM. Only a top-level `RET` captures.
+- **Q-R-FORMAT:** `A=44 F=56 BC=0B0D DE=1234 HL=0081`, the debugger's notation without SP. F raw, not decoded.
+- **Q-R-BEFORE:** REGS is not initialized at boot; R before a capture prints RAM, and a capture survives RESET, unmarked.
+- **Q-R-BREAK:** no breakpoints. 0000-007F keeps no RST vectors. RST breakpoints to Someday.
+- **Q-R-WRITE:** R is read-only; G does not load registers.
+- Debugger reset, register/memory writes, conditional breakpoints moved to Someday (they were already "when a need shows up"). Phase 10 is R only.
+- **Cross-check fixes taken into Phase 10:** R after Q in dispatch, help, MONITOR_SPEC 3 rule 5 and QUICK_REFERENCE (C9); R in `ask_system.txt`, or `ask_system_lists_every_command` goes red (C10); R in README's command block (C14).
+
+**Rationale:** The board has no debugger; R is the 8080's own register view for 106 bytes. Everything else was a debugger on the 8080, which the host already has.
+**Mantra check:** declined: flag letters (+50), a "no registers" flag and message (~+35), RST breakpoints (~+50 and a memory-map change), register editing and a G that loads them (~+60).
+
 ### 2026-10-03: Phase 9 Specified: ASK, Q
 **Decision:** Mike accepted every Phase 9 recommendation, and the Phases 8-11 cross-check fixes that apply to Phase 9. Homes: DEVICE_SPECS 8 (ASK, ASK service, ASK vectors), MONITOR_SPEC 6.19 (Q, 6.19.1 vectors), PI_DAEMON 10 and 11 (the key), `src/io/devices/ask_system.txt` (the system prompt).
 - **Q-MODEL:** `claude-opus-5-5`, a constant in `ask.rs`; changing it is one edit and a rebuild. A model flag goes to Someday.
@@ -563,15 +577,16 @@ Console I/O debugging session:
 
 **CPU Core:** All 256 opcodes (5 undocumented aliases decoded), flags match ARCHITECTURE 5.1-5.3 including AC, 8080A interrupt input (EI delay, HLT wake), reset() = RESET pin. All four exercisers pass, 8080EXM included
 
-**Monitor ROM v0.8:**
-- 19 commands: A, C, D, E, F, G, H, I, L, M, N, O, Q, S, T, U, W, X, ?, to MONITOR_SPEC sections 1-6, 8, 9, 11 (strict arguments, WARM, G return, memmove, Storage error, Mount failed)
+**Monitor ROM v0.9:**
+- 20 commands: A, C, D, E, F, G, H, I, L, M, N, O, Q, R, S, T, U, W, X, ?, to MONITOR_SPEC sections 1-6, 8, 9, 11 (strict arguments, WARM, G return, memmove, Storage error, Mount failed)
 - Intel HEX loader (Phase 5, MONITOR_SPEC 7): a `:` line is one record, validated in full (pass 1: steps 1-4) before the type, the guard and the write (pass 2)
 - T (Phase 6, MONITOR_SPEC 6.15): mailbox `TIME`, `Service error` on 00 after execute or 80-FF
 - A and U (Phase 7, MONITOR_SPEC 6.16-6.17): mailbox `ASM` and `DIS`; only `.` ends A. T, A, U, N and Q share MB_SEND/MB_PUT/MB_GET, the DEVICE_SPECS 8 reference client
 - N (Phase 8, MONITOR_SPEC 6.18): mailbox `GET` with the rest of the line verbatim; shares T's print loop, which prints LF as CR LF
 - Q (Phase 9, MONITOR_SPEC 6.19): mailbox `ASK` with the rest of the line verbatim, entering N's tail at `CN_SEND`
+- R (Phase 10, MONITOR_SPEC 6.20): `G` pushes G_RETURN, which saves A, F, BC, DE, HL in REGS (ARCHITECTURE 1.1) before WARM; R prints them
 - ROM overlay boot mechanism; CONOUT is OUT 00 / RET, so the first Pi access after reset is the banner's OUT 00
-- 3010 of 4096 bytes used (1086 free; `make size`)
+- 3116 of 4096 bytes used (980 free; `make size`)
 - RAM test build (ARCHITECTURE 2.1): `rom/monitor_ram.hex`, the same source at D000 (guard top D000, F/M/L refuse the image, ` RAM` banner), loaded through the resident HEX loader and run with `G D000`, in the harness and over TCP on `pi8080d --sim`. Reviewed and fixed 2026-10-03
 
 **Debugger (host-side, ARCHITECTURE 7.4):** Ctrl-E / `--debug` / `--script`, break, step, registers, memory, disassembly with ROM symbols (`rom/monitor.sym`), watchpoints, I/O breaks, port trace, 256-step trace ring
@@ -582,7 +597,7 @@ Console I/O debugging session:
 **Pi daemon `pi8080d` (code, 2026-10-03; PI_DAEMON.md):** `src/pi/mod.rs` (the `Gpio` seam, `setup_pins`, `serve`: the bus loop, RESET handling, TCP console, trace), `src/pi/linux.rs` (`GpioMem`, the RESET line by raw v2 ioctl, `ntp_local_time`), `src/pi_main.rs`. Every transcript passes through it on the simulated board (`src/pi/sim.rs`). `--sim FILE` runs the same board with the CPU model, so the whole Pi stack runs before the board exists (PI_DAEMON 16). The static aarch64 musl binary cross-builds on the Mac with `rust-lld`. Reviewed and fixed 2026-10-03; the simulator gaps left are listed in `TODO.md`. Not yet run on a Pi (PI_DAEMON 14)
 
 **Testing (verified 2026-10-03):**
-- 6 library + 13 host + 130 CPU + 37 device + 56 mailbox + 52 monitor + 18 Pi daemon + 16 debugger + 8 terminal = 336, all passing (the GET, N, ASK and Q tests run curl against a local test server, never the internet or the API, key or no key) (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
+- 6 library + 13 host + 130 CPU + 37 device + 56 mailbox + 54 monitor + 18 Pi daemon + 16 debugger + 8 terminal = 338, all passing (the GET, N, ASK and Q tests run curl against a local test server, never the internet or the API, key or no key) (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 - 3 `#[ignore]` GET time-limit tests (connect 10 s, stall 30 s twice) pass: `cargo test --test mailbox_tests -- --ignored`
 - 1 `#[ignore]` live ASK test, not yet run with a key: `ANTHROPIC_API_KEY=... cargo test --test mailbox_tests ask_live -- --ignored`
@@ -593,16 +608,17 @@ Console I/O debugging session:
 - **Phase 7:** done 2026-10-03 (mailbox `ASM`/`DIS`, A, U, v0.6).
 - **Phase 8:** done 2026-10-03 (mailbox `GET`, N, v0.7). The by-hand Gutenberg fetch and the Pi bench rows remain (`TODO.md`).
 - **Phase 9:** done 2026-10-03 (mailbox `ASK`, Q, v0.8), reviewed and fixed the same day. The live ASK test by hand and the Pi bench row remain (`TODO.md`).
+- **Phase 10:** done 2026-10-03 (R, the G_RETURN capture, REGS, v0.9).
 - **Pi daemon:** specified and built 2026-10-03 (`docs/PI_DAEMON.md`); the bench checks (PI_DAEMON 14) wait for the board.
 - **Review findings:** 2026-10-02 review found CPU flag bugs, ROM range and parse bugs, and vacuous tests. All fixed by 2026-10-03 (steps A-E); `TODO.md` keeps the repros.
 
 ### Open Decisions
 
-None open. The choices flagged while building `--sim`, the RAM test build and the board debug aids, and the halted 8080's floating buses (10 kohm pull-ups, ARCHITECTURE 6.13), closed 2026-10-03; see Key Decisions. The MONITOR_SPEC 6.17 U cost figure was corrected to the measurement 2026-10-03. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon, Phase 7, Phase 8 and Phase 9 sets closed 2026-10-03 too. Left to Mike: the CLAUDE.md Build line for curl (`TODO.md`). The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
+None open. The choices flagged while building `--sim`, the RAM test build and the board debug aids, and the halted 8080's floating buses (10 kohm pull-ups, ARCHITECTURE 6.13), closed 2026-10-03; see Key Decisions. The MONITOR_SPEC 6.17 U cost figure was corrected to the measurement 2026-10-03. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon, Phase 7, Phase 8, Phase 9 and Phase 10 sets closed 2026-10-03 too. Left to Mike: the CLAUDE.md Build line for curl (`TODO.md`). The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
 
 ### Blocked/Deferred
 
-- **R command:** Needs return mechanism (Phase 10). The debugger itself shipped 2026-10-03
+- **Debugger leftovers:** reset, register and memory writes, conditional breakpoints: Someday, when a need shows up (`TODO.md`). R shipped in Phase 10
 - **Pi services:** one Service Mailbox at 0x10-0x13. Phase 6 `TIME`, 7 `ASM`/`DIS`, 8 `GET` (the background worker and BUSY) and 9 `ASK` (Claude) done
 - **8253 timer / interrupts:** Someday
 
@@ -614,6 +630,14 @@ None open. The choices flagged while building `--sim`, the RAM test build and th
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Phase 10 - R Command
+- Specs integrated: MONITOR_SPEC Scope/Status/1.1/3/6.5/6.14/6.20/6.20.1/8/10 (section 10 is now empty), ARCHITECTURE 1.1 (REGS), 2.1, 3.1, 3.2, 8; QUICK_REFERENCE, README, PI_DAEMON 13.2; Key Decision "Phase 10 Specified" with the cross-check fixes (C9, C10, C14).
+- Built: ROM v0.9. `G` pushes G_RETURN (`LXI SP,REGS+8` and four pushes, then WARM); CMD_REGS walks an `@` template from REGS+7 down. +106 bytes (3010 -> 3116, 980 free), exactly the cross-check's measurement. `ask_system.txt` gains the R line.
+- Tests 336 -> 338: `registers.txt` (local, through the daemon, on the RAM build), `regs_are_written_only_by_a_g_return` (cold start leaves REGS alone; a capture survives RESET), `go_entry_contract` expects G_RETURN, the 1.1 table check expects REGS. Review: G_RETURN's `JMP WARM` -> `JMP MAIN_LOOP` survived every test (the next command's stack lands in the workspace, from 00EA down), so the test now runs `S 0300 030E F1` right after the G return and expects `0304`. Release exercisers 4/4; clippy clean on the host and aarch64 musl.
+- Doc sync the spec missed: DEVICE_SPECS 2 rule 8 also promised a host-side reset "(Phase 10)"; it now points at Someday like ARCHITECTURE 3.1.
+- PI_DAEMON 13.2's cost line re-measured: 20 transcripts, 148,000-152,000 accesses over three runs, about 2.0-2.1 s.
+- What bit us: nothing in Phase 10. `stop_while_reset_is_held_returns_and_flushes` flaked once in about 10 full runs (its 5 ms sleep vs the daemon's RESET edge); logged in `TODO.md`, not fixed.
 
 ### 2026-10-03: Phase 9 Review Fixes
 - Delivery was lazier than DEVICE_SPECS 8: a word followed by a space stayed held until the next word's first character. `Wrap::push` now releases after a space too. The split test asserts the exact held-back amount after every feed instead of `<= 80`; the three surviving delivery-timing mutants die.

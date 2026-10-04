@@ -87,7 +87,8 @@ SEARCH_PATTERN: DS      8           ; search pattern
 SEARCH_LENGTH:  DS      1           ; search pattern length
 SEARCH_END:     DS      2           ; search end address
 STOR_ADDR:      DS      3           ; storage address (lo, mid, hi)
-                DS      22          ; free
+REGS:           DS      8           ; saved at a G return: L H E D C B F A
+                DS      14          ; free
 
 LINE_LENGTH     EQU     80          ; LINE_BUFFER size
 
@@ -133,8 +134,8 @@ BOOT_CONTINUE:
 PRINT_WARM:
         CALL    PRINT_STRING
 
-; WARM - Reset the stack and prompt. Commands end here, and G pushes this
-; address so a program can return with RET (MONITOR_SPEC 8).
+; WARM - Reset the stack and prompt. Commands end here, and so does G_RETURN,
+; where a program started by G returns with RET (MONITOR_SPEC 8).
 WARM:
         LXI     SP,STACK_TOP
 
@@ -187,6 +188,8 @@ NOT_LOWER:
         JZ      CMD_OUTPUT
         CPI     'Q'
         JZ      CMD_ASK
+        CPI     'R'
+        JZ      CMD_REGS
         CPI     'S'
         JZ      CMD_SEARCH
         CPI     'T'
@@ -931,7 +934,7 @@ CF_LOOP:
         JNZ     CF_LOOP
         JMP     WARM
 
-; CMD_GO - G [addr]. Bare G runs 0100. Pushes WARM, so the program can
+; CMD_GO - G [addr]. Bare G runs 0100. Pushes G_RETURN, so the program can
 ; return to the prompt with RET (MONITOR_SPEC 8).
 CMD_GO:
         CALL    READ_HEX_WORD       ; DE = address
@@ -942,9 +945,41 @@ CMD_GO:
 CG_DEFAULT:
         LXI     H,0100H
 CG_RUN:
-        LXI     D,WARM
-        PUSH    D                   ; SP = EFFE, (EFFE) = WARM
+        LXI     D,G_RETURN
+        PUSH    D                   ; SP = EFFE, (EFFE) = G_RETURN
         PCHL
+
+; G_RETURN - A program started by G returns here with RET (MONITOR_SPEC 8).
+; Saves A, F, BC, DE and HL in REGS for R, then enters WARM. SP is the store
+; pointer: the four pushes fill REGS+7 down to REGS. SP points into REGS here:
+; an interrupt source needs a DI first (MONITOR_SPEC 8).
+G_RETURN:
+        LXI     SP,REGS+8
+        PUSH    PSW                 ; REGS+7 = A, REGS+6 = F
+        PUSH    B                   ; REGS+5 = B, REGS+4 = C
+        PUSH    D                   ; REGS+3 = D, REGS+2 = E
+        PUSH    H                   ; REGS+1 = H, REGS+0 = L
+        JMP     WARM
+
+; CMD_REGS - R. Prints MSG_REGS, each '@' replaced by the next saved byte,
+; from REGS+7 (A) down to REGS (L) (MONITOR_SPEC 6.20).
+CMD_REGS:
+        LXI     D,MSG_REGS
+        LXI     H,REGS+7
+CR_LOOP:
+        LDAX    D
+        INX     D
+        ORA     A
+        JZ      WARM
+        CPI     '@'
+        JZ      CR_BYTE
+        CALL    CONOUT
+        JMP     CR_LOOP
+CR_BYTE:
+        MOV     A,M
+        DCX     H
+        CALL    PRINT_HEX_BYTE
+        JMP     CR_LOOP
 
 ; CMD_HEX_MATH - H a b. Prints (a+b) (a-b), mod 10000h.
 CMD_HEX_MATH:
@@ -1537,7 +1572,7 @@ CW_LOOP:
 
 MSG_BANNER:
         DB      CR,LF
-        DB      "8080 Monitor v0.8"
+        DB      "8080 Monitor v0.9"
         IFDEF   RAMBUILD
         DB      " RAM"
         ENDIF
@@ -1561,6 +1596,7 @@ MSG_HELP:
         DB      "  N url [> file]   - HTTP GET",CR,LF
         DB      "  O port value     - Output to port",CR,LF
         DB      "  Q text           - Ask Claude",CR,LF
+        DB      "  R                - Registers",CR,LF
         DB      "  S start end pat  - Search memory",CR,LF
         DB      "  T                - Show time",CR,LF
         DB      "  U addr [cnt]     - Unassemble",CR,LF
@@ -1570,6 +1606,8 @@ MSG_HELP:
         DB      "  ?                - Help",CR,LF
         DB      0
 
+MSG_REGS:
+        DB      "A=@ F=@ BC=@@ DE=@@ HL=@@",CR,LF,0
 MSG_UNKNOWN:
         DB      "Unknown command. Type ? for help.",CR,LF,0
 MSG_BAD_ADDR:

@@ -13,7 +13,7 @@
 | 7 | Development Tools | ✅ Complete |
 | 8 | Internet Services | ✅ Complete |
 | 9 | Claude Integration | ✅ Complete |
-| 10 | R command (debugger done early) | 🔲 Future |
+| 10 | R command (debugger done early) | ✅ Complete |
 | 11 | Polish | 🔲 Future |
 | - | Pi daemon track (parallel) | 🟡 Code done 2026-10-03, bench pending |
 
@@ -55,7 +55,7 @@
 - O command (output to port)
 
 **Deferred:**
-- R command (registers) - needs return mechanism, implement when debugging requires it
+- R command (registers) - needs return mechanism, implement when debugging requires it (shipped in Phase 10)
 
 ---
 
@@ -212,11 +212,27 @@ No timer in v1. The Pi keeps wall-clock time via NTP. A periodic interrupt sourc
 
 ---
 
-## Phase 10: R Command
+## Phase 10: R Command ✅ COMPLETE (2026-10-03)
 
-The host-side debugger was pulled forward and shipped before Phase 5 (2026-10-03, ARCHITECTURE 7.4): Ctrl-E / `--debug` / `--script`, breakpoints, step, registers, memory, disassembly with ROM symbols, watchpoints, I/O breaks, the port trace and the trace ring.
+**Goal:** see a program's registers on the board, where there is no host debugger.
 
-What is left: the monitor's `R` command (registers, deferred from Phase 3), which needs the `G` return contract to capture them. Not in the debugger v1, each to be decided when a need shows up: a debugger reset (it must reset the devices too, ARCHITECTURE 3.1), writing registers or memory, conditional breakpoints.
+**Specified 2026-10-03** (decisions: COLLABORATION_LOG Key Decisions, "Phase 10 Specified"): `MONITOR_SPEC.md` 6.20 (R) and 8 (G_RETURN), `ARCHITECTURE.md` 1.1 (REGS).
+
+The host-side debugger shipped before Phase 5 (2026-10-03, ARCHITECTURE 7.4). Its "when a need shows up" items (reset, writing registers or memory, conditional breakpoints) are in Someday in `TODO.md`.
+
+**Tasks:**
+- [x] ROM: REGS (`ARCHITECTURE.md` 1.1), G_RETURN, `G` pushes it, CMD_REGS and MSG_REGS, dispatch, help line, banner bump; rebuild and commit `monitor.bin`, `monitor.sym`, `monitor_ram.hex`
+- [x] Docs: MONITOR_SPEC Scope, Status, 3, 6.5, 6.14, 6.20, 8, 10; ARCHITECTURE 1.1, 2.1, 3.1, 3.2 and 8; QUICK_REFERENCE; README; PI_DAEMON 13.2 cost line re-measured
+- [x] Tests: `tests/transcripts/registers.txt` and `help.txt`; `registers` and `regs_are_written_only_by_a_g_return`; `go_entry_contract` expects G_RETURN; `workspace_symbols_match_architecture_1_1` expects 10 names and `00FF REGS+15`
+- [x] `src/io/devices/ask_system.txt` lists R (cross-check C10), so `ask_system_lists_every_command` stays green
+
+**Budget:** +106 bytes, measured on a sketch (G_RETURN 10, CMD_REGS 31, MSG_REGS 28, dispatch 5, help line 32).
+
+**Done:** +106 bytes (3010 -> 3116, 980 free), as measured. Tests: `registers.txt` (also through the daemon and on the RAM build), 2 new monitor tests.
+
+**Success criteria:**
+- [x] `G` a program that sets A, the flags, BC, DE and HL and returns with `RET`; `R` prints them as `A=xx F=xx BC=xxxx DE=xxxx HL=xxxx`.
+- [x] Every 6.20.1 transcript row passes in the emulator, through pi8080d on the simulated board, and on the RAM test build; the Rust rows pass in the emulator.
 
 ---
 

@@ -14,6 +14,7 @@ Commands:
   N url [> file]   - HTTP GET
   O port value     - Output to port
   Q text           - Ask Claude
+  R                - Registers
   S start end pat  - Search memory
   T                - Show time
   U addr [cnt]     - Unassemble
@@ -36,6 +37,7 @@ Commands:
   N url [> file]   - HTTP GET
   O port value     - Output to port
   Q text           - Ask Claude
+  R                - Registers
   S start end pat  - Search memory
   T                - Show time
   U addr [cnt]     - Unassemble

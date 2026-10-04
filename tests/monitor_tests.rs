@@ -611,6 +611,28 @@ fn help() {
 }
 
 #[test]
+fn registers() {
+    boot().play("registers");
+}
+
+#[test]
+fn regs_are_written_only_by_a_g_return() {
+    // MONITOR_SPEC 6.20.1: cold start does not write REGS, so R first shows the harness's
+    // junk RAM, and RAM survives RESET (ARCHITECTURE 3.1), so a capture outlives one.
+    // Not a transcript: hardware RAM differs, and a transcript can't RESET.
+    let mut m = boot();
+    assert_eq!(m.run("R"), "A=76 F=76 BC=7676 DE=7676 HL=7676\\r\\n");
+    m.run(":0F030000215644E5F1010D0B113412218100C982");
+    m.run("G 0300");
+    // The first command after a G return runs on WARM's stack, not in the workspace.
+    assert_eq!(m.run("S 0300 030E F1"), "0304\\r\\n");
+    m.cpu.reset();
+    let banner = m.step(b"");
+    let mut m = booted((m, banner));
+    assert_eq!(m.run("R"), "A=44 F=56 BC=0B0D DE=1234 HL=0081\\r\\n");
+}
+
+#[test]
 fn hex_math() {
     boot().play("hex_math");
 }
@@ -1293,7 +1315,7 @@ fn u_text_typed_into_a_gives_the_bytes_back() {
 
 #[test]
 fn go_entry_contract() {
-    // MONITOR_SPEC 8: on entry SP = EFFE, the word there is WARM, interrupts are off and
+    // MONITOR_SPEC 8: on entry SP = EFFE, the word there is G_RETURN, interrupts are off and
     // the overlay is off. The return through it is in go.txt. The error before G leaves
     // two pushes and a return address behind: WARM must reset SP.
     for (line, at) in [("G 0300", 0x0300u16), ("G", 0x0100)] {
@@ -1306,7 +1328,7 @@ fn go_entry_contract() {
             m.cpu.execute_one();
         }
         assert_eq!(m.cpu.pc, at + 1, "{}: halted at the wrong place", line);
-        assert_eq!((m.cpu.sp, m.cpu.read_word(0xEFFE)), (0xEFFE, sym("WARM")), "{}", line);
+        assert_eq!((m.cpu.sp, m.cpu.read_word(0xEFFE)), (0xEFFE, sym("G_RETURN")), "{}", line);
         assert!(!m.cpu.interrupts_enabled && !m.cpu.rom_overlay_enabled);
     }
 }

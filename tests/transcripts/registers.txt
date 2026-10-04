@@ -1,0 +1,28 @@
+# R (MONITOR_SPEC 6.20): the registers a program left when it returned through G
+# (section 8). Before the first G return R prints whatever RAM holds, so this file
+# starts with a return.
+
+# 0300: LXI H,4456 / PUSH H / POP PSW / LXI B,0B0D / LXI D,1234 / LXI H,0081 / RET
+> :0F030000215644E5F1010D0B113412218100C982
+> G 0300
+> R
+A=44 F=56 BC=0B0D DE=1234 HL=0081
+
+# Commands between G and R leave the capture alone, and a G that runs nothing
+# captures nothing. R folds case and ignores arguments (4.1).
+> H 1234 0081
+12B5 11B3
+> G ZZ
+Invalid address
+> r junk
+A=44 F=56 BC=0B0D DE=1234 HL=0081
+
+# 0310: LXI H,00FF / PUSH H / POP PSW / LXI B,FFFF / LXI D,8000 / LXI H,EEFF / RET.
+# The next return replaces the capture. F reads back D7: bits 5 and 3 are always 0
+# and bit 1 always 1 (ARCHITECTURE 5.1).
+> :0F03100021FF00E5F101FFFF11008021FFEEC981
+> G 0310
+> R
+A=00 F=D7 BC=FFFF DE=8000 HL=EEFF
+> R
+A=00 F=D7 BC=FFFF DE=8000 HL=EEFF
