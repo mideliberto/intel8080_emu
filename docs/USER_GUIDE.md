@@ -28,6 +28,7 @@ Specs: [ARCHITECTURE.md](ARCHITECTURE.md) (memory, boot, hardware), [DEVICE_SPEC
 cargo run                       # from the repo root: rom/monitor.bin, storage files in storage/
 cargo run -- --debug            # start stopped at the debugger prompt
 cargo run -- --script FILE      # run debugger commands from FILE first
+cargo run -- --jp-we            # JP-WE fitted: writes to F000-FFFF program the ROM image (in memory only)
 ```
 
 - **Ctrl-C** quits. **Ctrl-E** stops the 8080 and opens the debugger (section 8). The 8080 never sees
@@ -119,6 +120,7 @@ In `examples/`, each as `.asm` source and a ready `.hex`. Each has a transcript,
 |---|---|---|
 | `hello` | paste `hello.hex`, `G 0100` | `Hello, 8080!` |
 | `memtest` | paste `memtest.hex`, `G 0100` | `RAM OK`, or `FAIL aaaa` at the first bad byte |
+| `burn` | the image at 1000, paste `burn.hex`, fit JP-WE, `G 0100` (section 10) | the new monitor's banner, `Not a ROM image`, or `Burn failed aaaa` |
 
 `memtest`'s range, what it catches and how to change the range are in the header of
 `examples/memtest.asm`. **Under the RAM test build** (section 10), set the last address to CFFF
@@ -342,7 +344,40 @@ make size               # bytes used of 4096
    its prompt, paste `rom/monitor_ram.hex` into the socat session, then type `G D000`; from a script,
    use the `nc` form in 4.3 and wait for the banner. The banner line ends ` RAM` (MONITOR_SPEC 1.1).
    While it runs the user area is smaller (ARCHITECTURE 2.1). `G F000` or RESET goes back to the ROM.
-3. **Burn:** with an external programmer (HARDWARE_BUILD). Then check it (6.3).
+3. **Burn in circuit,** with no external programmer: `examples/burn` writes F000-FFFF through
+   jumper JP-WE (ARCHITECTURE 6.10). Rehearse it in the emulator first: copy `monitor.bin` to
+   `storage/MONITOR.BIN`, `cargo run -- --jp-we`, the same steps (the burned image lives in
+   memory only).
+
+   ```
+   cd rom && make                                    # on the Mac
+   scp monitor.bin pi:/var/lib/pi8080d/MONITOR.BIN   # emulator: cp monitor.bin ../storage/MONITOR.BIN
+   ```
+
+   Then at the monitor:
+
+   ```
+   X MONITOR.BIN
+   L 0 1000 1000           the image to 1000-1FFF
+                           paste examples/burn.hex (4.3)
+                           fit JP-WE
+   G 0100                  about 1 s on the board: type nothing until the banner
+                           the new banner: remove JP-WE at its first prompt
+   C F000 FFFF 1000        no output: the ROM is the image
+   ```
+
+   - **The banner** is the new monitor cold-starting: the burn worked. Remove JP-WE before anything
+     else: while it is fitted, any write to F000-FFFF reprograms the ROM (ARCHITECTURE 6.10 rule 1),
+     and keys typed during the burn run on the new monitor.
+   - **`Not a ROM image`:** nothing was written. Byte 0 of the image is not 31 or byte 6 is not F0
+     (ARCHITECTURE 3.2 requirement 7). A RAM test build has D0 there: burn `monitor.bin`.
+   - **`Burn failed aaaa`:** the byte at aaaa did not verify, and the program spins until RESET. With
+     JP-WE open nothing was written: RESET, fit JP-WE, `G 0100` again (RAM survives RESET,
+     ARCHITECTURE 3.1). With JP-WE fitted the ROM is part new, part old: use the external
+     programmer (step 4).
+   - The image is read from 1000. Elsewhere: `E 0103`, the address low byte first.
+4. **External programmer** (HARDWARE_BUILD): the first image, and recovery from a failed burn. Then
+   check it (6.3).
 
 ---
 

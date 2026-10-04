@@ -16,6 +16,19 @@ pub enum Transfer {
     Out(u8, u8),
 }
 
+/// AT28C64B tBLC, the byte load cycle time (DS 16): 150 us at 2.048 MHz, in cycles, rounded down.
+pub const TBLC_CYCLES: u64 = 307;
+
+/// The AT28C64B behind a fitted JP-WE (ARCHITECTURE 6.10). SDP is off: the 8080 cannot set it.
+struct JpWe {
+    twc: u64,     // write cycle tWC, in cycles
+    last: u64,    // cycle of the last accepted write
+    end: u64,     // cycle the write cycle ends
+    byte: u8,     // last byte written: DATA polling reads its bit 7 complemented
+    toggle: bool, // I/O6: flips on each data read while the chip is busy
+    cells: bool,  // a read inside the page-load window returns the cell, not status
+}
+
 pub struct Intel8080 {
     // Registers
     pub a: u8,
@@ -33,6 +46,7 @@ pub struct Intel8080 {
     ram: Vec<u8>,
     rom: Vec<u8>,                       // 4KB ROM at 0xF000
     pub rom_overlay_enabled: bool,      // When true, ROM visible at 0x0000 too
+    jp_we: Option<JpWe>,                // Some: JP-WE fitted (ARCHITECTURE 6.10)
     io_bus: IoBus,
 
     pub halted: bool,
@@ -61,6 +75,7 @@ impl Intel8080 {
             ram: vec![0; 0x10000],
             rom: Vec::new(),
             rom_overlay_enabled: true,
+            jp_we: None,
             io_bus: IoBus::new(),
             halted: false,
             interrupts_enabled: false,
@@ -172,16 +187,29 @@ impl Intel8080 {
     // ============================================
 
     pub fn read_byte(&self, addr: u16) -> u8 {
-        // Only apply ROM logic if ROM is loaded
-        if !self.rom.is_empty() {
-            if addr >= 0xF000 {
-                return *self.rom.get((addr - 0xF000) as usize).unwrap_or(&0xFF);
-            }
-            if addr < 0x1000 && self.rom_overlay_enabled {
-                return *self.rom.get(addr as usize).unwrap_or(&0xFF);
-            }
+        if self.rom_selected(addr) {
+            return self.chip_status().unwrap_or(*self.rom.get((addr & 0x0FFF) as usize).unwrap_or(&0xFF));
         }
         self.ram[addr as usize]
+    }
+
+    /// ROM_SEL (ARCHITECTURE 6.2): F000-FFFF, or 0000-0FFF with the overlay set. Only when
+    /// a ROM is loaded.
+    fn rom_selected(&self, addr: u16) -> bool {
+        !self.rom.is_empty() && (addr >= 0xF000 || (addr < 0x1000 && self.rom_overlay_enabled))
+    }
+
+    /// What a read of a busy chip returns (AT28C64B DS 4.4, 4.5), or None when a read
+    /// returns the cell: not fitted, idle, or the page load still open in cells mode.
+    fn chip_status(&self) -> Option<u8> {
+        let w = self.jp_we.as_ref()?;
+        let now = self.cycles;
+        if now >= w.end || (w.cells && now - w.last <= TBLC_CYCLES) {
+            return None;
+        }
+        // Bit 7: DATA polling. Bit 6: the toggle bit. Bits 5-0 are undefined on the chip;
+        // complemented here so that a verify run too early always fails.
+        Some(!w.byte & 0xBF | if w.toggle { 0x40 } else { 0 })
     }
 
     /// A memory write cycle, logged as a transfer.
@@ -189,6 +217,16 @@ impl Intel8080 {
         self.transfers.push(Transfer::MemWrite(addr, value));
         // ROM is selected on reads only: writes under the overlay reach RAM (ARCHITECTURE 4).
         if !self.rom.is_empty() && addr >= 0xF000 {
+            // ROM_WE (6.2): with JP-WE fitted the write also reaches the chip. It takes a
+            // byte while idle or while the page load is open (each byte within tBLC of the
+            // last); a byte after that, while the chip programs, is ignored (DS 4.3).
+            if let Some(w) = self.jp_we.as_mut() {
+                let now = self.cycles;
+                if now >= w.end || now - w.last <= TBLC_CYCLES {
+                    self.rom[(addr - 0xF000) as usize] = value;
+                    (w.last, w.byte, w.end) = (now, value, now + TBLC_CYCLES + w.twc);
+                }
+            }
             return;
         }
         self.ram[addr as usize] = value;
@@ -197,6 +235,10 @@ impl Intel8080 {
     /// A data read, logged as a transfer. read_byte is the untraced peek.
     fn load(&mut self, addr: u16) -> u8 {
         let value = self.read_byte(addr);
+        if self.rom_selected(addr) && self.chip_status().is_some() {
+            let w = self.jp_we.as_mut().expect("a busy chip is fitted");
+            w.toggle = !w.toggle;
+        }
         self.transfers.push(Transfer::MemRead(addr, value));
         value
     }
@@ -591,6 +633,23 @@ impl Intel8080 {
         self.pending_interrupt = None;
         self.halted = false;
         self.rom_overlay_enabled = true;
+    }
+
+    /// Fits JP-WE (ARCHITECTURE 6.10): from now on the ROM is an AT28C64B whose /WE follows
+    /// ROM_WE, with a write cycle of `twc` cycles. Pads the image to 4 KB with FF, the
+    /// erased chip.
+    pub fn fit_jp_we(&mut self, twc: u64) {
+        assert!(!self.rom.is_empty(), "JP-WE needs a ROM");
+        self.rom.resize(0x1000, 0xFF);
+        self.jp_we = Some(JpWe { twc, last: 0, end: 0, byte: 0, toggle: false, cells: false });
+    }
+
+    /// Test harness only: what a read inside the page-load window (tBLC after the last
+    /// byte) returns. false, the default: status, as if polling starts at the first write
+    /// (the K-1 assumption). true: the cell, the literal datasheet reading (programming,
+    /// and with it polling, starts when tBLC expires, DS 4.3).
+    pub fn set_load_window_cells(&mut self, on: bool) {
+        self.jp_we.as_mut().expect("JP-WE not fitted").cells = on;
     }
 
     /// Load ROM data (mapped at 0xF000, and at 0x0000 while the overlay is set)

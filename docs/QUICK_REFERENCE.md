@@ -167,7 +167,7 @@ Detail: [ARCHITECTURE.md](ARCHITECTURE.md) (Memory Map).
 | 0080-00FF | Monitor workspace |
 | 0100-EEFF | User programs |
 | EF00-EFFF | Monitor stack page (SP = F000) |
-| F000-FFFF | ROM (4 KB). Writes do nothing unless jumper JP-WE is fitted (never in normal use) |
+| F000-FFFF | ROM (4 KB). Writes do nothing unless jumper JP-WE is fitted (never in normal use; a burn with `examples/burn`, USER_GUIDE 10) |
 
 User programs do their own I/O through the ports. ROM routine addresses are not an API.
 
