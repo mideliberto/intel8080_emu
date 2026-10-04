@@ -25,7 +25,7 @@
 ; adds and ACI 0 carries into A; then ADD/ADC combine the halves. The 32-bit
 ; sum is ADD/ADC and the difference SUB/SBB through memory, with INX, LDAX and
 ; MOV between the bytes, which must leave CY alone; the shifts are DAD H then
-; RAL; the escape test is CPI's CY and Z. About 5900 iterations, 17,700
+; RAL; the escape test is CPI's CY and Z. About 5900 iterations, 17,100
 ; multiplies.
 
         CPU     8080
