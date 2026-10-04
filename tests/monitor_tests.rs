@@ -1617,6 +1617,54 @@ fn example_burn() {
     boot().play("example_burn");
 }
 
+#[test]
+fn example_hanoi() {
+    boot().play("example_hanoi");
+}
+
+#[test]
+fn hanoi_matches_a_rust_model() {
+    // examples/hanoi.asm against a model that shares nothing with it: the 4-disk move list
+    // from a Rust recursion, the counts as 2^n - 1. And the stack, seen from the CPU: the
+    // program's RET leaves SP at F000, so it ran with SP = EFFE where G left it (MONITOR_SPEC
+    // 8), and the recursion went 16 frames deep: HANOI(n > 1) is a 6-byte frame, and
+    // HANOI(16) is entered at EFFC, so HANOI(1) is entered at EFFC - 6 * 15 = EFA2.
+    fn hanoi(n: u32, from: char, to: char, via: char, out: &mut String) {
+        if n > 0 {
+            hanoi(n - 1, from, via, to, out);
+            out.push_str(&format!("{}: {}->{}\r\n", n, from, to));
+            hanoi(n - 1, via, to, from, out);
+        }
+    }
+    let mut want = String::from("G 0100\r\nHanoi, 4 disks, A to C:\r\n");
+    hanoi(4, 'A', 'C', 'B', &mut want);
+    want.push_str("Moves for n disks:\r\n");
+    for n in 1..=16 {
+        want.push_str(&format!("n={}: {}\r\n", n, (1u32 << n) - 1));
+    }
+    want.push_str("Stack OK\r\n");
+    let mut m = boot();
+    for record in std::fs::read_to_string("examples/hanoi.hex").unwrap().lines() {
+        m.run(record);
+    }
+    m.con().borrow_mut().push_input(b"G 0100\r");
+    m.run_to(0x0100);
+    assert_eq!(m.cpu.sp, 0xEFFE, "SP on entry");
+    let sp = m.cpu.sp;
+    let back = m.mem(sp, 2);
+    let back = u16::from_le_bytes([back[0], back[1]]);
+    let (start, mut low) = (m.cpu.cycles, m.cpu.sp);
+    while m.cpu.pc != back {
+        assert!(!m.cpu.halted && m.cpu.cycles - start < BUDGET, "no return, PC={:04X}", m.cpu.pc);
+        m.cpu.execute_one();
+        low = low.min(m.cpu.sp);
+    }
+    assert_eq!(m.cpu.sp, 0xF000, "SP after the RET");
+    assert_eq!(low, 0xEFA2, "lowest SP");
+    assert_eq!(show(&m.con().borrow_mut().take_output()), show(want.as_bytes()));
+    assert_eq!(m.step(b"").unwrap(), b"", "the monitor prompt after the return");
+}
+
 /// A booted monitor with examples/burn.hex pasted and `image` at 1000, its default source.
 fn burner(image: &[u8]) -> Mon {
     let mut m = boot();
