@@ -79,7 +79,7 @@ Built to the spec (Key Decisions, "Phase 10 Specified"). +106 bytes (3010 -> 311
 2. [x] `ask_system.txt` lists R (cross-check C10: `ask_system_lists_every_command` would go red otherwise)
 3. [x] Tests: `registers.txt` (local, daemon path, RAM build), `help.txt`; `registers` and `regs_are_written_only_by_a_g_return` (cold start leaves REGS alone, a capture survives RESET); `go_entry_contract` expects G_RETURN; `workspace_symbols_match_architecture_1_1` expects 10 names and `00FF REGS+15`
 4. [x] Docs: the stale "Phase 10" host-side reset in DEVICE_SPECS 2 rule 8 (Emulator RESET) now points at Someday, like ARCHITECTURE 3.1; the spec named only the ARCHITECTURE copy
-5. [ ] Seen once while building, not Phase 10 code: `stop_while_reset_is_held_returns_and_flushes` (`tests/pi_daemon_tests.rs`) failed 1 of about 10 full `cargo test` runs, at the `trace.last() == RESET` assert. Likely the 5 ms sleep racing the daemon's RESET edge under parallel-test load; 9 reruns green. Not fixed
+5. [x] Seen once while building, not Phase 10 code: `stop_while_reset_is_held_returns_and_flushes` (`tests/pi_daemon_tests.rs`) failed 1 of about 10 full `cargo test` runs, at the `trace.last() == RESET` assert. Fixed 2026-10-03: test timing, not daemon (stop set before the daemon read RESET wins at step 1, per PI_DAEMON 4); the 5 ms sleep is now a wait for RESET handling's register writes
 
 ## Done: Phase 9 - Claude Integration (2026-10-03)
 Built to the spec (Key Decisions, "Phase 9 Specified"). +50 bytes (2960 -> 3010), as the sketch measured.

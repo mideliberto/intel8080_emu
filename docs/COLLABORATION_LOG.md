@@ -648,6 +648,10 @@ Four open, from Phase 11 (`TODO.md`): CLAUDE.md Status and this section disagree
 
 ## Recent Sessions
 
+### 2026-10-03: Flaky stop test
+- `stop_while_reset_is_held_returns_and_flushes`: under 28 CPU hogs it failed 231 of 300 runs, always `trace.last()` = `OUT 0B 5A`, not `RESET`. The daemon is right: PI_DAEMON 4 step 1 checks `stop` before reading RESET, so a stop set before the daemon saw RESET ends it there. The test's 5 ms sleep was the assumption.
+- Fix (test and PI_DAEMON 13.3 row only): after a pass, RESET on, then wait for RESET handling's two register writes (`writes()`) before setting stop. 400 of 400 under the same load. No `src/pi` change.
+
 ### 2026-10-03: Phase 11 - Polish & Documentation
 - Specs integrated: IMPLEMENTATION_ROADMAP Phase 11 (tasks, checklist, criteria) and The End State (Monitor 1.0), MONITOR_SPEC 1.1, ARCHITECTURE 8, new `docs/USER_GUIDE.md` (7.2 and 8.2 written from the shipped 6.18-6.20), README (how-to sections moved to the guide, the command block now a link), QUICK_REFERENCE, CLAUDE.md Build; Key Decision "Phase 11 Specified" with C15-C17.
 - Built: `examples/hello.asm` (RET, not HLT), `examples/memtest.asm` (141 bytes), `examples/Makefile`, both `.hex` committed; 0 ROM bytes (3116, unchanged; `monitor.bin` not rebuilt).

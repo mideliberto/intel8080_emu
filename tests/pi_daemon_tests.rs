@@ -378,8 +378,16 @@ fn stop_while_reset_is_held_returns_and_flushes() {
     rig.start();
     rig.mount(b"A.BIN");
     rig.out(0x0B, 0x5A);
+    // After a pass the daemon is idle and writes no register until RESET handling's two
+    // (5.2 step 1); stop set before then would win at step 1 and never reach the wait.
+    rig.board.wait_edge_calls(rig.board.edge_calls() + 2);
+    let writes = rig.board.writes();
     rig.board.reset(true);
-    std::thread::sleep(Duration::from_millis(5));
+    let deadline = Instant::now() + TIMEOUT;
+    while rig.board.writes() < writes + 2 {
+        assert!(Instant::now() < deadline, "the daemon never saw RESET");
+        std::thread::yield_now();
+    }
     let file = rig.storage().join("A.BIN");
     let (result, trace) = rig.finish();
     assert_eq!(result, Ok(()));

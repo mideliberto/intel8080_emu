@@ -469,7 +469,7 @@ Driven from the test thread with `begin`/`wait` directly, no CPU. Each test give
 | `startup_releases_d_and_drives_ack_and_latch_low` | Board starts with D0-D7 as outputs and ACK and LATCH as outputs latched high | When `setup_pins` returns, D0-D7 are inputs and ACK and LATCH read low; the 13.1 checks pass through a first access |
 | `a_pin_in_an_alt_function_refuses_to_start` | GPFSEL0 has pin 7 in ALT0 | `setup_pins` returns an error naming BCM 7; no register written |
 | `ack_stuck_high_refuses_to_start` | ACK forced high | `setup_pins` returns the `BCM 16 (ACK) reads high` error |
-| `stop_while_reset_is_held_returns_and_flushes` | Mount, `OUT 0B` a byte; RESET on; set stop | `serve` returns `Ok`; the byte is in the file; no ACK raised |
+| `stop_while_reset_is_held_returns_and_flushes` | Mount, `OUT 0B` a byte; after a pass, RESET on; wait for RESET handling's two register writes (5.2 step 1: the daemon is past step 1's stop check); set stop | `serve` returns `Ok`; the byte is in the file; no ACK raised; the trace ends `RESET` |
 | `stop_with_a_stuck_d_bit_returns_and_flushes` | Mount, write a byte; a D bit stuck; `begin(IN 02)`; set stop | `serve` returns `Ok`; the byte is in the file; D0-D7 inputs, ACK and LATCH low |
 | `a_new_client_replaces_the_old` | Client 1; `OUT 00 a`; client 1 reads `a`; client 2 connects; `OUT 00 b` | Client 1 got `a`, then EOF; client 2 got `b` only |
 | `output_with_no_client_is_discarded` | `OUT 00 x`; after a pass; connect; `OUT 00 y` | The client gets `y` only |
