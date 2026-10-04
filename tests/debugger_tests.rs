@@ -466,6 +466,20 @@ fn a_piped_or_scripted_halt_exits() {
 }
 
 #[test]
+fn jp_we_fits_the_jumper() {
+    // ARCHITECTURE 6.10, Emulator: a RAM program writes A5 to FFFE and toggle-polls; D
+    // shows the ROM byte. Without --jp-we the write changes nothing. A HLT ends the run.
+    let input = b":1303000021FEFF36A5062005C207037EAEE640C20B03C90F\rG 0300\rD FFF0 FFFF\rF 0100 0100 76\rG 0100\r";
+    let line = |b: &str| format!("\r\nFFF0: FF FF FF FF FF FF FF FF  FF FF FF FF FF FF {} FF  ................\r\n", b);
+    let (code, out) = emulator(&["--jp-we"], "", input);
+    assert_eq!(code, Some(0), "{}", out);
+    assert!(out.contains(&line("A5")) && out.ends_with("\nHLT at PC=0101\n"), "{}", out);
+    let (code, out) = emulator(&[], "", input);
+    assert_eq!(code, Some(0), "{}", out);
+    assert!(out.contains(&line("FF")), "{}", out);
+}
+
+#[test]
 fn debug_starts_stopped_and_bad_arguments_exit_2() {
     let (code, out) = emulator(&["--debug"], "", b"");
     assert_eq!(code, Some(0), "{}", out);

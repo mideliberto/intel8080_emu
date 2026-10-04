@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use intel8080_emu::cpu::{Intel8080, Transfer};
+use intel8080_emu::cpu::{Intel8080, Transfer, TBLC_CYCLES};
 use intel8080_emu::io::IoDevice;
 use intel8080_emu::registers::*;
 
@@ -2422,4 +2422,183 @@ fn test_overlay_maps_rom_low_until_out_fe() {
     assert_eq!(cpu.a, 0x00, "IN FF after OUT FE");
     assert_eq!(cpu.read_byte(0x0100), 0x55, "0100 is RAM after OUT FE, holding the write made under the overlay");
     assert_eq!(cpu.read_byte(0xF100), rom[0x100], "F000-FFFF is still ROM");
+}
+
+// ===========================================
+// JP-WE FITTED: THE AT28C64B MODEL (ARCHITECTURE 6.10, Emulator)
+// ===========================================
+
+/// tWC for the model tests. The ROM must not depend on it; the monitor tests vary it.
+const TWC: u64 = 1000;
+
+/// A 4 KB ROM of 11h with JP-WE fitted, the overlay as given, at cycle 0.
+fn fitted(overlay: bool) -> Intel8080 {
+    let mut cpu = Intel8080::new();
+    cpu.load_rom(&[0x11; 4096]);
+    cpu.rom_overlay_enabled = overlay;
+    cpu.fit_jp_we(TWC);
+    cpu
+}
+
+/// A data read of `addr` at `cycle`: MOV A,M executed from RAM at 2000.
+fn data_read(cpu: &mut Intel8080, cycle: u64, addr: u16) -> u8 {
+    cpu.load_program(&[0x7E], 0x2000);
+    cpu.set_hl(addr);
+    cpu.cycles = cycle;
+    cpu.execute_one();
+    cpu.a
+}
+
+#[test]
+fn jp_we_byte_write_polls_until_the_write_cycle_ends() {
+    let mut cpu = fitted(false);
+    cpu.cycles = 100;
+    cpu.write_byte(0xF123, 0x5A);
+    let end = 100 + TBLC_CYCLES + TWC;
+    // DATA polling: bit 7 is the complement of the byte written (DS 4.4). The toggle bit:
+    // bit 6 flips on each data read (DS 4.5). Inside tBLC too (the K-1 assumption).
+    let reads: Vec<u8> = [101, 500, 501, end - 1].iter().map(|&c| data_read(&mut cpu, c, 0xF123)).collect();
+    for (i, r) in reads.iter().enumerate() {
+        assert_eq!(r & 0xBF, !0x5A & 0xBF, "read {}: {:02X} is not status", i, r);
+    }
+    for pair in reads.windows(2) {
+        assert_eq!(pair[0] ^ pair[1], 0x40, "I/O6 did not toggle: {:02X?}", reads);
+    }
+    assert_eq!(data_read(&mut cpu, 600, 0xF000) & 0xBF, !0x5A & 0xBF, "another address while busy");
+    assert_eq!(data_read(&mut cpu, end, 0xF123), 0x5A, "the byte at the end of the write cycle");
+    assert_eq!((cpu.read_byte(0xF123), cpu.read_byte(0xF122)), (0x5A, 0x11));
+}
+
+#[test]
+fn jp_we_page_load_is_one_write_cycle() {
+    // 64 bytes at the burn loop's spacing: all stored, one cycle ending last + tBLC + tWC.
+    let mut cpu = fitted(false);
+    for i in 0..64u16 {
+        cpu.cycles = 10 + i as u64 * 46;
+        cpu.write_byte(0xF040 + i, i as u8 ^ 0x80);
+    }
+    let end = 10 + 63 * 46 + TBLC_CYCLES + TWC;
+    assert_eq!(data_read(&mut cpu, end - 1, 0xF07F) & 0x80, 0x00, "DATA polling of the last byte (BF)");
+    cpu.cycles = end;
+    for i in 0..64u16 {
+        assert_eq!(cpu.read_byte(0xF040 + i), i as u8 ^ 0x80, "page byte {}", i);
+    }
+    assert_eq!((cpu.read_byte(0xF03F), cpu.read_byte(0xF080)), (0x11, 0x11), "outside the page");
+}
+
+#[test]
+fn jp_we_byte_after_tblc_is_ignored_until_the_cycle_ends() {
+    let mut cpu = fitted(false);
+    cpu.write_byte(0xF000, 0x01);
+    cpu.cycles = TBLC_CYCLES;
+    cpu.write_byte(0xF001, 0x02); // tBLC after the last: still in the page load
+    let end = 2 * TBLC_CYCLES + TWC;
+    cpu.cycles = 2 * TBLC_CYCLES + 1;
+    cpu.write_byte(0xF002, 0x03); // tBLC + 1: the chip is programming
+    cpu.cycles = end - 1;
+    cpu.write_byte(0xF003, 0x04);
+    cpu.cycles = end;
+    let got: Vec<u8> = (0xF000..0xF004).map(|a| cpu.read_byte(a)).collect();
+    assert_eq!(got, [0x01, 0x02, 0x11, 0x11]);
+    // Idle again: a write opens a new page load.
+    cpu.write_byte(0xF002, 0x03);
+    assert_eq!(cpu.read_byte(0xF002) & 0x80, 0x80, "the new write cycle polls");
+    cpu.cycles = end + TBLC_CYCLES + TWC;
+    assert_eq!(cpu.read_byte(0xF002), 0x03);
+}
+
+#[test]
+fn jp_we_peek_never_toggles() {
+    // read_byte (the debugger's m, opcode fetches) does not flip I/O6; a data read does.
+    let mut cpu = fitted(false);
+    cpu.write_byte(0xF200, 0x00);
+    cpu.cycles = 400;
+    let peek = cpu.read_byte(0xF200);
+    assert_eq!(cpu.read_byte(0xF200), peek);
+    assert_eq!(data_read(&mut cpu, 400, 0xF200), peek, "a data read returns, then toggles");
+    assert_eq!(cpu.read_byte(0xF200), peek ^ 0x40);
+}
+
+#[test]
+fn jp_we_overlay_reads_the_chip_but_never_writes_it() {
+    let mut cpu = fitted(true);
+    cpu.write_byte(0x0100, 0x22); // RAM only (ARCHITECTURE 4): starts no write cycle
+    assert_eq!((data_read(&mut cpu, 10, 0x0100), cpu.read_byte(0xF100)), (0x11, 0x11));
+    cpu.rom_overlay_enabled = false;
+    assert_eq!(cpu.read_byte(0x0100), 0x22);
+    cpu.rom_overlay_enabled = true;
+    cpu.cycles = 20;
+    cpu.write_byte(0xF005, 0x5A);
+    assert_eq!(data_read(&mut cpu, 30, 0x0005) & 0xBF, !0x5A & 0xBF, "the overlay reads a busy chip");
+    assert_eq!(data_read(&mut cpu, 20 + TBLC_CYCLES + TWC, 0x0005), 0x5A);
+}
+
+#[test]
+fn jp_we_cells_reading_returns_the_cell_inside_tblc() {
+    // The literal datasheet reading (DS 4.3): no polling until tBLC expires.
+    let mut cpu = fitted(false);
+    cpu.set_load_window_cells(true);
+    cpu.cycles = 100;
+    cpu.write_byte(0xF010, 0x5A);
+    let end = 100 + TBLC_CYCLES + TWC;
+    assert_eq!(data_read(&mut cpu, 101, 0xF010), 0x5A);
+    assert_eq!(data_read(&mut cpu, 100 + TBLC_CYCLES, 0xF010), 0x5A);
+    assert_eq!(data_read(&mut cpu, 100 + TBLC_CYCLES + 1, 0xF010) & 0xBF, !0x5A & 0xBF);
+    assert_eq!(data_read(&mut cpu, end - 1, 0xF010) & 0xBF, !0x5A & 0xBF);
+    assert_eq!(data_read(&mut cpu, end, 0xF010), 0x5A);
+}
+
+#[test]
+fn jp_we_pads_a_short_rom_with_erased_cells() {
+    let mut cpu = Intel8080::new();
+    cpu.load_rom(&[0x22; 16]);
+    cpu.fit_jp_we(TWC);
+    assert_eq!((cpu.read_byte(0xF00F), cpu.read_byte(0xF010), cpu.read_byte(0xFFFF)), (0x22, 0xFF, 0xFF));
+    cpu.write_byte(0xFFFF, 0x33);
+    cpu.cycles = TBLC_CYCLES + TWC;
+    assert_eq!(cpu.read_byte(0xFFFF), 0x33);
+}
+
+/// Program F123 = 5A from RAM at 2000, toggle-poll I/O6 until two reads agree, HLT.
+/// With `wait`, wait at least tBLC (480 T) before the poll, as K-1 decides.
+/// Returns the cycle of the HLT.
+fn write_and_poll(cpu: &mut Intel8080, wait: bool) -> u64 {
+    let mut p = vec![0x21, 0x23, 0xF1, 0x36, 0x5A]; // LXI H,F123 / MVI M,5A (at cycle 10)
+    if wait {
+        p.extend([0x06, 0x20, 0x05, 0xC2, 0x07, 0x20]); // MVI B,20 / DCR B / JNZ 2007
+    }
+    let poll = 0x2000 + p.len() as u16;
+    p.extend([0x7E, 0xAE, 0xE6, 0x40, 0xC2, poll as u8, (poll >> 8) as u8, 0x76]); // MOV A,M / XRA M / ANI 40 / JNZ poll / HLT
+    cpu.load_program(&p, 0x2000);
+    cpu.cycles = 0;
+    while !cpu.halted {
+        assert!(cpu.cycles < 1_000_000, "the poll never ended");
+        cpu.execute_one();
+    }
+    cpu.cycles
+}
+
+#[test]
+fn jp_we_both_readings_with_and_without_the_tblc_wait() {
+    for twc in [1, TWC, 65_535] {
+        for cells in [false, true] {
+            for wait in [false, true] {
+                let mut cpu = Intel8080::new();
+                cpu.load_rom(&[0x11; 4096]);
+                cpu.fit_jp_we(twc);
+                cpu.set_load_window_cells(cells);
+                let halt = write_and_poll(&mut cpu, wait);
+                let end = 10 + TBLC_CYCLES + twc;
+                let case = format!("tWC {} cells {} wait {}", twc, cells, wait);
+                if cells && !wait {
+                    // The poll ends inside the window, before the chip starts programming.
+                    assert!(halt <= 10 + TBLC_CYCLES, "{}: HLT at {}", case, halt);
+                } else {
+                    assert!(halt >= end, "{}: the poll ended at {}, before the write cycle ({})", case, halt, end);
+                }
+                cpu.cycles = halt.max(end);
+                assert_eq!(cpu.read_byte(0xF123), 0x5A, "{}: the chip programs either way", case);
+            }
+        }
+    }
 }

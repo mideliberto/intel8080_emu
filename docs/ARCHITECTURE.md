@@ -469,7 +469,17 @@ The 15 ns /WE noise filter (typ, AT28C64B DS 4.6.1 (d)) is not relied on.
 5. **Software data protection stays disabled.** The part ships with SDP disabled (AT28C64B DS 4.6.2), and the chip MUST be programmed with SDP left off. The SDP enable and disable sequences write to chip address 1555 (AT28C64B DS 19, 20), which needs A12 = 1. A12 is tied low, so the 8080 can neither set nor clear SDP. A chip with SDP set rejects every in-circuit write, and each rejected write still starts a tWC polling period (AT28C64B DS 4.6.2).
 6. **Power transitions.** The chip blocks writes below VCC 3.8 V (typ) and for 5 ms (typ) after VCC reaches it (AT28C64B DS 4.6.1 (a), (b)). The reset supervisor holds RESET below about 4.6 V (6.6). Neither replaces rule 1.
 
-**Emulator.** It models JP-WE open: a write to F000-FFFF never changes the ROM image (section 4). A fitted jumper (write cycle, polling reads) is modeled together with the burn routine (Someday).
+**Emulator.** JP-WE is open by default: a write to F000-FFFF never changes the ROM image (section 4). `--jp-we` (7.4, Entry) fits it, so that a burn can be rehearsed with no programmer: `Intel8080::fit_jp_we(twc)` in `src/cpu.rs`, with tWC = 20,480 cycles (10 ms at 2.048 MHz). The image lives in memory only and is never written back to `rom/monitor.bin`. Fitted, the ROM behaves as an AT28C64B with SDP off (rule 5); "now" is the cycle count at the start of the instruction:
+
+| Access to the chip (F000-FFFF; reads also 0000-0FFF with the overlay set) | Model |
+|---------------------------------------------------------------------------|-------|
+| Write, chip idle or page load open (within tBLC = 307 cycles, 150 us at 2.048 MHz, of the last accepted write) | Stored at once. The write cycle now ends tBLC + tWC after this write. The model has no page latch: a byte for another page is stored at its own address (on the chip, undefined; rule 4). |
+| Write after the page load closed, before the write cycle ends | Ignored: the chip is programming. |
+| Data read before the write cycle ends (default reading; the page-load window is below the table) | Status: bit 7 is the complement of bit 7 of the last byte written (DATA polling), bit 6 flips on each data read (the toggle bit), bits 5-0 are the complement of the last byte (undefined on the chip; this makes a verify run too early fail). |
+| Opcode or operand fetch before the write cycle ends; a debugger read | Status as above, without flipping bit 6. |
+| Any read after the write cycle | The cell. |
+
+The page load is in cycles, so it follows the CPU, not host time. A write to 0000-0FFF reaches RAM only, with or without the overlay. The RAM side of a write to F000-FFFF is unchanged (section 4: nothing reads it). RESET does not touch the chip. The datasheet leaves open what a read inside the page-load window returns before programming starts (bench item K-1). The default is status, as if polling starts with the first write; the test harness switch `set_load_window_cells(true)` gives the literal reading, the cell, and the tests run both. tWC is a test variable: tests run 1 to 65,535 cycles, and code that writes the ROM MUST NOT depend on it (rule 3). Tests: the `jp_we_` tests in `tests/cpu_tests.rs`, `tests/monitor_tests.rs` and `tests/debugger_tests.rs`.
 
 ### 6.11 Status LEDs
 
@@ -569,7 +579,7 @@ Decided 2026-10-03 (Mike). 10 kohm pull-up SIPs hold the address bus and the sys
 
 ## 7. Host-Side Conveniences (Emulator Only)
 
-**Rule:** none of these is visible to the 8080 as a port, a memory location, a byte in its input stream, or a timing difference. The ROM contains no code path that exists only for the emulator. This section is the only home for host-reserved keys and the key map; `DEVICE_SPECS.md` and `MONITOR_SPEC.md` link here.
+**Rule:** none of these is visible to the 8080 as a port, a memory location, a byte in its input stream, or a timing difference. The ROM contains no code path that exists only for the emulator. This section is the only home for host-reserved keys and the key map; `DEVICE_SPECS.md` and `MONITOR_SPEC.md` link here. One host flag is not a convenience: `--jp-we` models a board jumper the 8080 can see, and its contract is in 6.10 (Emulator).
 
 ### 7.1 Host Key Map
 
@@ -603,7 +613,7 @@ On hardware the Pi passes every byte the terminal sends; the key map does not ex
 | **Halt** | v1 has no interrupt source that could wake a halted CPU (5.8). In an interactive run (stdin is a terminal and there is no `--script`), a halt opens the debugger prompt with the reason `halt` (7.4): the user can inspect, and `q` quits. Otherwise (piped stdin, or `--script`) the run loop returns a halted status, and `main.rs` prints `HLT at PC=xxxx` to host stdout, where xxxx is PC (the address after the HLT), restores the terminal, and exits. Code: `halt_prompts` in `src/main.rs`. |
 | **Debugger** | Every step goes through the debugger (7.4), which records the trace ring and checks breakpoints. When the pump reads Ctrl-E, the bytes before it go into the FIFO and the debugger prompt opens before the next step. |
 | **Host banner and exit lines** | "8080 Emulator", the build timestamp, and any exit message go to host stdout from `main.rs`, never from the CPU core or from a device the 8080 can see. |
-| **Test harness** | Allowed only on the host side: the real port map from `build_bus` with the `Console`'s host side (scripted input and captured output); test `IoDevice`s mapped with `map_port`, for example one that records every port access; `load_program` (writes that bypass the ROM and the overlay); a CPU with no ROM loaded; `interrupt(rst)` (5.7); direct access to the registers, memory, `cycles`, `halted` and `interrupts_enabled`; the debugger's command parser (7.4). |
+| **Test harness** | Allowed only on the host side: the real port map from `build_bus` with the `Console`'s host side (scripted input and captured output); test `IoDevice`s mapped with `map_port`, for example one that records every port access; `load_program` (writes that bypass the ROM and the overlay); a CPU with no ROM loaded; `interrupt(rst)` (5.7); direct access to the registers, memory, `cycles`, `halted` and `interrupts_enabled`; the debugger's command parser (7.4); `fit_jp_we(twc)` and `set_load_window_cells(on)`, the fitted JP-WE and its page-load reading (6.10, Emulator). |
 | **No throttle** | The emulator runs at host speed, apart from the idle wait above. `cycles` counts T-states only. |
 
 ### 7.3 Port Trace Format
@@ -633,6 +643,7 @@ Host-side only. The 8080 cannot observe it: it adds no cycles, no port, no memor
 | Ctrl-E (7.1) | Stops at the next step boundary, at most one pump interval (7.2) later. |
 | `--debug` | Starts stopped, before the first instruction. |
 | `--script FILE` | Starts stopped and reads commands from FILE, one per line, before the terminal. Each line is echoed as `dbg> line`. Blank lines and lines starting with `#` are skipped. |
+| `--jp-we` | Not a debugger entry: runs with JP-WE fitted (6.10, Emulator). Combines with the others. |
 | A breakpoint, watchpoint or I/O break | Stops (below). |
 | A halt, in an interactive run (7.2) | Stops with the reason `halt`. The CPU stays halted: `s` prints the registers line, and `c` stops again at once. |
 
@@ -689,4 +700,4 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 - **Phase 10 (done 2026-10-03):** the monitor's `R` command and the G_RETURN capture (`MONITOR_SPEC.md` 6.20, 8) and the REGS workspace row (1.1). No circuit change.
 - **Phase 11 (done 2026-10-03):** example programs, the user guide and a consistency pass. No memory-map, circuit or
   ROM change.
-- **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6); a monitor routine that reprograms the ROM through JP-WE (6.10 rules), with its emulator model.
+- **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6); a monitor routine that reprograms the ROM through JP-WE (6.10 rules); its emulator model exists (6.10, Emulator).

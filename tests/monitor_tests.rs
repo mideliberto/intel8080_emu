@@ -715,6 +715,33 @@ fn go() {
 }
 
 #[test]
+fn jp_we_fitted_lets_a_ram_program_write_the_rom() {
+    // ARCHITECTURE 6.10: a program in RAM writes A5 to FFFE, waits at least tBLC (480 T),
+    // toggle-polls I/O6 until two reads agree, and returns. With JP-WE fitted at the prompt,
+    // for any tWC and both readings of the page-load window, the ROM holds the byte. With
+    // JP-WE open (the default) nothing changes. Not a transcript: on the board it would
+    // rewrite the ROM.
+    // LXI H,FFFE / MVI M,A5 / MVI B,20 / DCR B / JNZ 0307 / MOV A,M / XRA M / ANI 40 / JNZ 030B / RET
+    let prog = [0x21, 0xFE, 0xFF, 0x36, 0xA5, 0x06, 0x20, 0x05, 0xC2, 0x07, 0x03,
+        0x7E, 0xAE, 0xE6, 0x40, 0xC2, 0x0B, 0x03, 0xC9];
+    let line = |b: &str| format!("FFF0: FF FF FF FF FF FF FF FF  FF FF FF FF FF FF {} FF  ................\\r\\n", b);
+    for twc in [1, 20_480, 65_535] {
+        for cells in [false, true] {
+            let mut m = boot();
+            m.poke(0x0300, &prog);
+            m.cpu.fit_jp_we(twc);
+            m.cpu.set_load_window_cells(cells);
+            assert_eq!(m.run("G 0300"), "", "tWC {} cells {}", twc, cells);
+            assert_eq!(m.run("D FFF0 FFFF"), line("A5"), "tWC {} cells {}", twc, cells);
+        }
+    }
+    let mut m = boot();
+    m.poke(0x0300, &prog);
+    assert_eq!(m.run("G 0300"), "");
+    assert_eq!(m.run("D FFF0 FFFF"), line("FF"));
+}
+
+#[test]
 fn hex_loader() {
     boot().play("hex");
 }

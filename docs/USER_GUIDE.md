@@ -28,6 +28,7 @@ Specs: [ARCHITECTURE.md](ARCHITECTURE.md) (memory, boot, hardware), [DEVICE_SPEC
 cargo run                       # from the repo root: rom/monitor.bin, storage files in storage/
 cargo run -- --debug            # start stopped at the debugger prompt
 cargo run -- --script FILE      # run debugger commands from FILE first
+cargo run -- --jp-we            # JP-WE fitted: writes to F000-FFFF program the ROM image (in memory only)
 ```
 
 - **Ctrl-C** quits. **Ctrl-E** stops the 8080 and opens the debugger (section 8). The 8080 never sees

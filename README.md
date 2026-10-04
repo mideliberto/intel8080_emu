@@ -36,6 +36,8 @@ Command summary: [docs/QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md); full contra
     cargo run                      # the monitor prompt; Ctrl-C quits, Ctrl-E opens the debugger
     > ?                            # the command list
 
+    cargo run -- --jp-we           # JP-WE fitted: a program can rewrite the ROM image (ARCHITECTURE 6.10)
+
 Paste `examples/hello.hex` at the prompt, then `G 0100`. Everything else (loading your own programs,
 saving to storage, the debugger, the Pi daemon, the RAM test build): [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 

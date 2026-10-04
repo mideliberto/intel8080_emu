@@ -41,18 +41,20 @@ enum Signal {
     Debug,
 }
 
-const USAGE: &str = "usage: intel8080 [--debug] [--script FILE]";
+const USAGE: &str = "usage: intel8080 [--debug] [--script FILE] [--jp-we]";
 
 fn main() {
     // ARCHITECTURE 7.4, Entry.
     let mut start_stopped = false;
     let mut scripted = false;
+    let mut jp_we = false;
     let mut script = Vec::new();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--debug" => start_stopped = true,
+            "--jp-we" => jp_we = true,
             "--script" if i + 1 < args.len() => {
                 i += 1;
                 let text = std::fs::read_to_string(&args[i]).unwrap_or_else(|e| {
@@ -82,6 +84,10 @@ fn main() {
     let (bus, console) = build_bus(Path::new("storage"), mailbox::local_time, AskConfig { key, ..AskConfig::default() });
     *cpu.io_bus_mut() = bus;
     cpu.load_rom_from_file(Path::new("rom/monitor.bin")).expect("Failed to load ROM");
+    if jp_we {
+        // ARCHITECTURE 6.10, Emulator. tWC 10 ms (AT28C64B DS 16 max) at 2.048 MHz.
+        cpu.fit_jp_we(20_480);
+    }
     let mut dbg = Debugger::new();
     if let Ok(text) = std::fs::read_to_string("rom/monitor.sym") {
         dbg.load_symbols(&text).expect("rom/monitor.sym");
