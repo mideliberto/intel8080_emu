@@ -269,7 +269,7 @@ The emulator CPU has one interrupt input, `interrupt(rst)`, callable from the ho
 
 ## 6. Hardware Interface
 
-The circuits the hardware build must contain. The software-visible behavior of every port is in `DEVICE_SPECS.md`. The hardware build itself is Someday; this section is the contract it must meet. Timing in this section was checked in the 2026-10 hardware-alignment pass against the MCS-80 User's Manual 98-153D (Oct 1977: 8080A p.6-3..6-5, 8224 p.6-21..6-25, 8228 p.6-32..6-36) and the TI/Nexperia 74HCT and 74LVC datasheets. Figures are datasheet worst case at tCY = 488.28 ns, with t = 0 at phi1 rising in T1, unless marked (est). Items marked **[bench]** can only be closed by measurement on the built board. Pins, levels and cycle timing of the 8080A, 8224 and 8228: `reference/8080_HARDWARE.md` (98-153B, Sep 1975 edition; its page numbers differ from 98-153D), cited as "reference N". The ROM write path (6.10) is checked against the AT28C64B datasheet, Atmel 0270L-PEEPR-2/09 (https://ww1.microchip.com/downloads/en/DeviceDoc/doc0270.pdf), cited as "AT28C64B DS" with its section numbers. Gate drive and delays in 6.10-6.11 are from TI SCLS063G (SN74HCT08) and SCLS171F (SN74HCT138), worst case at VCC 4.5 V, -40 to 85 °C.
+The circuits the hardware build must contain. The software-visible behavior of every port is in `DEVICE_SPECS.md`. This section is the contract the board must meet. It stays normative for circuits and rules; pin numbers live only in the board netlist `hw/board.net.txt`, which `tests/netlist_tests.rs` checks against this section pad by pad (`HARDWARE_BUILD.md` 2.2). Timing in this section was checked in the 2026-10 hardware-alignment pass against the MCS-80 User's Manual 98-153D (Oct 1977: 8080A p.6-3..6-5, 8224 p.6-21..6-25, 8228 p.6-32..6-36) and the TI/Nexperia 74HCT and 74LVC datasheets. Figures are datasheet worst case at tCY = 488.28 ns, with t = 0 at phi1 rising in T1, unless marked (est). Items marked **[bench]** can only be closed by measurement on the built board. Pins, levels and cycle timing of the 8080A, 8224 and 8228: `reference/8080_HARDWARE.md` (98-153B, Sep 1975 edition; its page numbers differ from 98-153D), cited as "reference N". The ROM write path (6.10) is checked against the AT28C64B datasheet, Atmel 0270L-PEEPR-2/09 (https://ww1.microchip.com/downloads/en/DeviceDoc/doc0270.pdf), cited as "AT28C64B DS" with its section numbers. Gate drive and delays in 6.10-6.11 are from TI SCLS063G (SN74HCT08) and SCLS171F (SN74HCT138), worst case at VCC 4.5 V, -40 to 85 °C.
 
 ### 6.1 Clock and CPU Support
 
@@ -344,14 +344,14 @@ The read-backs guarantee the 74HCT374 tsu 25 ns, th 10 ns and tw 20 ns. Back-to-
 | Signal | Count | Pi direction | Path | BCM GPIO |
 |--------|-------|--------------|------|----------|
 | A0-A6 | 7 | in | 74LVC245A (A7 is always 0 in the window) | 4-10 |
-| D0-D7 | 8 | in on OUT cycles, out to the IN latch on IN cycles | in: 74LVC245A; out: 220-330 ohm series, then 74HCT374 inputs | 20-27 |
+| D0-D7 | 8 | in on OUT cycles, out to the IN latch on IN cycles | in: 74LVC245A B outputs through a 330 ohm series array; out: the 74HCT374 inputs, which share the node of the Pi pins (the array sits between that node and the 245) | 20-27 |
 | DIR (/I/OR) | 1 | in | 74LVC245A | 11 |
 | REQ (Q AND WAIT) | 1 | in | 74LVC245A | 12 |
 | RESET | 1 | in | 74LVC245A | 13 |
 | ACK | 1 | out | 74HCT14 Schmitt input | 16 |
 | LATCH | 1 | out | 74HCT374 CLK (accepts 3.3 V) | 17 |
 
-The Pi's GPIO runs at 3.3 V and is not 5 V tolerant. Every 5 V signal reaches it through a 74LVC245A powered from the Pi's 3V3 pin. Do not use a 74LVCH245A: its bus-hold fights the Pi on D0-D7. Every signal sits in GPLEV0, so one read is an atomic snapshot. D0-D7 sit in GPFSEL2, so turning the data lines around takes one register write.
+The Pi's GPIO runs at 3.3 V and is not 5 V tolerant. Every 5 V signal reaches it through a 74LVC245A powered from the Pi's 3V3 pin. Do not use a 74LVCH245A: its bus-hold fights the Pi on D0-D7. Every signal sits in GPLEV0, so one read is an atomic snapshot. D0-D7 sit in GPFSEL2, so turning the data lines around takes one register write. The 330 ohm array limits the current if the Pi drives D0-D7 while the data 74LVC245A is enabled (a daemon fault, or a jig on the header), and the Pi's read-back still sees the latch inputs, which sit on its own node. On OUT cycles it adds a time constant of about 10 ns (est: 330 ohm into the Pi pin, the 74HCT374 input and the ribbon, about 30 pF), well inside the >= 90 ns by which OUT data leads REQ (above).
 
 **Power and boot independence.** The 8080 board and the Pi have separate supplies, grounds joined at the header, and may be powered in either order, provided that:
 - every 74LVC245A runs from the Pi's 3V3, so an unpowered Pi leaves them in Ioff and is never back-powered;
@@ -383,7 +383,7 @@ One 74HCT74 half; the other half is the WAIT flip-flop (6.4). /PRE = NOT RESET: 
   - When RESET is next low, it returns every device to its power-on state (`DEVICE_SPECS.md` rule 2.8), and only then serves a REQ. The 8080's first Pi-window access after reset waits under READY until then. This costs zero ROM bytes.
   - A bouncing button can produce several RESET pulses. Each one is a full device reset.
 - A late ACK for a cycle cut off by reset is never raised. One residual race is accepted: the bus thread is descheduled between its last RESET check and the ACK write for longer than the RESET pulse plus the boot path to the first Pi-window access (about 0.12 ms).
-- Nothing else resets the machine, except the optional Pi TEST_RESET (decision TEST-RESET), which pulls the same RESIN node.
+- Nothing else resets the machine, except the optional Pi TEST_RESET (decision TEST-RESET), which pulls the same RESIN node through a 2N3904: collector on RESIN, emitter to GND, base from BCM 18 through 4.7 kohm. At the Pi's minimum VOH of 2.6 V (6.7) and VBE(sat) <= 0.85 V (onsemi 2N3904) that is at least 0.37 mA of base current, against at most 1.75 mA of collector current (the DS1813 pull-up, 5.25 V into 3.5 kohm minimum, plus the 8224 IF of 0.25 mA, reference 11.6), so the transistor saturates. With no Pi the base floats behind 4.7 kohm and the transistor stays off. A test rig that drives TEST_RESET MUST hold each pulse for at least the DS1813 pushbutton detect time tPB, or the full reset time after the pulse, which the 1 ms gate above relies on, is not guaranteed. tPB is 1 us minimum in DS1813 rev 022306; an older Dallas edition says 1 ms in its text, so the rig holds at least 1 ms (`PI_DAEMON.md` 15).
 
 ### 6.7 Other CPU Pins
 
@@ -422,6 +422,7 @@ The console transport between the terminal and the Pi (UART with RTS/CTS, USB ga
 - No 8080A pin or supply may go more than 0.3 V below VBB (8080A absolute maximum). VBB has a Schottky clamp to GND (anode VBB, cathode GND) at the CPU socket. **[bench]** At bring-up, scope VBB single-shot at power-up and power-down: it MUST stay at or below +0.3 V relative to GND.
 - +12 V MUST never exceed 12.6 V, including at turn-on. The 8224 VDD absolute maximum is 13.5 V.
 - If -5 V comes from a charge pump fed by +5 V, VBB tracks VCC. In that case +5 V MUST be held at 4.85-5.15 V at the board. How the rails are generated is decision POWER (`HARDWARE_BUILD.md`, Decisions).
+- **5 V input.** A 2.1 mm centre-positive DC jack feeds the board through a P-channel MOSFET reverse-polarity switch: drain on the jack's centre pin, source on the board +5 V, gate to GND through 10 kohm. With the right polarity the body diode conducts until the channel enhances at VGS = -VIN. With the plug reversed VGS is 0 and the body diode is reverse-biased, so no current flows and no rail goes negative. The part MUST be a logic-level P-MOSFET with RDS(on) specified at VGS = -4.5 V or less and a VGS rating above 5.25 V, so that no gate zener is needed. Fitted: Vishay SUP53P06-20, RDS(on) <= 25 mohm at VGS = -4.5 V, ID = -20 A, 25 °C, VGS +/-20 V (Vishay document 68633 rev C). At about 1 A (the +5 V load above plus about 0.25 A into the +12 V boost, est) it drops at most 25 mV, about 40 mV hot (est: RDS(on) rises with temperature). The 4.85-5.15 V window is measured at the board, after the FET (TP3), so the adapter MUST deliver at least about 4.9 V at the jack under load. **[bench]** +5 V at TP3 and at the jack, board loaded.
 - Decoupling: 0.1 uF per IC per rail, plus 10 uF bulk per rail.
 - The Pi has its own supply (6.4, Power and boot independence).
 
@@ -431,18 +432,16 @@ Decided 2026-10-03 (Mike). The circuit that lets the 8080 reprogram its own ROM.
 
 **Circuit.** One 74HCT138 decodes the ROM range during MEMW. Jumper JP-WE connects its output to the EEPROM:
 
-| 74HCT138 pin | Connection |
-|--------------|------------|
-| 1 (A) | A12 (8080A pin 37) |
-| 2 (B) | A13 (8080A pin 38) |
-| 3 (C) | A14 (8080A pin 39) |
-| 6 (G1) | A15 (8080A pin 36) |
-| 4 (/G2A) | 8228 /MEMW (pin 26) |
-| 5 (/G2B) | GND |
-| 7 (/Y7) | JP-WE pin 1, and LA-C (6.12) |
-| 9-15 (/Y6-/Y0) | unconnected |
+| 74HCT138 input or output | Connection |
+|--------------------------|------------|
+| A, B, C | A12, A13, A14 |
+| G1 | A15 |
+| /G2A | 8228 /MEMW |
+| /G2B | GND |
+| /Y7 | JP-WE, and LA-C (6.12) |
+| /Y6-/Y0 | unconnected |
 
-JP-WE pin 2 is AT28C64B /WE (pin 27), which has a 10 kohm pull-up to +5 V.
+The other side of JP-WE is the AT28C64B /WE, which has a 10 kohm pull-up to +5 V. Pin numbers: `hw/board.net.txt` (U12, JP1), checked against this list by `tests/netlist_tests.rs`.
 
 - /Y7 is low only while A15-A12 = 1111 and /MEMW is low (SCLS171F Table 7-1). With JP-WE fitted, ROM /WE follows /Y7: that is ROM_WE in 6.2. /Y7 then also drives the pull-up, 0.5 mA, inside the 4 mA at which HCT output levels are specified.
 - The MEMW edges reach /WE through one enable path, at most 42 ns (SCLS171F 5.5). Address changes cannot glitch /WE: the address is stable from 688 ns before /WR falls until at least 118 ns after it rises (tAW, tWA, reference 3.5), and /MEMW is inactive outside that window.
@@ -522,7 +521,7 @@ Decided 2026-10-03 (Mike). Three 2x10 0.1-inch headers carry the bus to an exter
 - LA-B: CPU-side data and the CPU timing signals.
 - LA-C: system strobes, the WAIT and overlay flip-flops, the Pi handshake, the ROM write decode and HALT.
 
-Each header has 16 signals on pins 1-16 in channel order and GND on pins 17-20. Pin order, the analyzer and sigrok decoding: `HARDWARE_BUILD.md` 3.1.
+Each header has 16 signals in channel order and GND on four pins. Channel order, the analyzer and sigrok decoding: `HARDWARE_BUILD.md` 3.1; pin numbers: `hw/board.net.txt`.
 
 1. **Logic levels only.** phi1 and phi2 (8224 pins 11, 10) swing to >= 9.4 V (reference 11.6) and MUST NOT be on a header. The clock reference is the 8224 phi2 (TTL) output (pin 6). 8228 /INTA (pin 23) sits on the +12 V RST 7 strap (6.7) and MUST NOT be on a header. ACK and LATCH are 3.3 V levels (6.4). Every other signal is a 5 V level.
 2. **Direct taps, except CPU-side D0-D7,** which go through 1 kohm series resistors at the tap (one isolated 8-resistor array). On reads the 8228 drives the CPU side. Its VOH (>= 3.6 V) is characterized only at -10 uA, and its tRD of 30 ns, which is part of the 118 ns memory read budget (6.2), only at 25 pF (reference 12.6, 12.7). D4 and D6 already carry more than that before any probe: the 8080A pin (COUT <= 20 pF on a bidirectional pin, reference 3.2), the GAL tap (CIN <= 8 pF, ATF22V10C) and 5-10 pF of trace, 33-38 pF (est). That is a pre-existing risk (`HARDWARE_BUILD.md` 6); the resistor reduces what the probe adds to it, and bring-up step 3 must pass with the analyzer attached. The cost is about 33 ns of extra edge delay at the analyzer (2.2 x 1 kohm x 15 pF, est), which the sampling rules in `HARDWARE_BUILD.md` 3.1 allow for.

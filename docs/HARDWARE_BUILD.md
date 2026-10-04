@@ -8,7 +8,7 @@ Chip-level reference (pins, levels, cycle timing): `reference/8080_HARDWARE.md`.
 
 ## 1. Decisions
 
-All accepted by Mike on 2026-10-02, except ROM-WE, STATUS-LEDS and LA-HEADER (2026-10-03), BUS-RESISTORS (revised 2026-10-03) and GLUE (revised 2026-10-04). Record and rationale: `COLLABORATION_LOG.md`, Key Decisions ("Hardware Alignment: Buildable, One Hard Fix", "`pi8080d --sim`, the RAM Test Build, Board Debug Aids" and "Board Choices Signed Off; Bus Pull-Ups"). The IDs are the ones the specs cite.
+All accepted by Mike on 2026-10-02, except ROM-WE, STATUS-LEDS and LA-HEADER (2026-10-03), BUS-RESISTORS (revised 2026-10-03), GLUE, TEST-RESET, POWER and CONSTRUCTION (revised 2026-10-04) and NETLIST (2026-10-04). Record and rationale: `COLLABORATION_LOG.md`, Key Decisions ("Hardware Alignment: Buildable, One Hard Fix", "`pi8080d --sim`, the RAM Test Build, Board Debug Aids" and "Board Choices Signed Off; Bus Pull-Ups"). The IDs are the ones the specs cite.
 
 | ID | Outcome |
 |----|---------|
@@ -20,11 +20,12 @@ All accepted by Mike on 2026-10-02, except ROM-WE, STATUS-LEDS and LA-HEADER (20
 | GLUE | One ATF22V10C GAL plus 74HCT74/14/08, a second 74HCT08 (HALT term) and a 74HCT138 (ROM /WE gate). The GAL drives DB0 for IN FF itself; there is no 74HCT125 (`ARCHITECTURE.md` 6.5). Pinout and equations: `hw/glue.pld` (2.1). Discrete HCT is a valid fallback; it needs a tri-state buffer for the DB0 drive. |
 | MEMORY-PARTS | AT28C64B-15PU ROM, 2x AS6C62256-55PCN RAM. |
 | BUS-RESISTORS | 10 kohm pull-up SIPs on A0-A15 and system DB0-DB7; none on CPU-side D0-D7 (`ARCHITECTURE.md` 6.13). Jumpered 2.2 kohm DB pull-down for bring-up step 2 only, never fitted together with the socketed DB SIP. |
-| POWER | 5 V input, Pololu U3V40F12 (+12 V), ICL7660 (-5 V), Schottky VBB clamp. Pi on its own supply. Current-limited bench +5 V for the first power-up. |
+| POWER | 5 V input through a 2.1 mm centre-positive jack and a P-MOSFET reverse-polarity switch (`ARCHITECTURE.md` 6.9), Pololu U3V40F12 (+12 V), ICL7660 (-5 V), Schottky VBB clamp. Pi on its own supply. Current-limited bench +5 V for the first power-up. |
 | RESET-SOURCE | DS1813-5 class open-drain supervisor, button on its RST node. |
-| TEST-RESET | Footprint fitted; populated only for the unattended test rig. |
+| TEST-RESET | 2N3904 with a 4.7 kohm base resistor on /RESIN (`ARCHITECTURE.md` 6.6). Footprint fitted; populated only for the unattended test rig, whose pulses last at least 1 ms (DS1813 tPB). |
 | CPU-SOURCING | One Intel/AMD 8080A reference plus two spares; 2x 8224, 2x 8228. |
-| CONSTRUCTION | One 2-layer PCB, no backplane. |
+| CONSTRUCTION | One 2-layer PCB, 160 x 120 mm, no backplane (2.2). The manual-ACK jig for step 4 is off-board and plugs into the Pi header (3.2). |
+| NETLIST | `hw/board.net.txt` is the only home of pin numbers, checked pad by pad by `tests/netlist_tests.rs`; `ARCHITECTURE.md` 6 stays normative for circuits and rules (2.2). RDYIN is wired straight to the WAIT flip-flop /Q with a 10 kohm pull-up, no jumper. The 330 ohm Pi data array sits between the data 74LVC245A and the node of the Pi pins and the IN-latch inputs (`ARCHITECTURE.md` 6.4). |
 | PI-PLATFORM | Pi 4B, busy-poll service (section 5; service model in `PI_DAEMON.md`). |
 | CONSOLE-TRANSPORT | One TCP listener in the Pi daemon; a new client replaces the old. |
 | CONSOLE-OUTPUT | Output buffer of at least 2 MiB; discard on full and on RESET. |
@@ -34,7 +35,7 @@ All accepted by Mike on 2026-10-02, except ROM-WE, STATUS-LEDS and LA-HEADER (20
 | HW-STEP | No hardware single-step in v1 (Someday). The emulator is the debugger. |
 | ROM-WE | AT28C64B /WE: 74HCT138 decode of MEMW to F000-FFFF, through jumper JP-WE, pulled up at the chip. Built open. Programmed with SDP off. The burn routine is Someday. `ARCHITECTURE.md` 6.10. |
 | STATUS-LEDS | WAIT, HALT, INTE and HLDA LEDs on 74HCT08 gates. `ARCHITECTURE.md` 6.11. |
-| LA-HEADER | Three 2x10 analyzer headers (LA-A, LA-B, LA-C), 16 channels each, GND on pins 17-20; CPU-side D0-D7 through 1 kohm. `ARCHITECTURE.md` 6.12; pin order in 3.1 here. |
+| LA-HEADER | Three 2x10 analyzer headers (LA-A, LA-B, LA-C), 16 channels each, GND on pins 17-20; CPU-side D0-D7 through 1 kohm. `ARCHITECTURE.md` 6.12; channel order in 3.1 here, pins in the netlist. |
 
 ---
 
@@ -60,32 +61,35 @@ Availability was checked during the alignment pass and not re-verified since.
 | SN74HCT374N | 1 | IN latch, Pi to system data bus | TI, Active |
 | SN74LVC245AN (not LVCH) | 3 | 5 V to 3.3 V: A0-A6 + DIR; D0-D7; REQ + RESET. VCC from the Pi 3V3 | TI, Active |
 | DS1813-5 (or equivalent open-drain 5 V supervisor, ~4.6 V trip) | 1 | RESIN power-on, brownout and button reset | Analog Devices/Maxim, TO-92; status not re-verified |
-| Pushbutton | 2 | Reset; manual ACK (bring-up jig) | Common |
+| 6 mm tactile pushbutton | 1 | Reset (SW1). The jig's buttons: 3.2 | Common |
 | Pololu U3V40F12 | 1 | +12 V boost from +5 V (4%, <= 12.48 V) | Pololu #4016, about $10 |
-| ICL7660 (or ICL7660S/MAX1044) + 2x 10 uF | 1 | -5 V charge pump for VBB (<= 1 mA) | Common |
+| ICL7660 (or ICL7660S/MAX1044) | 1 | -5 V charge pump for VBB (<= 1 mA). Its two 10 uF capacitors are in the electrolytic row | Common |
 | BAT43 or BAT85 Schottky | 1 | VBB clamp to GND at the CPU socket | Common |
 | 1 kohm resistor | 1 | 8228 INTA (pin 23) to +12 V, RST 7 strap | Common |
-| 10 kohm resistor | 2 | INT pull-down (HOLD and BUSEN tied to GND directly); ROM /WE pull-up | Common |
+| 10 kohm resistor | 4 | INT pull-down (HOLD and BUSEN tied to GND directly); ROM /WE pull-up; RDYIN pull-up (holds RDYIN high in step 2, before the 74HCT74 is fitted); P-MOSFET gate to GND | Common |
 | 4.7 kohm resistor | 2 | ACK and LATCH pull-downs, 5 V side | Common |
-| 220-330 ohm resistor array (8) | 1 | Series resistors on Pi D0-D7 outputs (crash and contention protection) | Common |
+| 330 ohm isolated 8-resistor array (16-pin DIP) | 1 | Pi D0-D7 series array, between the data 74LVC245A outputs and the node of the Pi pins and the IN-latch inputs (`ARCHITECTURE.md` 6.4): contention protection | Common |
 | 2.2 kohm 9-pin bused SIP + jumper | 1 | Bring-up NOP free-run pull-down on DB0-DB7; removed in normal operation | Common |
 | 10 kohm 9-pin bused SIP (8 resistors, common pin to +5 V), 2% | 3 | Bus pull-ups: A0-A7, A8-A15, system DB0-DB7 (`ARCHITECTURE.md` 6.13) | Common |
 | 9-pin 0.1-inch SIP socket (or socket strip) | 1 | DB pull-up SIP: out while the 2.2 kohm pull-down is in (step 2) | Common |
-| 8-position DIP switch | 1 | Manual IN-latch data for the bring-up jig (LATCH and ACK buttons via jumpers) | Common |
-| 2N7000 | 1 | Optional Pi TEST_RESET (inverting open-drain on RESIN) | Common |
+| 2N3904 + 4.7 kohm resistor | 1 | Optional Pi TEST_RESET: open collector on /RESIN, base from BCM 18 (`ARCHITECTURE.md` 6.6). Footprint fitted; populated for the test rig only | Common |
 | Low-current 3 mm LED (`ARCHITECTURE.md` 6.11) | 4 | Status LEDs WAIT, HALT, INTE, HLDA | Common |
 | 1.0 kohm resistor | 4 | LED series resistors | Common |
 | 1 kohm isolated 8-resistor array (16-pin DIP) | 1 | Analyzer isolation on the CPU-side D0-D7 taps (`ARCHITECTURE.md` 6.12) | Common |
 | 2x10 0.1-inch header (a shrouded box header also takes single leads) | 3 | Logic-analyzer headers LA-A, LA-B, LA-C (3.1) | Common |
 | 2-pin 0.1-inch header + shunt | 1 | JP-WE ROM write enable. Built open, with the shunt parked on one pin | Common |
-| 0.1 uF ceramic | 32 | Decoupling, one per IC per rail | Common |
-| 10 uF electrolytic | 3 | Bulk per rail (+5, +12, -5) | Common |
-| 5 V 2 A regulated supply | 1 | Board input | Common |
+| 0.1 uF ceramic | 21 | Decoupling, one per IC per rail (`ARCHITECTURE.md` 6.9; placement 2.3) | Common |
+| 10 uF electrolytic | 4 | Bulk on +5 V and +12 V; charge-pump flying capacitor; -5 V reservoir, which is also the -5 V bulk | Common |
+| 5 V 2 A regulated supply, 2.1 mm centre-positive plug | 1 | Board input. It must deliver at least about 4.9 V at the jack under load (`ARCHITECTURE.md` 6.9) | Common |
+| 2.1 mm DC power jack, PCB mount | 1 | 5 V input (J5). Match its footprint at the first import (2.2) | Common |
+| Vishay SUP53P06-20 (logic-level P-MOSFET, TO-220, RDS(on) specified at VGS = -4.5 V) | 1 | 5 V reverse-polarity switch (Q2, `ARCHITECTURE.md` 6.9) | Vishay datasheet rev C, 2020; no end-of-life notice on vishay.com (2026-10-04). Mouser listing not confirmed: check it in the cart |
+| 2x20 0.1-inch shrouded box header | 1 | Pi header J1, the board end of the ribbon (keyed) | Common |
+| 1-pin 0.1-inch header | 9 | Test points TP1-TP9: GND x2, +5V (after the FET), +12V, -5V, +3V3_PI, phi1, phi2, /WSET (2.2) | Common |
 | Raspberry Pi 4B + its own PSU + 2x20 short ribbon | 1 | Coprocessor (devices, console TCP, storage) | Active |
 | ZIF-40 socket + DIP sockets | 1 | CPU socket (chip tester), sockets for all DIPs | Common |
-| 2-layer PCB | 1 | Single board, test points and jumpers per bring-up stage | Fab, about $10-30 |
+| 2-layer PCB, 160 x 120 mm | 1 | Single board (2.2), test points and jumpers per bring-up stage | Fab, about $10-30 |
 
-About 21 ICs in total.
+18 ICs (U1-U18), plus two transistors (Q1, Q2) and the +12 V module. The netlist is the count (2.2).
 
 ### 2.1 GAL
 
@@ -93,6 +97,38 @@ About 21 ICs in total.
 - **Pin classes.** Nets driven by the 8080A or the 8224 (A8-A15, D4, D6, /STSTB) sit on dedicated input pins (1-11, 13) only, so no GAL image, a blank or wrong one included, can drive a CPU pin. The outputs sit on I/O pins (14-23). Any swap within a class is legal during routing: edit the pin list in `glue.pld` and the netlist, rebuild, commit. `tests/gal_tests.rs` enforces the classes.
 - **Build:** `cd hw && make` (galette 0.3.0: `cargo install galette --version 0.3.0 --locked`). Commit `glue.pld` and `glue.jed` together. `cargo test` evaluates the committed `glue.jed` for every input combination against the emulator's decode and needs no galette.
 - **Programming:** burn `hw/glue.jed` under the programmer's plain ATF22V10C (GAL mode, 5892 fuses) device, never a CEX or power-down entry (4). Verify on the programmer immediately before socketing. The `.jed` is stored byte-exact (`.gitattributes`): its file checksum covers the line ends.
+
+### 2.2 Board
+
+- **Netlist:** `hw/board.net.txt`, the only home of pin numbers (decision NETLIST); format in its header. `cargo test` checks it against `ARCHITECTURE.md` 6 pad by pad (`tests/netlist_tests.rs`): every pad exactly once, no single-pad nets, no open inputs, power pins on their rails, rails never joined, the circuits of 6.1-6.13, the Pi pin map from `src/pi`, no 5 V source reaching a Pi pin, the analyzer channel order of 3.1, and the GAL pins from `hw/glue.pld`.
+- **Changing the board:** edit `hw/board.net.txt`, run `cargo test`, copy the file the stale-netlist failure names to `hw/board.kicad.net`, and commit both. A GAL pin move edits `hw/glue.pld` as well (2.1).
+- **KiCad:** `hw/board.kicad_pro` is minimal (KiCad fills it in on first open; commit the result). `hw/board.kicad_pcb` holds the 160 x 120 mm outline on Edge.Cuts, 2 layers, 1.6 mm FR4, 1 oz copper. `hw/board.kicad_dru` holds the fab minimums and the rail widths. Import `hw/board.kicad.net` into Pcbnew, then place (2.3) and route; Freerouting is optional. Once the board has footprints, `cargo test` also checks its refs, footprints and pad nets against the netlist.
+- **Refdes:** U1 8080A, U2 8224, U3 8228, U4 ROM, U5 and U6 RAM low and high, U7 GAL, U8 74HCT74, U9 74HCT14, U10 U08a, U11 U08b, U12 74HCT138, U13 74HCT374 (IN latch), U14-U16 74LVC245A (A0-A6 and DIR; DB0-DB7; REQ and RESET), U17 charge pump, U18 DS1813, Q1 TEST_RESET, Q2 reverse-polarity FET, PS1 +12 V module, J1 Pi header, J2-J4 LA-A, LA-B, LA-C, J5 5 V jack, JP1 JP-WE, JP2 JP-PD, SW1 reset, RN1-RN6 resistor networks, TP1-TP9 test points, H1-H4 M3 holes.
+- **Fab gate.** No board is ordered while an item below is open. Close each in the commit that verifies it, citing the source.
+  - PS1 pad order. Pololu #4016 names the pins (VIN and GND doubled, VOUT, EN) but its text gives no order. Buy the module before fab and read it off the board.
+  - Every footprint name and pad set, at the first Pcbnew import: zero warnings expected, result recorded in the log.
+  - J5's footprint against the bought jack, including which pad is the centre pin.
+  - `hw/board.kicad_pro` and `hw/board.kicad_pcb` open in KiCad 8 without complaint.
+  - Every type table in `tests/netlist_tests.rs` checked against its datasheet. The tables are single-source: the test proves the netlist agrees with them, not that they agree with silicon.
+
+### 2.3 Placement Constraints (est)
+
+Guidance for placement and routing. Nothing here has a spec figure behind it unless it cites one; distances are estimates. The design rules that are checked are in `hw/board.kicad_dru` (2.2).
+
+1. **Clock island.** U2 next to U1's phi1 and phi2 pins. Keep PHI1 and PHI2 as short as possible (about 50 mm), with no other trace between them and no vias if avoidable: the phi outputs are not short-circuit protected (`ARCHITECTURE.md` 6.1). Y1, R1 and R2 within about 10 mm of U2's XTAL pins. TP7 and TP8 at U1, with a GND test point beside them.
+2. **CPU data.** U3 next to U1's data pins, D0-D7 short. D4 and D6 also carry the GAL tap: keep them within the 5-10 pF trace budget of `ARCHITECTURE.md` 6.12 rule 2 (about 50-100 mm at 1 pF/cm). RN5 at the U1/U3 data lines, J3 (LA-B) beside RN5.
+3. **Address pull-ups.** RN1 and RN2 at U1's address pins (`ARCHITECTURE.md` 6.13).
+4. **VBB clamp.** D1 at U1's VBB pin, at the CPU socket (`ARCHITECTURE.md` 6.9), with C3 beside it.
+5. **Decoupling.** Each 0.1 uF at its IC's power pin, with the shortest loop to GND: C1, C2, C3 at U1 (+5 V, +12 V, -5 V); C4, C5 at U2 (+5 V, +12 V); C6-C21 at U3-U18 in order, one each (C17-C19 on +3V3_PI at U14-U16).
+6. **WAIT path.** U8 between U2 and U7. Keep /STSTB to GAL pin 1, /WSET to U8's /PRE, and U8's /Q to U2's RDYIN short: the STSTB width at /PRE is a bench risk (6), and RDYIN has a 167 ns deadline (`ARCHITECTURE.md` 6.4). TP9 at U8's /PRE.
+7. **GAL pin classes.** A routing swap of GAL pins stays within its class (2.1): CPU-driven nets on pins 1-11 and 13, outputs on 14-23. Edit `hw/glue.pld` and the netlist together and rebuild the `.jed`.
+8. **Pi edge.** J1 on a board edge, pin 1 marked, keyed box header. U13-U16 and RN6 beside J1, C17-C19 on the 3V3 side. All eight J1 GND pins to the ground pour.
+9. **ZIF clearance.** A keep-out for U1's lever and body: the ZIF body is wider than a DIP-40.
+10. **Analyzer edge.** J2-J4 along one edge, pin 1 square, channel names on the silkscreen (3.1), at least two GND leads reachable per header.
+11. **Operator edge.** SW1 and the labeled LEDs D2-D5; JP1 (silkscreen "JP-WE: OPEN = normal"); JP2 and the RN3 socket together (silkscreen "never both").
+12. **Power entry.** J5 at a board edge, Q2 and C22 beside it, TP3 after Q2. PS1 near U1 and U2 (the +12 V loads), C23 at PS1's output. U17 with C24 and C25 near U1's VBB pin.
+13. **Ground.** Solid GND pour on the bottom layer, stitched, no splits. The Pi ground joins only at J1.
+14. **Silkscreen.** Refdes, values, pin 1 marks, rail names at the test points, BCM names at J1, "TP3: +5 V for the jig" (3.2).
 
 ---
 
@@ -104,9 +140,9 @@ One stage at a time. Do not start a stage until the previous one passes.
 |------|----------------|
 | 0. Bare PCB, no ICs. Continuity and rail-to-rail shorts. Power from a current-limited bench +5 V, Pololu and ICL7660 fitted. | +5 V 4.85-5.15, +12 V 11.4-12.6 (<= 12.48), -5 V -4.75..-5.25 at every socket. Single-shot scope of VBB at power-up and power-down stays <= +0.3 V relative to GND. |
 | 1. 8224 + crystal + 510 ohm pair + DS1813. Scope phi1, phi2, RESET and STSTB. 10x probes only: phi outputs are not short-circuit protected. | 2.048 MHz +/- crystal offset. phi1 >= 60 ns, phi2 >= 220 ns, phi high >= 9.0 V. RESET held >= 3 clocks (ms) after power-up and on every button press, and active high. |
-| 2. Add 8080A (ZIF) + 8228. No memory, RDYIN jumpered high, 2.2k DB pull-down jumper in (floating reads = NOP) and the DB pull-up SIP out of its socket (never both, `ARCHITECTURE.md` 6.13). Address pull-up SIPs fitted. BUSEN, HOLD, INT tied. | A0 toggles at 256 kHz, A15 period 128 ms. Supply currents within datasheet max (+12 V <= 87 mA). Screen every CPU this way. |
-| 3. Add ROM, RAM, the GAL (2.1: burn `hw/glue.jed`, verify immediately before socketing) and the 74HCT74, the 74HCT138 with JP-WE open, and U08a with the WAIT, INTE and HLDA LEDs (its REQ gate unused until step 4). The WAIT flip-flop's set path is live from here, with /Q on RDYIN. Pull-down out, DB pull-up SIP in. Burn a small diagnostic image (asl): read IN FF, OUT FE, read IN FF again, then the window check OUT 70, IN 70, OUT FD, IN FD (just outside the Pi window, 70-FD read the DB pull-ups), march-test 0000-EFFF (HLT at a fail address), then copy a short loop to 0100 and run it from RAM: for each byte of F000-FFFF, read it, write it back and read it again, HLT at a fail address if the two reads differ, else HLT at the pass address after FFFF. If a wiring fault reaches ROM /WE despite JP-WE open, the first write starts a write cycle of the byte's own value, and for up to tWC = 10 ms reads return data polling, I/O7 complemented (AT28C64B DS 4.2, 4.4), so the loop stops at F000 before writing anything wrong. Run the same image in the emulator first and dump the debugger instruction trace. The analyzer is attached throughout (3.1). | The analyzer shows status A2 at the pass address, then 8A at pass+1, then no further /STSTB. IN FF bit 0 reads 1 then 0. LA-C ch 6 (/Q) stays high throughout: a fall means the WAIT set fired outside the window, and the CPU stalls there in T_W. The fetch-address sequence of the first ~200 instructions matches the emulator trace exactly (3.1). LA-C shows a /Y7 low pulse for each of the 4096 writes to F000-FFFF and none during the march test, and ROM /WE (pin 27, on a scope or the spare channel) never goes low. At the HLT: WAIT lit, INTE and HLDA dark. Scope: DB high level during SRAM writes (the march test), where the 8228 drives DB at TTL levels into the SRAM inputs, >= 2.9 V. If it is lower, check that the DB pull-up SIP is fitted in its socket before going on. |
-| 4. Add the REQ AND gate, the IN latch, and U08b with the HALT LED (the WAIT set path is live from step 3), with the manual-ACK jig (button -> HCT14, DIP switches + LATCH button on the 374). Burn the real monitor.bin. | The CPU freezes on the first Pi-window access, the banner's OUT 00. Each ACK press advances exactly one access. The scope shows RDYIN low <= STSTB+167 ns, the STSTB pulse at HCT74 PRE >= 20 ns, and REQ rising only after the 8080 WAIT pin. The LA shows zero REQs on memory cycles over 10^6 cycles and zero phantom REQs across 100 consecutive resets (LA-C alone: REQ never high while /MEMR or /MEMW is low). While frozen: WAIT lit, HALT dark; between ACK presses LA-B shows WAIT low only between accesses. On each jig-served IN, LA-B shows the DIP-switch byte on D0-D7 in T3. |
+| 2. Add 8080A (ZIF) + 8228. No memory and no 74HCT74, so RDYIN is held high by its 10 kohm pull-up. 2.2k DB pull-down jumper in (floating reads = NOP) and the DB pull-up SIP out of its socket (never both, `ARCHITECTURE.md` 6.13). Address pull-up SIPs fitted. BUSEN, HOLD, INT tied. | A0 toggles at 256 kHz, A15 period 128 ms. Supply currents within datasheet max (+12 V <= 87 mA). Screen every CPU this way. |
+| 3. Add ROM, RAM, the GAL (2.1: burn `hw/glue.jed`, verify immediately before socketing) and the 74HCT74, the 74HCT138 with JP-WE open, and U08a with the WAIT, INTE and HLDA LEDs (its REQ gate unused until step 4). The WAIT flip-flop's set path is live from here, with /Q on RDYIN. Pull-down out, DB pull-up SIP in. Burn a small diagnostic image (asl): read IN FF, OUT FE, read IN FF again, then the window check OUT 70, IN 70, OUT FD, IN FD (just outside the Pi window, 70-FD read the DB pull-ups), march-test 0000-EFFF (HLT at a fail address), then copy a short loop to 0100 and run it from RAM: for each byte of F000-FFFF, read it, write it back and read it again, HLT at a fail address if the two reads differ, else HLT at the pass address after FFFF. If a wiring fault reaches ROM /WE despite JP-WE open, the first write starts a write cycle of the byte's own value, and for up to tWC = 10 ms reads return data polling, I/O7 complemented (AT28C64B DS 4.2, 4.4), so the loop stops at F000 before writing anything wrong. Run the same image in the emulator first and dump the debugger instruction trace. The analyzer is attached throughout (3.1). | The analyzer shows status A2 at the pass address, then 8A at pass+1, then no further /STSTB. IN FF bit 0 reads 1 then 0. LA-C ch 6 (/Q) stays high throughout: a fall means the WAIT set fired outside the window, and the CPU stalls there in T_W. The fetch-address sequence of the first ~200 instructions matches the emulator trace exactly (3.1). LA-C shows a /Y7 low pulse for each of the 4096 writes to F000-FFFF and none during the march test, and ROM /WE (on a scope, or fly-wired to the LA-C spare pad) never goes low. At the HLT: WAIT lit, INTE and HLDA dark. Scope: DB high level during SRAM writes (the march test), where the 8228 drives DB at TTL levels into the SRAM inputs, >= 2.9 V. If it is lower, check that the DB pull-up SIP is fitted in its socket before going on. |
+| 4. Add the REQ AND gate, the IN latch, and U08b with the HALT LED (the WAIT set path is live from step 3), with the off-board manual-ACK jig (3.2) plugged into J1 in place of the Pi ribbon. Burn the real monitor.bin. | The CPU freezes on the first Pi-window access, the banner's OUT 00. Each ACK press advances exactly one access. The scope shows RDYIN low <= STSTB+167 ns, the STSTB pulse at HCT74 PRE >= 20 ns, and REQ rising only after the 8080 WAIT pin. The LA shows zero REQs on memory cycles over 10^6 cycles and zero phantom REQs across 100 consecutive resets (LA-C alone: REQ never high while /MEMR or /MEMW is low). While frozen: WAIT lit, HALT dark; between ACK presses LA-B shows WAIT low only between accesses. On each jig-served IN, LA-B shows the DIP-switch byte on D0-D7 in T3. |
 | 5. Connect the Pi 4B (own supply) and install `pi8080d`: cross-build it on the Mac with `cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d` (`PI_DAEMON.md` 2), copy it to `/usr/local/bin/`, and install `scripts/pi8080d.service` (`PI_DAEMON.md` 11). Day one: with the board powered, scope REQ/ACK/LATCH for the per-access service time (`PI_DAEMON.md` 12.2). Then run `pi8080d --trace` for the boot port trace (`ARCHITECTURE.md` 7.3) and the banner over the TCP console. The rest of this step's bench checks: `PI_DAEMON.md` 14. | The boot port trace and the banner are byte-identical to the emulator's port trace and transcript for the same monitor.bin. Power both boards on in either order, and with the Pi off: the board waits at the first access (WAIT steady, HALT dark) and continues when the daemon starts. `F 0200 0200 76` then `G 0200`: WAIT and HALT steady, until RESET. |
 | 6. The same `pi8080d` (shared IoBus). Replay the strict-harness transcript files over the TCP console (in `cargo test` they already pass through the daemon on the simulated board, `PI_DAEMON.md` 13.2). | Every transcript matches the emulator's output exactly. Ctrl-less paste of an Intel HEX file (Phase 5) loses no bytes. |
 | 7. Storage conformance test (`DEVICE_SPECS.md` 3), with stress-ng on the Pi's other cores. Then press RESET during a long W/fsync. | I 0A/09/08 read 00 10 00 after both W and L, and C F000 FFFF 2000 prints nothing. After RESET mid-fsync the machine reboots to the banner, with storage unmounted and no hang. |
@@ -117,73 +153,44 @@ ROM changes can run on the board before a burn: the RAM test build (`ARCHITECTUR
 
 ### 3.1 Logic Analyzer
 
-The analyzer and the three headers it plugs into (`ARCHITECTURE.md` 6.12). On each 2x10 header, pin n carries channel n-1 for n = 1-16, and pins 17-20 are GND. Pin 1 has the square pad, and the signal names are on the silkscreen. Use at least two GND leads per header.
+The analyzer and the three headers it plugs into (`ARCHITECTURE.md` 6.12). Each 2x10 header carries 16 channels in order and GND on four pins; the silkscreen names the signals and marks pin 1 (square pad). Pin numbers live in `hw/board.net.txt` (J2-J4); `tests/netlist_tests.rs` checks the channel order below against the circuit. Use at least two GND leads per header.
 
-**LA-A: address**
-
-| Pin | Ch | Signal | Source |
-|-----|----|--------|--------|
-| 1 | 0 | A0 | 8080A pin 25 |
-| 2 | 1 | A1 | 8080A pin 26 |
-| 3 | 2 | A2 | 8080A pin 27 |
-| 4 | 3 | A3 | 8080A pin 29 |
-| 5 | 4 | A4 | 8080A pin 30 |
-| 6 | 5 | A5 | 8080A pin 31 |
-| 7 | 6 | A6 | 8080A pin 32 |
-| 8 | 7 | A7 | 8080A pin 33 |
-| 9 | 8 | A8 | 8080A pin 34 |
-| 10 | 9 | A9 | 8080A pin 35 |
-| 11 | 10 | A10 | 8080A pin 1 |
-| 12 | 11 | A11 | 8080A pin 40 |
-| 13 | 12 | A12 | 8080A pin 37 |
-| 14 | 13 | A13 | 8080A pin 38 |
-| 15 | 14 | A14 | 8080A pin 39 |
-| 16 | 15 | A15 | 8080A pin 36 |
-| 17-20 | - | GND | |
+**LA-A: address.** Channel n is An (n = 0-15), from the 8080A address pins.
 
 **LA-B: CPU-side data and CPU timing**
 
-| Pin | Ch | Signal | Source |
-|-----|----|--------|--------|
-| 1 | 0 | D0 | 8080A pin 10, through 1 kohm |
-| 2 | 1 | D1 | 8080A pin 9, through 1 kohm |
-| 3 | 2 | D2 | 8080A pin 8, through 1 kohm |
-| 4 | 3 | D3 | 8080A pin 7, through 1 kohm |
-| 5 | 4 | D4 | 8080A pin 3, through 1 kohm |
-| 6 | 5 | D5 | 8080A pin 4, through 1 kohm |
-| 7 | 6 | D6 | 8080A pin 5, through 1 kohm |
-| 8 | 7 | D7 | 8080A pin 6, through 1 kohm |
-| 9 | 8 | SYNC | 8080A pin 19 |
-| 10 | 9 | DBIN | 8080A pin 17 |
-| 11 | 10 | /WR | 8080A pin 18 |
-| 12 | 11 | READY | 8224 pin 4 (= 8080A pin 23) |
-| 13 | 12 | WAIT | 8080A pin 24 |
-| 14 | 13 | /STSTB | 8224 pin 7 |
-| 15 | 14 | phi2 (TTL) | 8224 pin 6 |
-| 16 | 15 | RESET | 8224 pin 1 |
-| 17-20 | - | GND | |
+| Ch | Signal | Source |
+|----|--------|--------|
+| 0-7 | D0-D7 | 8080A data pins, each through 1 kohm |
+| 8 | SYNC | 8080A |
+| 9 | DBIN | 8080A |
+| 10 | /WR | 8080A |
+| 11 | READY | 8224 READY (= 8080A READY) |
+| 12 | WAIT | 8080A |
+| 13 | /STSTB | 8224 |
+| 14 | phi2 (TTL) | 8224 |
+| 15 | RESET | 8224 |
 
 **LA-C: system strobes, flip-flops, Pi handshake**
 
-| Pin | Ch | Signal | Source |
-|-----|----|--------|--------|
-| 1 | 0 | /MEMR | 8228 pin 24 |
-| 2 | 1 | /MEMW | 8228 pin 26 |
-| 3 | 2 | /I/OR | 8228 pin 25 |
-| 4 | 3 | /I/OW | 8228 pin 27 |
-| 5 | 4 | INTE | 8080A pin 16 |
-| 6 | 5 | HLDA | 8080A pin 21 |
-| 7 | 6 | /Q | WAIT flip-flop /Q at the 74HCT74 (RDYIN once step 4 removes the jumper) |
-| 8 | 7 | REQ | U08a gate 1 output (5 V side) |
-| 9 | 8 | ACK | 5 V board side, at the 74HCT14 input (3.3 V level) |
-| 10 | 9 | LATCH | 74HCT374 CLK (3.3 V level) |
-| 11 | 10 | OVL | overlay flip-flop Q |
-| 12 | 11 | ROM /OE | ROM_OE net |
-| 13 | 12 | ROM_WE decode | 74HCT138 /Y7 (JP-WE pin 1) |
-| 14 | 13 | HALT | U08b gate 3 output |
-| 15 | 14 | /RESIN | 8224 pin 2 (supervisor and button node) |
-| 16 | 15 | spare | pad, unconnected (ROM /WE pin 27 for the step 3 check) |
-| 17-20 | - | GND | |
+| Ch | Signal | Source |
+|----|--------|--------|
+| 0 | /MEMR | 8228 |
+| 1 | /MEMW | 8228 |
+| 2 | /I/OR | 8228 |
+| 3 | /I/OW | 8228 |
+| 4 | INTE | 8080A |
+| 5 | HLDA | 8080A |
+| 6 | /Q | WAIT flip-flop /Q at the 74HCT74, which is RDYIN (10 kohm pull-up: high in step 2, before the 74HCT74 is fitted) |
+| 7 | REQ | U08a gate 1 output (5 V side) |
+| 8 | ACK | 5 V board side, at the 74HCT14 input (3.3 V level) |
+| 9 | LATCH | 74HCT374 CLK (3.3 V level) |
+| 10 | OVL | overlay flip-flop Q |
+| 11 | ROM /OE | ROM_OE net |
+| 12 | ROM_WE decode | 74HCT138 /Y7 (the JP-WE side) |
+| 13 | HALT | U08b gate 3 output |
+| 14 | /RESIN | 8224 /RESIN (supervisor and button node) |
+| 15 | spare | pad, unconnected (fly-wire to ROM /WE for the step 3 check) |
 
 Not on any header: phi1 and phi2 (MOS level, >= 9.4 V) and 8228 /INTA pin 23 (+12 V strap) (`ARCHITECTURE.md` 6.12 rule 1).
 
@@ -201,6 +208,18 @@ Not on any header: phi1 and phi2 (MOS level, >= 9.4 V) and 8228 /INTA pin 23 (+1
 - **Fetch sequence (step 3).** Keep the rows with status A2; their addresses are the opcode addresses in execution order. Compare them line by line with the PCs in the emulator's debugger instruction trace for the same image.
 - **Write data.** `clk` = /WR, `clock_edge=rising`, `d0`-`d7` = D0-D7. Data stays valid >= 118 ns after /WR rises (`reference/8080_HARDWARE.md` 3.5).
 - **Command line.** Name the channels at capture time after the tables above; PulseView does the same interactively. The address instance, for example: `sigrok-cli -i boot.sr -P parallel:clk=STSTB:d0=A0:d1=A1:d2=A2:d3=A3:d4=A4:d5=A5:d6=A6:d7=A7:d8=A8:d9=A9:d10=A10:d11=A11:d12=A12:d13=A13:d14=A14:d15=A15:clock_edge=rising -A parallel=items` (one annotation per /STSTB edge; the decoder's `words` row stays empty unless `wordsize` is set).
+
+### 3.2 Manual-ACK Jig (Off-Board)
+
+Step 4 serves Pi-window accesses by hand. The jig plugs into J1 in place of the Pi ribbon; it is not on the board and not in the netlist.
+
+- **Connector.** A 2x20 IDC socket that connects only GND, BCM 16 (ACK), BCM 17 (LATCH) and BCM 20-27 (D0-D7); their J1 pins are in `hw/board.net.txt`. It MUST NOT connect the 3V3 pins (the board's +3V3_PI, the 74LVC245A supply) or the 5V pins.
+- **Supply.** +5 V from a clip lead to TP3. With no Pi, +3V3_PI is unpowered and every 74LVC245A is in Ioff, so 5 V on the Pi-side pins is safe (SCAS218X). `ARCHITECTURE.md` 6.4 relies on the same state with the Pi off.
+- **ACK.** A pushbutton to +5 V through 1 kohm, with 1 uF to GND. The board's 4.7 kohm pull-down discharges it, and the two Schmitt stages (`ARCHITECTURE.md` 6.4 rule 2) square it.
+- **LATCH.** A pushbutton to +5 V through 1 kohm. The board's 4.7 kohm pull-down holds it low; bounce only re-clocks the same data.
+- **D0-D7.** An 8-position DIP switch to +5 V, with 10 kohm pull-downs (one bused SIP). The switches drive the IN-latch inputs directly. Through the 330 ohm array they reach only the outputs of the unpowered data 74LVC245A.
+
+Parts: a 2x20 IDC socket on a short ribbon stub, two pushbuttons, two 1 kohm resistors, a 1 uF capacitor, an 8-position DIP switch, a 10 kohm 9-pin bused SIP and a clip lead.
 
 ---
 

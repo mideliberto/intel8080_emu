@@ -108,7 +108,12 @@ examples/
 hw/
 ├── Makefile             # make: glue.jed from glue.pld (galette 0.3.0)
 ├── glue.pld             # GAL source: the only home of the GAL pinout (ARCHITECTURE 6.2-6.5)
-└── glue.jed             # GAL fuse map: burned, and checked by tests/gal_tests.rs
+├── glue.jed             # GAL fuse map: burned, and checked by tests/gal_tests.rs
+├── board.net.txt        # Board netlist: the only home of pin numbers (HARDWARE_BUILD 2.2)
+├── board.kicad.net      # KiCad netlist written from it by tests/netlist_tests.rs (Pcbnew imports this)
+├── board.kicad_pro      # KiCad project (minimal), so Pcbnew loads board.kicad_dru
+├── board.kicad_pcb      # The board: 160 x 120 mm outline; placement and routing are Mike's
+└── board.kicad_dru      # Design rules: fab minimums, rail widths
 
 scripts/
 ├── fetch_exercisers.sh  # Downloads the exercisers to tests/data/exercisers (pinned SHA-256)
@@ -138,6 +143,7 @@ tests/
 ├── mailbox_tests.rs     # Service Mailbox at port level (DEVICE_SPECS 8), black-box from the spec
 ├── debugger_tests.rs   # Debugger: --script runs, breaks, watchpoints, trace (ARCHITECTURE 7.4)
 ├── gal_tests.rs         # GAL: hw/glue.jed for every input against the emulator's decode and ARCHITECTURE 6.2-6.5
+├── netlist_tests.rs     # Board: hw/board.net.txt pad by pad against ARCHITECTURE 6; KiCad netlist, project files, routed board
 ├── exerciser.rs         # TST8080, 8080PRE, CPUTEST, 8080EXM under a CP/M shim (#[ignore])
 ├── monitor_tests.rs     # Strict transcript harness: junk RAM, exact output to each prompt; every transcript also through the Pi daemon, some through pi8080d --sim and the RAM test build
 ├── pi_daemon_tests.rs   # Pi daemon: RESET, faults, startup, stop, TCP console on the simulated board
