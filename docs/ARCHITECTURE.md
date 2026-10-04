@@ -16,7 +16,7 @@ The rule behind every section: **the ROM sees only what real parts provide.** If
 ## 1. Memory Map
 
 ```
-0x0000-0x007F   Unused (128 bytes)
+0x0000-0x007F   Unused (128 bytes), except 0030-0032: RST 6 break vector (written by G)
 0x0080-0x00FF   Monitor workspace (128 bytes)
 0x0100-0xEEFF   User area (60,928 bytes)
 0xEF00-0xEFFF   Monitor stack page (256 bytes, SP starts at 0xF000)
@@ -25,7 +25,7 @@ The rule behind every section: **the ROM sees only what real parts provide.** If
 
 | Range | Rule |
 |-------|------|
-| 0000-007F | Not used by the monitor and not initialized at boot, so its contents are undefined. There are no RST vectors and no API jump table. (What this means for programs started with `G`: `MONITOR_SPEC.md`, G Return Contract.) |
+| 0000-007F | Not initialized at boot. `G` writes `JMP BRK_ENTRY` at 0030-0032 before it starts a program, for breakpoints the user plants (`MONITOR_SPEC.md` 8.1); the rest is undefined and unused by the monitor. There is no other RST vector (RST 7 is reserved for an interrupt source, 6.7) and no API jump table. (What this means for programs started with `G`: `MONITOR_SPEC.md`, G Return Contract.) |
 | 0080-00FF | Monitor workspace. Layout in 1.1. Initialized at cold boot only. A program that writes here can break monitor commands until the next reset. |
 | 0100-EEFF | User programs and data. The monitor reads and writes this range only when a command tells it to. |
 | EF00-EFFF | Monitor stack. Cold boot and WARM (3.2) both set SP to 0xF000, so the first push writes 0xEFFF and 0xEFFE. |
@@ -49,7 +49,7 @@ This table and the workspace labels in `rom/monitor.asm` (`ORG 0080H` and one `D
 | 00E4 | 1 | SEARCH_LENGTH | no |
 | 00E5-00E6 | 2 | SEARCH_END | no |
 | 00E7-00E9 | 3 | STOR_ADDR (24-bit: lo, mid, hi) | no |
-| 00EA-00F1 | 8 | REGS (A, F, BC, DE, HL at the last `G` return: L H E D C B F A, `MONITOR_SPEC.md` 6.20) | no |
+| 00EA-00F1 | 8 | REGS (A, F, BC, DE, HL at the last `G` return or RST 6 break: L H E D C B F A, `MONITOR_SPEC.md` 6.20, 8.1) | no |
 | 00F2-00FF | 14 | free | - |
 
 16 bytes are free in total. New workspace goes into 00F2-00FF first.
@@ -689,4 +689,5 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 - **Phase 10 (done 2026-10-03):** the monitor's `R` command and the G_RETURN capture (`MONITOR_SPEC.md` 6.20, 8) and the REGS workspace row (1.1). No circuit change.
 - **Phase 11 (done 2026-10-03):** example programs, the user guide and a consistency pass. No memory-map, circuit or
   ROM change.
+- **Phase 12 (Track B):** RST 6 breakpoints (`MONITOR_SPEC.md` 8.1): a 0030-0032 vector written by G. No circuit change.
 - **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6); a monitor routine that reprograms the ROM through JP-WE (6.10 rules), with its emulator model.

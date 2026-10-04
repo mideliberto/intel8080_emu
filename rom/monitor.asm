@@ -4,7 +4,7 @@
 ; docs/DEVICE_SPECS.md (ports).
 ;
 ; Memory map (ARCHITECTURE 1):
-;   0000-007F  unused, not initialized
+;   0000-007F  unused, not initialized; G writes the RST 6 vector at 0030
 ;   0080-00FF  monitor workspace (labels below)
 ;   0100-EEFF  user area
 ;   EF00-EFFF  monitor stack (SP starts at F000)
@@ -72,6 +72,8 @@ SPACE           EQU     20H
 DEL             EQU     7FH
 ESC             EQU     1BH
 
+BRK_VEC         EQU     0030H       ; RST 6 vector, written by G (MONITOR_SPEC 8.1)
+
 ; ============================================
 ; WORKSPACE (RAM at 0x0080-0x00FF, ARCHITECTURE 1.1)
 ; Labels, so the debugger symbols name them. DS reserves and emits no bytes.
@@ -88,7 +90,7 @@ SEARCH_PATTERN: DS      8           ; search pattern
 SEARCH_LENGTH:  DS      1           ; search pattern length
 SEARCH_END:     DS      2           ; search end address
 STOR_ADDR:      DS      3           ; storage address (lo, mid, hi)
-REGS:           DS      8           ; saved at a G return: L H E D C B F A
+REGS:           DS      8           ; saved at a G return or RST 6 break: L H E D C B F A
                 DS      14          ; free
 
 LINE_LENGTH     EQU     80          ; LINE_BUFFER size
@@ -956,19 +958,21 @@ CF_LOOP:
         JNZ     CF_LOOP
         JMP     WARM
 
-; CMD_GO - G [addr]. Bare G runs 0100. Pushes G_RETURN, so the program can
-; return to the prompt with RET (MONITOR_SPEC 8).
+; CMD_GO - G [addr]. Bare G runs 0100. Writes JMP BRK_ENTRY at 0030 (MONITOR_SPEC 8.1)
+; and pushes G_RETURN, so the program can return to the prompt with RET (MONITOR_SPEC 8).
 CMD_GO:
         CALL    READ_HEX_WORD       ; DE = address
-        JZ      CG_DEFAULT
-        JC      ERR_ADDR
-        XCHG                        ; HL = address
-        JMP     CG_RUN
-CG_DEFAULT:
-        LXI     H,0100H
+        JNC     CG_RUN
+        JNZ     ERR_ADDR
+        LXI     D,0100H             ; bare G
 CG_RUN:
-        LXI     D,G_RETURN
-        PUSH    D                   ; SP = EFFE, (EFFE) = G_RETURN
+        MVI     A,0C3H              ; JMP BRK_ENTRY at 0030 (MONITOR_SPEC 8.1)
+        STA     BRK_VEC
+        LXI     H,BRK_ENTRY
+        SHLD    BRK_VEC+1
+        LXI     H,G_RETURN
+        PUSH    H                   ; SP = EFFE, (EFFE) = G_RETURN
+        XCHG
         PCHL
 
 ; G_RETURN - A program started by G returns here with RET (MONITOR_SPEC 8).
@@ -981,6 +985,28 @@ G_RETURN:
         PUSH    B                   ; REGS+5 = B, REGS+4 = C
         PUSH    D                   ; REGS+3 = D, REGS+2 = E
         PUSH    H                   ; REGS+1 = H, REGS+0 = L
+        JMP     WARM
+
+; BRK_ENTRY - RST 6 lands here through the JMP that G writes at 0030 (MONITOR_SPEC 8.1).
+; Saves A, F, BC, DE, HL in REGS as G_RETURN does, prints BRK and the address of the
+; RST 6, then enters WARM. Nothing before PUSH PSW touches the flags. SP points into
+; REGS between the LXI SPs: an interrupt source needs a DI first (MONITOR_SPEC 8).
+; The program's stack loses the two bytes RST pushed.
+BRK_ENTRY:
+        SHLD    REGS                ; REGS+0 = L, REGS+1 = H
+        POP     H                   ; HL = break address + 1
+        LXI     SP,REGS+8
+        PUSH    PSW                 ; REGS+7 = A, REGS+6 = F
+        PUSH    B                   ; REGS+5 = B, REGS+4 = C
+        PUSH    D                   ; REGS+3 = D, REGS+2 = E
+        LXI     SP,STACK_TOP        ; a CALL here would overwrite REGS+0/1
+        XCHG
+        DCX     D                   ; DE = address of the RST 6
+        LXI     H,MSG_BRK
+        CALL    PRINT_STRING        ; preserves DE
+        XCHG
+        CALL    PRINT_HEX_WORD
+        CALL    PRINT_CRLF
         JMP     WARM
 
 ; CMD_REGS - R. Prints MSG_REGS, each '@' replaced by the next saved byte,
@@ -1638,6 +1664,8 @@ MSG_HELP:
 
 MSG_REGS:
         DB      "A=@ F=@ BC=@@ DE=@@ HL=@@",CR,LF,0
+MSG_BRK:
+        DB      "BRK ",0
 MSG_UNKNOWN:
         DB      "Unknown command. Type ? for help.",CR,LF,0
 MSG_BAD_ADDR:

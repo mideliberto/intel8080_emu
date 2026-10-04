@@ -325,6 +325,8 @@ fn boot_assumes_nothing() {
     assert!(m.mem(0x0100, 0xEE00).iter().all(|&b| b == JUNK));
     // The overlay is off and 0000-007F was left alone: D shows RAM junk, not ROM.
     assert!(!m.cpu.rom_overlay_enabled);
+    // Not even the RST 6 vector: only G writes 0030-0032 (MONITOR_SPEC 8.1).
+    assert!(m.mem(0x0000, 0x80).iter().all(|&b| b == JUNK));
     assert_eq!(m.run("D 0000 000F"),
         "0000: 76 76 76 76 76 76 76 76  76 76 76 76 76 76 76 76  vvvvvvvvvvvvvvvv\\r\\n");
     // Bare D and bare E start at 0000 after cold start (LAST_DUMP_ADDR, LAST_EXAM_ADDR).
@@ -613,6 +615,11 @@ fn help() {
 #[test]
 fn registers() {
     boot().play("registers");
+}
+
+#[test]
+fn breakpoint() {
+    boot().play("breakpoint");
 }
 
 #[test]

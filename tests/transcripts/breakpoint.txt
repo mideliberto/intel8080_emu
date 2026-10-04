@@ -1,0 +1,23 @@
+# RST 6 breakpoints (MONITOR_SPEC 8.1): a planted F7 stops the program and leaves its
+# registers for R.
+
+# 0300: LXI H,4456 / PUSH H / POP PSW / LXI B,0B0D / LXI D,1234 / LXI H,0081 / RET,
+# with F7 planted over the RET at 030E. F=56: Z, AC, P set, CY clear.
+> :0F030000215644E5F1010D0B113412218100C982
+> :01030E00F7F7
+> G 0300
+BRK 030E
+> R
+A=44 F=56 BC=0B0D DE=1234 HL=0081
+
+# G rewrites a clobbered vector (76 = HLT would halt the run). 0320: LXI SP,0400 /
+# CALL 04F0 / RET. 04F0: LXI B,1122 / LXI D,3344 / LXI H,5566 / MVI A,5A / ORA A /
+# STC / NOP / NOP / F7 at 04FF: a break one CALL deep on the program's own stack,
+# CY set, and a pushed address (0500) whose low byte is 00. F=07: CY, P set, Z clear.
+> F 0030 0032 76
+> :07032000310004CDF004C917
+> :1004F0000122111144332166553E5AB7370000F7E7
+> G 0320
+BRK 04FF
+> R
+A=5A F=07 BC=1122 DE=3344 HL=5566

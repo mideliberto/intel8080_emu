@@ -253,8 +253,29 @@ After a program started with `G` returns with `RET`, `R` prints the registers it
 A=44 F=56 BC=0B0D DE=1234 HL=0081
 ```
 
-When `R`'s line is captured, and what else changes it: MONITOR_SPEC 6.20. To see a value
-mid-program, end the program there with `RET` (SP as `G` left it) and type `R`.
+When `R`'s line is captured, and what else changes it: MONITOR_SPEC 6.20.
+
+To stop mid-program, at any call depth, plant a breakpoint (MONITOR_SPEC 8.1):
+
+1. `E aaaa`, note the byte it shows, type `F7` (`RST 6`) and `.`. `A aaaa` / `RST 6` / `.` does
+   the same.
+2. `G` the program as usual. When it reaches aaaa the monitor prints `BRK aaaa` and the prompt.
+3. `R` shows the registers at the break. SP is not saved, and the program cannot be continued.
+4. `E aaaa`, type the noted byte back, `.`.
+
+Copied from `tests/transcripts/breakpoint.txt` (F7 over the `RET` of the program above):
+
+```
+> :0F030000215644E5F1010D0B113412218100C982
+> :01030E00F7F7
+> G 0300
+BRK 030E
+> R
+A=44 F=56 BC=0B0D DE=1234 HL=0081
+```
+
+A breakpoint is for debugging only: a program still ends with `RET` (4.1). In the emulator the
+debugger (8.1) does more.
 
 ### 8.3 Port traces: emulator against board
 
@@ -338,6 +359,7 @@ What each message means: MONITOR_SPEC 5. What to do:
 | `Storage error` | Check the Pi's disk, then `X NAME` again |
 | `Service error` | `T`: wait for NTP. `Q`: check the key (PI_DAEMON 11). Otherwise `journalctl -u pi8080d` |
 | `Aborted` | Esc (or an arrow key) during `N` or `Q`. Run it again; fetch a long or binary body with `> FILE` |
+| `BRK aaaa` | The program reached an F7 you planted at aaaa (8.2). `R`, then put the byte back with `E aaaa` |
 | `Address out of range` on a HEX line | Move the program into the user area; on the RAM test build, `G F000` first |
 | `Checksum error`, `Bad record` | Paste that line again |
 

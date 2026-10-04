@@ -24,7 +24,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | RAM test build of the monitor (`rom/monitor_ram.hex`, `G D000`): ROM changes on the board without a burn ([ARCHITECTURE](docs/ARCHITECTURE.md) 2.1) | ✅ |
 | Mailbox `GET` and N: HTTP and HTTPS via `curl` on the Pi (Phase 8); Esc aborts N and Q (Phase 12) | ✅ |
 | Mailbox `ASK` and Q: Claude via the Messages API, the key on the Pi (Phase 9) | ✅ |
-| R: the registers a program left at its `G` return (Phase 10) | ✅ |
+| R: the registers a program left at its `G` return (Phase 10) or at an `RST 6` breakpoint (Phase 12) | ✅ |
 | Example programs (`examples/hello`, `examples/memtest`) and the user guide (Phase 11) | ✅ |
 
 ## Monitor Commands

@@ -24,7 +24,7 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 | D | `D [start [end]]` | Dump memory; default 128 bytes from the last dump address |
 | E | `E [addr]` | Examine/modify; `CR` stores and advances, `.` exits |
 | F | `F start end val` | Fill memory |
-| G | `G [addr]` | Go; bare `G` = 0100. Program returns with `RET` (G pushes G_RETURN, which saves the registers for R) |
+| G | `G [addr]` | Go; bare `G` = 0100. Program returns with `RET` (G pushes G_RETURN, which saves the registers for R); plant F7 (`RST 6`) to stop with `BRK aaaa` (MONITOR_SPEC 8.1) |
 | H | `H num1 num2` | Hex math: prints sum and difference |
 | I | `I port` | Input from port |
 | L | `L stor mem [cnt]` | Load from storage (24-bit `stor`); `cnt` default 0100 |
@@ -163,7 +163,7 @@ Detail: [ARCHITECTURE.md](ARCHITECTURE.md) (Memory Map).
 
 | Range | Contents |
 |-------|----------|
-| 0000-007F | Unused. No RST vectors, no API table |
+| 0000-007F | Unused except 0030-0032, the RST 6 break vector G writes. No API table |
 | 0080-00FF | Monitor workspace |
 | 0100-EEFF | User programs |
 | EF00-EFFF | Monitor stack page (SP = F000) |

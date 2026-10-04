@@ -8,8 +8,9 @@ The machine:
 - Memory: 0000-007F unused, 0080-00FF monitor workspace, 0100-EEFF user
   programs and data, EF00-EFFF monitor stack, F000-FFFF monitor ROM.
 - G addr runs a program with SP = EFFE; the program returns to the
-  monitor with RET. There are no RST vectors and no ROM entry points a
-  program may call.
+  monitor with RET. There are no ROM entry points a program may call.
+  RST 6 (F7) is a breakpoint the user plants with E; it is not a way to
+  exit. The monitor prints BRK and the address, and R shows the registers.
 - I/O ports, all served by the Pi: 00 console out, 01 console in,
   02 console status (bit 0 = a byte is waiting); 08-0A storage address
   (24-bit, low byte first), 0B storage data (address auto-increments),

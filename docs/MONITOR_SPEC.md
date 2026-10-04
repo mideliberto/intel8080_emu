@@ -2,14 +2,14 @@
 
 Normative. This is the contract for everything the monitor ROM shows the user: the banner, the prompt, line input, the argument grammar, every command, the messages, the Intel HEX loader, the `G` return contract and the ROM routine contracts. It replaces the deleted `MONITOR_IMPLEMENTATION_STATUS.md`.
 
-**Scope.** Monitor ROM v0.9 (v0.3 plus Phase 5, the HEX loader, Phase 6, the `T` command, Phase 7, the `A` and `U` commands, Phase 8, the `N` command, Phase 9, the `Q` command, and Phase 10, the R command and the register capture at the G return) and the 2026-10-02 decisions.
+**Scope.** Monitor ROM v0.9 (v0.3 plus Phase 5, the HEX loader, Phase 6, the `T` command, Phase 7, the `A` and `U` commands, Phase 8, the `N` command, Phase 9, the `Q` command, Phase 10, the R command and the register capture at the G return, and Phase 12, Esc for N and Q and the RST 6 breakpoint, 8.1) and the 2026-10-02 decisions.
 
 **Elsewhere (one fact, one home):**
 - `ARCHITECTURE.md`: the memory map, workspace layout, stack page, reset and boot sequence, WARM entry code, the ROM overlay, the hardware interface (READY, the Pi window), and Host-Side Conveniences (the host key map, Ctrl-C quit, the Ctrl-E debugger hotkey).
 - `DEVICE_SPECS.md`: every port protocol (console, storage, mount, Service Mailbox, system control) and the READY contract as software sees it.
 - `TODO.md`: the work queue and every known difference between the code and this spec.
 
-**Status of this spec.** All decisions are made (2026-10-02 and 2026-10-03; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6, v0.5) is implemented (2026-10-03). 6.16 and 6.17 (`A` and `U`, Phase 7, v0.6) and the section 9 mailbox client are implemented (2026-10-03). 6.18 (`N`, Phase 8, v0.7) is specified (2026-10-03); implemented (2026-10-03). 6.19 (`Q`, Phase 9, v0.8) is specified (2026-10-03); implemented (2026-10-03). 6.20 (`R`, Phase 10, v0.9) and the G_RETURN capture in section 8 are implemented (2026-10-03).
+**Status of this spec.** All decisions are made (2026-10-02 and 2026-10-03; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6, v0.5) is implemented (2026-10-03). 6.16 and 6.17 (`A` and `U`, Phase 7, v0.6) and the section 9 mailbox client are implemented (2026-10-03). 6.18 (`N`, Phase 8, v0.7) is specified (2026-10-03); implemented (2026-10-03). 6.19 (`Q`, Phase 9, v0.8) is specified (2026-10-03); implemented (2026-10-03). 6.20 (`R`, Phase 10, v0.9) and the G_RETURN capture in section 8 are implemented (2026-10-03). 8.1 (RST 6 breakpoints, Phase 12) is specified (2026-10-04); implemented (2026-10-04).
 
 ---
 
@@ -48,7 +48,7 @@ Ready.<CR><LF>
 
 ### 1.2 Prompt
 
-The prompt is the two bytes `> ` (3Eh 20h). No `<CR><LF>` comes before it. Every command's output ends with `<CR><LF>`, so the prompt starts a new line. The exception is a program returning through `G` (G Return Contract): its last output may leave the cursor mid-line.
+The prompt is the two bytes `> ` (3Eh 20h). No `<CR><LF>` comes before it. Every command's output ends with `<CR><LF>`, so the prompt starts a new line. The exception is a program returning through `G` (G Return Contract), or stopping at an `RST 6` (8.1): its last output may leave the cursor mid-line.
 
 ---
 
@@ -153,9 +153,10 @@ These are the exact strings. Each is printed with a trailing `<CR><LF>`.
 | `Service error` | T, U, N, Q: mailbox status 00 after execute, or 80-FF (for N and Q, 82 too: a bad URL or file name, or an empty or invalid question). U: also DONE before the length byte. A: status 00 after execute, or 80-FF except 82; A then prompts the same address again |
 | `Invalid instruction` | A (Phase 7): mailbox status 82, so the line does not assemble; A prompts the same address again |
 | `Aborted` | N, Q: Esc while the request runs (6.18). Bytes already printed stay on their line, with no `<CR><LF>` before the message, as `Service error` |
+| `BRK aaaa` | A program started by `G` executed `RST 6` at aaaa (8.1). Not preceded by `<CR><LF>`: it starts where the program left the cursor |
 
 - The ROM MUST NOT contain `File not found`. Mount creates missing files, so that message can never be true.
-- Strings new since v0.3: `Invalid range`, `Mount failed`, `Storage error`, the five HEX errors, `Service error` (Phase 6), `Invalid instruction` (Phase 7) and `Aborted` (Phase 12). The HEX EOF record reuses `Loaded`.
+- Strings new since v0.3: `Invalid range`, `Mount failed`, `Storage error`, the five HEX errors, `Service error` (Phase 6), `Invalid instruction` (Phase 7), and `Aborted` and `BRK` (Phase 12). The HEX EOF record reuses `Loaded`.
 
 ---
 
@@ -239,6 +240,7 @@ Example: `E 0200`, then `1` `2` `<CR>` `3` `4` `<CR>` `.`, stores 0200=12 and 02
 - A bare `G` jumps to 0100.
 - `G addr` jumps to `addr`. Any address is allowed.
 - G pushes the return address (G_RETURN, section 8) before it jumps. The G Return Contract (section 8) applies.
+- Before it pushes G_RETURN, G writes `JMP BRK_ENTRY` at 0030-0032 (8.1). A `G` whose argument fails to parse writes nothing.
 - Error: `Invalid address` when `addr` is present but invalid. Nothing executes.
 
 ### 6.6 H: Hex math
@@ -603,16 +605,16 @@ Q shares N's loop and Esc check from the execute on (it enters CMD_NET at `CN_SE
 
 `R`
 
-Prints the registers that the last program started by `G` held when it returned with `RET` (section 8):
+Prints the registers that the last program started by `G` held when it returned with `RET` (section 8) or stopped at an `RST 6` (8.1):
 
     A=44 F=56 BC=0B0D DE=1234 HL=0081
 
 - The line is `A=`, A, ` F=`, the flags byte, ` BC=`, ` DE=` and ` HL=` with each pair high byte first, then `<CR><LF>`. Bytes take 2 digits and pairs 4 (section 0). The notation is the debugger's (`ARCHITECTURE.md` 7.4, ring line) without SP.
 - F is the raw flags byte (S Z 0 AC 0 P 1 CY, bit 7 to bit 0; `ARCHITECTURE.md` 5.1). It is not decoded.
-- **When the registers are captured.** Only when a program started by `G` executes `RET` to the return address (section 8). They are saved in REGS (`ARCHITECTURE.md` 1.1). Nothing else writes REGS: not cold start, not WARM, not a command, not a `G` that fails to parse (`G ZZ`), not a program that never returns. R itself changes nothing, so R twice prints the same line.
+- **When the registers are captured.** Only when a program started by `G` executes `RET` to the return address (section 8), or executes a planted `RST 6` (8.1). They are saved in REGS (`ARCHITECTURE.md` 1.1). Nothing else writes REGS: not cold start, not WARM, not a command, not a `G` that fails to parse (`G ZZ`), not a program that never returns. R itself changes nothing, so R twice prints the same line.
 - **Before the first capture** R prints REGS as cold start left it: cold start does not write REGS, and RAM is undefined at power-on. RAM survives RESET (`ARCHITECTURE.md` 3.1), so after a RESET R still shows the last return before it, if there was one. Nothing marks a stale capture.
-- **Not shown.** SP: the contract fixes it (EFFEh when `RET` runs, F000h after). PC: the monitor cannot know where the `RET` was. INTE: no 8080 instruction reads it.
-- **No breakpoints.** A capture happens only at the top-level `RET`. To look at a point inside a program, end the program there with a `RET` at the top level (SP = EFFEh), or use the host debugger in the emulator.
+- **Not shown.** SP: after a `RET` the contract fixes it (EFFEh when `RET` runs, F000h after); after a break the monitor drops it (8.1). PC: after a break the `BRK` message shows it; after a `RET` the monitor cannot know where the `RET` was. INTE: no 8080 instruction reads it.
+- **Breakpoints.** Plant `RST 6` (F7) with `E` or `A` where the program should stop (8.1). R then shows the registers at that instruction. In the emulator the host debugger (`ARCHITECTURE.md` 7.4) does more and costs the 8080 nothing.
 - **Read-only.** R does not change registers, and G does not load them: a program's registers on entry stay unspecified (section 8).
 - R uses only the console (port 00h). It has no error case. Tokens after `R` are ignored (4.1).
 - REGS is ordinary workspace RAM (`ARCHITECTURE.md` 1): a program that writes it changes what R prints.
@@ -637,6 +639,8 @@ Phase 10 tests MUST cover every row. Rows marked *Rust* are tests in `tests/moni
 | `?` | the 6.14 text with the R line | `help.txt` |
 | *Rust:* `R` right after cold start; then the 6.20 example, RESET, cold start, `R` | REGS unchanged by cold start; then the 6.20 example's R line | cold start does not write REGS; RAM survives RESET. Not a transcript: RAM at power-on differs on hardware, and a transcript cannot RESET |
 | *Rust:* `go_entry_contract` | the word at EFFE is `G_RETURN` | replaces `WARM` |
+
+The capture at a break has its own vectors in 8.1.1.
 
 ---
 
@@ -750,13 +754,64 @@ This section owns the program-facing contract. The WARM entry code and the stack
 - A, the flags, BC, DE and HL are unspecified.
 - The overlay is disabled.
 - Console input that READ_LINE has not consumed (for example, the `<LF>` of a CRLF pair) is left in the FIFO for the program.
-- 0000-007F holds no RST vectors and no API table (`ARCHITECTURE.md`, Memory Map).
+- 0030-0032 holds `JMP BRK_ENTRY` for breakpoints (8.1). Programs MUST NOT rely on it. The rest of 0000-007F is undefined: no other RST vector, no API table (`ARCHITECTURE.md`, Memory Map).
 
 **To return:** execute `RET` with SP = EFFEh and the word at EFFE intact. `RET` is the only supported exit. The return address is not published.
 
 **G_RETURN** saves A, the flags, BC, DE and HL in REGS (`ARCHITECTURE.md` 1.1), where R (6.20) reads them, then enters WARM. Neither executes `DI`: a program that returns with interrupts enabled leaves them enabled. v1 has no interrupt source (`ARCHITECTURE.md` 5.7).
 
 **WARM** sets SP = F000h and enters MAIN_LOOP, which prints the prompt. It prints no banner and no `<CR><LF>`, and it does not reinitialize the workspace. LAST_DUMP_ADDR and LAST_EXAM_ADDR survive unless the program overwrote them.
+
+### 8.1 Breakpoints (RST 6)
+
+A debugging aid, not an exit. A program started by `G` that executes an `RST 6` (F7) the user planted stops. The monitor saves A, the flags, BC, DE and HL in REGS, as G_RETURN does, prints `BRK aaaa` (aaaa = the address of the F7, the pushed return address minus 1) and enters WARM.
+
+- **Vector.** `G` writes `C3 lo hi` (`JMP BRK_ENTRY`) at 0030-0032 every time, after its argument parses. The address is not published. A program that writes 0030-0032 breaks RST 6 until the next `G`; a program the user put at 0030-0032 is overwritten by `G`. Programs MUST NOT use RST 6 to return: `RET` is the only supported exit (section 8), and a later ROM may move or drop the vector.
+- **Planting.** There is no breakpoint command. Write F7 with `E` (6.3) or `A addr` / `RST 6` (6.16). E shows the byte it replaces; put it back with E. The monitor does not remember or restore it.
+- **Stack.** Any call depth. `RST` writes the return address at SP-2 and SP-1 of the program's stack, and the handler discards the program's SP. Those two bytes MUST be in the user area or the stack page (program SP 0102-F000). Elsewhere the result is undefined (`ARCHITECTURE.md` 1).
+- **No continue.** G does not load registers (6.20), so a break cannot be resumed. Restore the byte and run the program again.
+- **Interrupts.** RST 6 does not clear INTE, and BRK_ENTRY executes no DI (as G_RETURN, section 8). RST 7 is not a breakpoint: it is reserved for an interrupt source (`ARCHITECTURE.md` 6.7).
+
+Example (the 6.20 program with F7 planted over its `RET` at 030E):
+
+    > :0F030000215644E5F1010D0B113412218100C982
+    > :01030E00F7F7
+    > G 0300
+    BRK 030E
+    > R
+    A=44 F=56 BC=0B0D DE=1234 HL=0081
+    >
+
+### 8.1.1 Breakpoint conformance vectors
+
+Tests MUST cover every row. All rows are `tests/transcripts/breakpoint.txt`.
+
+| Input | Expected output | Notes |
+|---|---|---|
+| `:0F030000215644E5F1010D0B113412218100C982`, `:01030E00F7F7` (F7 over the RET), `G 0300`, `R` | `BRK 030E`, then `A=44 F=56 BC=0B0D DE=1234 HL=0081` | the break captures. F=56: Z, AC, P set, CY clear |
+| `F 0030 0032 76`, `:07032000310004CDF004C917`, `:1004F0000122111144332166553E5AB7370000F7E7`, `G 0320`, `R` | `BRK 04FF`, then `A=5A F=07 BC=1122 DE=3344 HL=5566` | G repairs a clobbered vector (76 = HLT would halt the run); a break one CALL deep on the program's own stack; CY set (F=07: CY, P set, Z clear); the pushed address 0500 has low byte 00 |
+| *Rust:* `boot_assumes_nothing` | 0000-007F still holds the harness's junk after cold start | only G writes the vector |
+| *Rust:* `argument_errors_write_no_port_and_no_memory_outside_the_workspace` | `G ZZ`, `G 01ZZ`, `G 10100` write nothing in 0000-007F | the vector is written after the parse |
+
+The two transcript rows together guard the flags: F=56 and F=07 differ in Z, AC and CY in both directions.
+
+Program listings for the transcript:
+
+```
+0300: LXI H,4456 / PUSH H / POP PSW / LXI B,0B0D / LXI D,1234 / LXI H,0081 / RET   (the 6.20 example)
+030E: F7 planted over the RET
+0320: 31 00 04  LXI SP,0400
+0323: CD F0 04  CALL 04F0
+0326: C9        RET              (never reached)
+04F0: 01 22 11  LXI B,1122
+04F3: 11 44 33  LXI D,3344
+04F6: 21 66 55  LXI H,5566
+04F9: 3E 5A     MVI A,5A
+04FB: B7        ORA A
+04FC: 37        STC              (F = 07)
+04FD: 00 00     NOP / NOP
+04FF: F7        RST 6            (pushes 0500 at 03FC)
+```
 
 ---
 
