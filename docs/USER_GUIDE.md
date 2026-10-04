@@ -314,6 +314,10 @@ socat -,rawer,escape=0x1d TCP:localhost:8080          # in a second terminal; Ct
 Press Enter for a prompt: the banner went out before you connected. There is no RESET under `--sim`.
 Restarting the daemon is the power cycle (PI_DAEMON 16).
 
+The console has no authentication (PI_DAEMON 7.1). While `--sim` runs, anything on the Mac that can
+open a TCP connection to port 8080 can type commands, a web page in your browser included. Stop it
+when you are done.
+
 ### 9.2 On the Pi
 
 Build on the Mac and copy it over (PI_DAEMON 2, 11):
@@ -321,8 +325,11 @@ Build on the Mac and copy it over (PI_DAEMON 2, 11):
 ```
 rustup target add aarch64-unknown-linux-musl     # once
 cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d
-scp target/aarch64-unknown-linux-musl/release/pi8080d pi:/usr/local/bin/
+scp target/aarch64-unknown-linux-musl/release/pi8080d pi:/tmp/
+ssh pi sudo install -m 0755 /tmp/pi8080d /usr/local/bin/pi8080d
 ```
+
+`/usr/local/bin` on the Pi is root's, hence the copy through `/tmp`.
 
 Install `scripts/pi8080d.service` as `/etc/systemd/system/pi8080d.service`. The Pi setup it needs
 (user, `config.txt`, `cmdline.txt`, time zone, API key) is PI_DAEMON 11. With
@@ -330,12 +337,18 @@ Install `scripts/pi8080d.service` as `/etc/systemd/system/pi8080d.service`. The 
 
 ### 9.3 The console
 
-The daemon listens on `127.0.0.1:8080`. From the Mac:
+The daemon listens on `127.0.0.1:8080`. From the Mac, tunnel it to a Unix socket:
 
 ```
-ssh -L 8080:localhost:8080 pi
-socat -,rawer,escape=0x1d TCP:localhost:8080
+ssh -o StreamLocalBindUnlink=yes -L /tmp/pi8080.sock:localhost:8080 pi
+socat -,rawer,escape=0x1d UNIX-CONNECT:/tmp/pi8080.sock
 ```
+
+The console has no authentication: whoever connects types monitor commands, with the run of
+storage, `GET` from the Pi and `ASK` on your key (PI_DAEMON 7.1). A Unix socket keeps it away from
+web pages in your browser, which can reach a TCP port on the Mac (`ssh -L 8080:localhost:8080`)
+but not a socket. Opening the daemon to the LAN (`--listen 0.0.0.0:8080`) gives all that to every
+host on it.
 
 A new connection replaces the old one (PI_DAEMON 7.1). For scripted input, see section 4.3. Ctrl-C
 reaches the 8080 as byte 03, which the monitor ignores.

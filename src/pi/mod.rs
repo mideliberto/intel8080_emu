@@ -10,7 +10,7 @@ use crate::io::devices::console::Console;
 use crate::io::devices::mailbox;
 use crate::io::{build_bus, IoBus};
 use std::cell::RefCell;
-use std::fs::File;
+use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
@@ -70,6 +70,19 @@ const MS: Duration = Duration::from_millis(1);
 /// Console input read per pass, and output sent per pass (PI_DAEMON 7.2).
 const INPUT_CHUNK: usize = 4096;
 const OUTPUT_CHUNK: usize = 16 * 1024;
+
+/// Opens the register device and takes the single-instance guard (PI_DAEMON 3.3): an
+/// exclusive, non-blocking lock, held for as long as the returned file is open (the
+/// daemon's life) and taken before `setup_pins` writes anything, so a second daemon is
+/// refused before it can touch the running one's pins.
+pub fn open_gpio(options: &OpenOptions, path: &str) -> Result<File, String> {
+    let file = options.open(path).map_err(|e| format!("{}: {}", path, e))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(TryLockError::WouldBlock) => Err(format!("{}: another pi8080d holds the GPIO", path)),
+        Err(TryLockError::Error(e)) => Err(format!("{}: lock: {}", path, e)),
+    }
+}
 
 /// Pin setup (PI_DAEMON 3.3): the first thing the daemon does to the board. Releases
 /// D0-D7, drives ACK and LATCH low, and refuses a board it can't serve.
@@ -172,6 +185,13 @@ fn aborted(s: u32) -> bool {
     s & RESET != 0 || s & REQ == 0
 }
 
+/// The abort rule for a read in IN step 4: also DIR high, which during an IN only a new
+/// access after a RESET pulse can show (a reboot during a slow `bus.read`). D0-D7 are
+/// then never driven against the data 74LVC245A (ARCHITECTURE 6.4).
+fn in_aborted(s: u32) -> bool {
+    aborted(s) || s & DIR != 0
+}
+
 impl<G: Gpio> Service<'_, G> {
     fn check_stop(&self) -> Result<(), Stopped> {
         if self.stop.load(Relaxed) {
@@ -239,7 +259,7 @@ impl<G: Gpio> Service<'_, G> {
     /// IN step 4: drive `v` into the IN latch and release D0-D7 (ARCHITECTURE 6.4, IN
     /// cycle 1-4). False if the access was aborted; D0-D7 and LATCH are then left to `reset`.
     fn drive(&mut self, v: u8) -> Result<bool, Stopped> {
-        if aborted(self.gpio.read(GPLEV0)) {
+        if in_aborted(self.gpio.read(GPLEV0)) {
             return Ok(false);
         }
         // Values before direction, so no wrong byte is ever driven.
@@ -250,7 +270,7 @@ impl<G: Gpio> Service<'_, G> {
         let mut reported = false;
         loop {
             let s = self.gpio.read(GPLEV0);
-            if aborted(s) {
+            if in_aborted(s) {
                 return Ok(false);
             }
             if (s >> D_SHIFT) as u8 == v {
@@ -262,13 +282,13 @@ impl<G: Gpio> Service<'_, G> {
             }
             self.check_stop()?;
         }
-        if aborted(self.gpio.read(GPLEV0)) {
+        if in_aborted(self.gpio.read(GPLEV0)) {
             return Ok(false);
         }
         self.gpio.write(GPSET0, LATCH);
         loop {
             let s = self.gpio.read(GPLEV0);
-            if aborted(s) {
+            if in_aborted(s) {
                 return Ok(false);
             }
             if s & LATCH != 0 {

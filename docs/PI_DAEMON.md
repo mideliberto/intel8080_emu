@@ -77,8 +77,11 @@ linker = "rust-lld"
 
 ```
 cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d
-scp target/aarch64-unknown-linux-musl/release/pi8080d pi:/usr/local/bin/
+scp target/aarch64-unknown-linux-musl/release/pi8080d pi:/tmp/
+ssh pi sudo install -m 0755 /tmp/pi8080d /usr/local/bin/pi8080d
 ```
+
+`/usr/local/bin` is root's, so the copy goes through `/tmp` and `sudo install`, which also leaves the binary root-owned: the `pi8080` service user cannot replace it.
 
 No Docker, no zig, no Pi toolchain. Verified 2026-10-03 on macOS (rustc 1.89): it links a static aarch64 ELF of about 760 KiB. Running it on the Pi is a section 14 check. If `rust-lld` ever does not link it, the fallback is to build natively on the Pi (`cargo build --release --bin pi8080d`), which needs no config. `build.rs` runs on the build host either way.
 
@@ -142,14 +145,14 @@ BCM 18 (optional TEST_RESET, decision TEST-RESET) is not touched in v1.
 
 `pi::setup_pins(&gpio) -> Result<Fsel2, String>` is the first thing the daemon does to the board (`ARCHITECTURE.md` 6.4, Power and boot independence). Startup order is in 10: only argument parsing and opening the register block come before it, so a restart after a crash mid-IN releases D0-D7, ACK and LATCH even if binding the listener then fails.
 
-1. Read GPFSEL0-2. If any of the 20 pins is in an ALT function (field neither `000` nor `001`), return `Err("BCM n is in an ALT function")` before writing anything. That catches an enabled SPI (pins 7-11), 1-Wire (pin 4) or I2S/PCM (pins 18-21) overlay. The daemon does not override the kernel.
+1. Read GPFSEL0-2. If any of the 20 pins is in an ALT function (field neither `000` nor `001`), return `Err("BCM n is in an ALT function")` before writing anything. That catches an enabled SPI (pins 7-11) or I2S/PCM (pins 18-21) overlay. It does **not** catch a kernel driver that holds one of the 20 pins as a plain GPIO (field `000` or `001`): the `w1-gpio` (1-Wire, pin 4) overlay, `gpio-led`, `gpio-keys`, `gpio-poweroff` and the like pass the check, and the kernel then switches the pin behind the daemon's back. Keeping them off is the installer's job (11). The daemon does not override the kernel.
 2. GPFSEL2 = `input`: D0-D7 are inputs.
 3. GPCLR0 = ACK | LATCH, so both are low as or before they become outputs.
 4. Pull-down on 16, 17 and 20-27 (read-modify-write of REG1).
 5. GPFSEL1: 16 and 17 to output, 10-13 to input; other fields unchanged. GPFSEL0: 4-9 to input; other fields unchanged.
 6. Read GPLEV0. If ACK or LATCH reads high, return `Err("BCM 16 (ACK) reads high after drive low")` (or `BCM 17 (LATCH)`) and write nothing else. A board-side short would otherwise hang every access while the daemon looked healthy.
 
-`GpioMem::open()` comes before it: refuse unless `/proc/device-tree/compatible` lists `brcm,bcm2711` (a Pi 5's RP1 has a different register model); open `/dev/gpiomem` read-write with `O_SYNC`; `mmap` 4096 bytes, shared, offset 0. `gpio.request_reset()` (5.1) comes after `setup_pins`, so a RESET-line failure, the likeliest early-boot error, happens with the pins already released. Each failure returns `Err` with the path and the OS error.
+`GpioMem::open()` comes before it: refuse unless `/proc/device-tree/compatible` lists `brcm,bcm2711` (a Pi 5's RP1 has a different register model); open `/dev/gpiomem` read-write with `O_SYNC` and take an exclusive non-blocking `flock` on it (both in `pi::open_gpio`, the lock through `File::try_lock`), refusing with `/dev/gpiomem: another pi8080d holds the GPIO` if another daemon has it; `mmap` 4096 bytes, shared, offset 0. The fd stays open for the daemon's life, so the lock does too. The mapping is shared, so without the lock a second daemon (one run by hand beside the unit) would rewrite the running one's pins in `setup_pins` before the RESET line request or the bind could refuse it, hanging an ACK or D read-back loop mid-access. `gpio.request_reset()` (5.1) comes after `setup_pins`, so a RESET-line failure, the likeliest early-boot error, happens with the pins already released. Each failure returns `Err` with the path and the OS error.
 
 ---
 
@@ -169,7 +172,7 @@ The loop body, in order. "Read" means a GPLEV0 read. The right column is the obl
 | 7 | Add the trace line (9), if tracing. | Outside the READY window |
 | 8 | Spin until 500 ns have passed since `t` (`Instant`). GPCLR0 = ACK. Read until ACK is low. Go to 1. | `ARCHITECTURE.md` 6.4 rule 2: at least 500 ns before REQ is treated as a new access |
 
-**Abort rule.** Between step 3 and ACK, every read in steps 4 and 5 (the abort check before D0-D7 become outputs, each read of the D and LATCH read-back loops, and the pre-ACK read) leaves for RESET handling when it shows RESET high **or REQ low**. An access that has not been ACKed can lose REQ only through RESET (the WAIT flip-flop is cleared only by ACK or RESET, `ARCHITECTURE.md` 6.4), so REQ low means a RESET pulse came and went, even one too short to still see. This is what keeps a pulse during an IN from leaving D0-D7 driven or a read-back loop spinning.
+**Abort rule.** Between step 3 and ACK, every read in steps 4 and 5 (the abort check before D0-D7 become outputs, each read of the D and LATCH read-back loops, and the pre-ACK read) leaves for RESET handling when it shows RESET high **or REQ low**. An access that has not been ACKed can lose REQ only through RESET (the WAIT flip-flop is cleared only by ACK or RESET, `ARCHITECTURE.md` 6.4), so REQ low means a RESET pulse came and went, even one too short to still see. The step 4 IN reads also leave when they show **DIR high**: during an IN only a new access can show it, after a pulse that came and went during a slow `bus.read` and a reboot whose first Pi-window access (an OUT; the monitor's is always `OUT 00`) is already up. This is what keeps a pulse during an IN from leaving D0-D7 driven, or driven against the data 74LVC245A, or a read-back loop spinning.
 
 Notes:
 - The daemon never waits for REQ to go low. After step 8 a high REQ is a new access; the WAIT flip-flop guarantees it (`ARCHITECTURE.md` 6.4 rule 2).
@@ -231,7 +234,7 @@ What this gives, by case:
 | While idle | Devices rebuilt at release. |
 | After the daemon sampled a request, before ACK, still high at step 5 | Level. No ACK. The device call may or may not have taken effect on the old devices, which are then dropped (`DEVICE_SPECS.md` 2.8). |
 | Pulse that came and went before step 5, 8080 still in reset or booting | REQ is low at an abort-rule read. Same as above. |
-| Pulse that came and went during a slow device call, and the 8080 has rebooted and raised a new REQ | More than 1 ms passed, so step 5 asks the edge latch. Same as above; the new access is then served on fresh devices. |
+| Pulse that came and went during a slow device call, and the 8080 has rebooted and raised a new REQ | More than 1 ms passed, so step 5 asks the edge latch. Same as above; the new access is then served on fresh devices. During an IN, if the new access is an OUT, DIR high at the abort check before the drive stops it first, so D0-D7 never become outputs; if it is an IN, the drive is to a legal IN cycle and the step 5 latch still stops the ACK. |
 | After ACK | The access completed. The reset is handled at the next step 1, step 5 or console pass. |
 
 The one race `ARCHITECTURE.md` 6.6 accepts remains: descheduled between step 5 and step 6 for longer than the RESET pulse plus the boot path. The isolated core (11) makes it rarer still.
@@ -255,6 +258,7 @@ Contract: `DEVICE_SPECS.md` 4. Decisions CONSOLE-TRANSPORT and CONSOLE-OUTPUT.
 
 - One listener, bound at startup (`--listen`), non-blocking. Bind failure is an `Err` from `pi_main` (exit 1).
 - A new client replaces the old one: the old socket is closed (its client sees EOF) and its unsent pending output is discarded with it. The new socket is non-blocking with `TCP_NODELAY` (interactive echo).
+- **No authentication.** Whoever opens a TCP connection to the listener types monitor commands, and replaces the operator's client. That includes a web browser on any machine that can reach the port: a page can POST to it, the monitor answers each HTTP header line with an error, and the body then runs as commands (`:` records and `G` run any 8080 code). The console reaches everything the 8080 does: storage writes, `GET` from the Pi into its LAN and loopback, `ASK` on the owner's key. Keep the listener on loopback, reach it over the ssh tunnel to a Unix socket (11), and on a machine running `--sim` or a TCP tunnel remember that a browser there can reach it too.
 - Raw bytes both ways, 8-bit transparent, nothing added. No telnet negotiation: a telnet client's IAC bytes would arrive as console input. Clients: `socat -,rawer,escape=0x1d TCP:host:port` (Ctrl-] quits; Ctrl-C reaches the 8080 as 03) or `nc` for scripts.
 - **Half-close.** `read` returning 0 is input EOF only: the daemon stops reading that client and keeps sending it output. Scripted clients (`cat x.hex | nc pi 8080`, socat with a file source, transcript replay) shut down their write side and then wait for the output. The client is dropped only on a write error (EPIPE, ECONNRESET; Rust already ignores SIGPIPE), a read error other than `WouldBlock`, or a new client.
 
@@ -317,7 +321,7 @@ Command-line flags, plus `ANTHROPIC_API_KEY` from the environment (Phase 9). The
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--listen ADDR:PORT` | `127.0.0.1:8080` | Console listener (7.1). Loopback by default, reached with `ssh -L` (11); pass a wildcard address to open it to the LAN. Under systemd use a loopback or wildcard address (`0.0.0.0`, `[::]`), never an interface address: the unit does not wait for the network (11) |
+| `--listen ADDR:PORT` | `127.0.0.1:8080` | Console listener (7.1). Loopback by default, reached with `ssh -L` (11); pass a wildcard address to open it to the LAN, which gives every LAN host the unauthenticated console (7.1): storage writes, `GET` from the Pi, `ASK` on the key. Under systemd use a loopback or wildcard address (`0.0.0.0`, `[::]`), never an interface address: the unit does not wait for the network (11) |
 | `--storage DIR` | required | Storage directory (6) |
 | `--trace FILE` | none | Port trace (9) |
 | `--sim FILE` | none | Simulated board (16): runs the 8080 model with the 4096-byte ROM image FILE instead of opening the GPIO |
@@ -326,7 +330,7 @@ Command-line flags, plus `ANTHROPIC_API_KEY` from the environment (Phase 9). The
 - A bad or missing argument prints the usage line and exits 2, like the emulator: `usage: pi8080d --storage DIR [--listen ADDR:PORT] [--trace FILE] [--sim FILE]`.
 - **CPU core:** not a flag. systemd `CPUAffinity=` (11) or `taskset -c 3` for a manual run pins the process.
 - **Signals:** SIGTERM and SIGINT set a static `AtomicBool` (handler via `libc::signal`), which `pi_main` passes to `serve` as `stop` (4.1).
-- **Startup order** (`pi_main`): parse arguments and read `ANTHROPIC_API_KEY`; `GpioMem::open()`; `pi::setup_pins` (3.3); `gpio.request_reset()` (5.1); bind the listener; open the trace; `serve`. Under `--sim`: parse arguments and read the key; read the ROM image (16.4); `SimBoard::new` (16.2); `pi::setup_pins`; bind the listener; open the trace; start the 8080 thread (16.2); `serve`. Any `Err` prints `pi8080d: ` and the message to stderr and exits 1.
+- **Startup order** (`pi_main`): parse arguments and read `ANTHROPIC_API_KEY`; `GpioMem::open()`, which takes the single-instance lock (3.3); `pi::setup_pins` (3.3); `gpio.request_reset()` (5.1); bind the listener; open the trace; `serve`. Under `--sim`: parse arguments and read the key; read the ROM image (16.4); `SimBoard::new` (16.2); `pi::setup_pins`; bind the listener; open the trace; start the 8080 thread (16.2); `serve`. Any `Err` prints `pi8080d: ` and the message to stderr and exits 1.
 - Logging is stderr only (journald under systemd): startup settings, client connect, input EOF and disconnect, each RESET, errors. Nothing per access. The startup line gives the listener's bound address, so `--listen 127.0.0.1:0` reports its port: `pi8080d: console on ADDR:PORT, storage DIR, trace FILE|off, ask on|off`, plus `, board simulated, ROM FILE` under `--sim`. Nothing is logged per `ASK`.
 
 ---
@@ -334,7 +338,7 @@ Command-line flags, plus `ANTHROPIC_API_KEY` from the environment (Phase 9). The
 ## 11. Deployment
 
 - **Pi:** Raspberry Pi 4B, 64-bit Raspberry Pi OS Lite (`HARDWARE_BUILD.md` 5). A heatsink: one core runs at 100% indefinitely.
-- **`/boot/firmware/config.txt`:** nothing may claim BCM 4-13, 16, 17 or 20-27. SPI stays off (the default), no `w1-gpio` overlay, no I2S/PCM overlay. The daemon refuses to start otherwise (3.3).
+- **`/boot/firmware/config.txt`:** nothing may claim BCM 4-13, 16, 17 or 20-27. SPI stays off (the default), no `w1-gpio` overlay, no I2S/PCM overlay. The daemon refuses to start on an ALT function (SPI, I2S/PCM), but it does **not** detect 1-Wire or any other overlay or driver that holds one of those pins as a plain GPIO (3.3): check every `dtoverlay=` and `gpio=` line in `config.txt` (and that 1-Wire is off in `raspi-config`) before the first start.
 - **`/boot/firmware/cmdline.txt`:** append `isolcpus=3 irqaffinity=0-2`. Core 3 then runs only what is pinned to it. Whether the Pi OS kernel also supports `nohz_full=3 rcu_nocbs=3` is a [bench] item; without it the scheduler tick still interrupts core 3 for a few microseconds every tick, which shows up only as rare slow accesses.
 - **Scheduling:** normal priority (`SCHED_OTHER`), no `SCHED_FIFO`. A busy-looping real-time task is throttled by the kernel's RT limit (50 ms of every second by default) and starves the per-CPU kernel threads; isolation, not priority, keeps the core to itself.
 - **User:** a system user `pi8080` in group `gpio`. Raspberry Pi OS gives `/dev/gpiomem` and `/dev/gpiochip*` to `root:gpio` mode 0660 through udev, so the daemon needs no root and no capabilities.
@@ -363,7 +367,7 @@ WantedBy=multi-user.target
 ```
 
   No `After=network-online.target`: the listener binds without a network, and the 8080 is stalled until the daemon runs, so the daemon starts as early as it can. An `ASK` before the network is up gives 83, like `T` before NTP. `StartLimitIntervalSec=0` keeps it retrying every second through a transient early-boot failure (udev not yet done with `/dev/gpiomem` or the gpiochip); without it systemd gives up after 5 starts in 10 s and the 8080 stalls until someone logs in. A configuration refusal (ALT function, wrong SoC) then only repeats in the journal. A crash restarts it in a second; the 8080 waits under READY meanwhile (`DEVICE_SPECS.md` 3.4) and its devices come back fresh (`DEVICE_SPECS.md` 2.9).
-- **Reaching the console from the Mac** with the loopback default: `ssh -L 8080:localhost:8080 pi`, then `socat -,rawer,escape=0x1d TCP:localhost:8080`.
+- **Reaching the console from the Mac** with the loopback default, through a Unix socket so no TCP port opens on the Mac (a browser there cannot connect to a Unix socket; the console has no authentication, 7.1): `ssh -o StreamLocalBindUnlink=yes -L /tmp/pi8080.sock:localhost:8080 pi`, then `socat -,rawer,escape=0x1d UNIX-CONNECT:/tmp/pi8080.sock`. ssh creates the socket mode 0600 (its default `StreamLocalBindMask`), so other users on the Mac cannot use it either. A TCP forward (`-L 8080:localhost:8080`) also works, but then any page open in a browser on the Mac can type commands.
 - **Simulated board:** with the 16.4 drop-in installed, the same unit runs `--sim`. Remove it to go back to the board.
 
 ---
@@ -461,14 +465,17 @@ Driven from the test thread with `begin`/`wait` directly, no CPU. Each test give
 | `reset_pulse_mid_in_is_never_acked_and_resets_devices` | Mount `A.BIN`; type `xyz` and wait for `IN 02` = 03; `pause_next_request`; `begin(IN 0C)`; `wait_paused`; pulse RESET; `resume`; begin nothing until the daemon's next `reset_edge()` call (its RESET handling), so only the abort rule's REQ-low read can catch the pulse | The access ends aborted, with no ACK. Then `IN 0C` bit 0 = 0, `IN 0F` = 01, `IN 02` = 02, `IN 01` = 00, `IN 12` = 00. One `RESET` trace line; the paused access has none |
 | `reset_pulse_mid_out_is_never_acked_and_resets_devices` | Same, paused on `OUT 0B` | No ACK; storage unmounted; the client still connected |
 | `reset_and_reboot_during_a_slow_access` | Mount; pause on `OUT 0B`; `wait_paused`; pulse RESET; `begin(OUT 00 'B')`; `resume` | `OUT 0B` aborted; `OUT 00` completes; the client receives `B`; storage unmounted (edge path, 5.2 table row 4) |
+| `reset_and_reboot_during_a_slow_in_never_drives_d` | Same, paused on `IN 0F` | `IN 0F` aborted with D0-D7 never outputs (the board's DIR-OUT check); `OUT 00` completes; the client receives `B`; storage unmounted (abort rule, DIR high) |
 | `reset_pulse_during_in_readback_does_not_hang` | A D bit forced stuck; `begin(IN 02)`; after 5 ms pulse RESET; release the stuck bit; `begin(IN 0F)` | The IN ends aborted; `IN 0F` = 01 |
 | `reset_held_blocks_service_until_release` | Pause on `OUT 00`; `wait_paused`; RESET on; `resume`; wait 20 ms; RESET off; `begin(IN 0F)` | No ACK while held; after release `IN 0F` = 01 |
-| `reset_while_idle_resets_devices` | Type `ab`, wait for `IN 02` = 03, type `cd` (left in the socket: the FIFO holds input), pulse RESET with no access | `IN 02` = 02 afterwards, and still after a pass (the socket's bytes were discarded) |
+| `reset_while_idle_resets_devices` | Type `ab`, wait for `IN 02` = 03, type 10 KiB (left in the socket: the FIFO holds input; more than one 4 KiB read), pulse RESET with no access | `IN 02` = 02 afterwards, and still after a pass (all the socket's bytes were discarded, not only the first read's) |
+| `reset_discards_output_not_yet_sent` | `gap` = 0, `req_fall` = 0, no trace file; a client that reads nothing; queue 1 MiB of `OUT 00` (letters in a cycle) and let the daemon drain them with no pass between; wait 200 ms (passes fill the socket); pulse RESET; after a pass, `OUT 00 '#'`; read the client up to the `#` | Fewer than 1 MiB bytes before the `#`, and they are the stream's first bytes in order: the pending chunk was dropped at RESET, not sent after it (5.2 step 6) |
 | `a_late_release_event_does_not_reset_twice` | `release_event_delay` = 5 ms; pulse RESET; `OUT 00` `a` at once; wait 10 ms; `OUT 00` `b` | The client receives `ab`; exactly one `RESET` trace line |
 | `a_request_pending_at_start_is_served` | `begin(OUT 00 'Q')`, then start the daemon | The access completes; the client receives `Q` |
 | `back_to_back_requests_never_wait_for_req_low` | `gap` = 0, `req_fall` = 0, no trace file; queue 1,000 accesses at once and let the daemon drain them before the first `wait()` (poll the completion count, so no test thread is woken on each ACK edge) | All complete, and the board's 500 ns ACK-high check holds (a daemon that waits for REQ low hangs and the 10 s timeout fails it) |
 | `startup_releases_d_and_drives_ack_and_latch_low` | Board starts with D0-D7 as outputs and ACK and LATCH as outputs latched high | When `setup_pins` returns, D0-D7 are inputs and ACK and LATCH read low; the 13.1 checks pass through a first access |
-| `a_pin_in_an_alt_function_refuses_to_start` | GPFSEL0 has pin 7 in ALT0 | `setup_pins` returns an error naming BCM 7; no register written |
+| `a_pin_in_an_alt_function_refuses_to_start` | Pin 7 (GPFSEL0), 12 (GPFSEL1) and 27 (GPFSEL2), each in turn with every field code 010-111 (ALT0-ALT5) | `setup_pins` returns an error naming the pin; no register written |
+| `a_second_daemon_is_refused_by_the_gpio_lock` | `open_gpio` on a temporary file `F`; `open_gpio` on `F` again; drop the first; `open_gpio` on `F` again | The second fails with `F: another pi8080d holds the GPIO`; after the first is closed the third succeeds |
 | `ack_stuck_high_refuses_to_start` | ACK forced high | `setup_pins` returns the `BCM 16 (ACK) reads high` error |
 | `stop_while_reset_is_held_returns_and_flushes` | Mount, `OUT 0B` a byte; after a pass, RESET on; wait for RESET handling's two register writes (5.2 step 1: the daemon is past step 1's stop check); set stop | `serve` returns `Ok`; the byte is in the file; no ACK raised; the trace ends `RESET` |
 | `stop_with_a_stuck_d_bit_returns_and_flushes` | Mount, write a byte; a D bit stuck; `begin(IN 02)`; set stop | `serve` returns `Ok`; the byte is in the file; D0-D7 inputs, ACK and LATCH low |
@@ -496,6 +503,7 @@ The one list. Each closes on the built board, at the bring-up step given (`HARDW
 | The `pinctrl-bcm2711` gpiochip is found and the v2 line request succeeds; RESET edges arrive with `CLOCK_MONOTONIC` stamps; a late release event never causes a second reset (trace shows one `RESET` per press over 100 presses) | 5 |
 | Boot port trace and banner byte-identical to the emulator's | 5 |
 | Either power-on order; daemon started after the 8080: the first access completes | 5 |
+| A second `pi8080d` started beside the unit exits 1 with `/dev/gpiomem: another pi8080d holds the GPIO`, and the unit's console keeps working | 5 |
 | The musl static binary cross-built on the Mac runs on the Pi; local time is correct under it (musl reads `/etc/localtime`) | 5 |
 | Every transcript over TCP; HEX paste loses nothing; whole-command overhead (12.2 method 2) | 6 |
 | `T` right after boot with the network down prints `Service error`; after timesyncd syncs it prints the local time | 6 |
@@ -567,10 +575,10 @@ The rule: **only the `Gpio` implementation differs.** `serve` gets a `SimBoard` 
 
 - `--sim FILE`: FILE is a ROM image of exactly 4096 bytes, run at F000 (`ARCHITECTURE.md` 2: `rom/monitor.bin`), read once at startup. Any other size, or a read error, is an `Err` before anything else starts: `--sim FILE: N bytes, not 4096`, or the OS error (exit 1).
 - The other flags (10) mean the same as on the board. `--sim` runs on Linux and macOS; without it the daemon is Linux only (2).
-- On the Mac, from the repo: `cargo run --bin pi8080d -- --sim rom/monitor.bin --storage /tmp/pi8080d`, then `socat -,rawer,escape=0x1d TCP:localhost:8080`. Use a storage directory of its own: the emulator's `storage/` works too, but not while the emulator runs.
+- On the Mac, from the repo: `cargo run --bin pi8080d -- --sim rom/monitor.bin --storage /tmp/pi8080d`, then `socat -,rawer,escape=0x1d TCP:localhost:8080`. While it runs, a web page in a browser on the Mac can reach that port too (7.1, no authentication). Use a storage directory of its own: the emulator's `storage/` works too, but not while the emulator runs.
 - On a Pi or any Linux box:
   1. Install the binary and the unit as in 11. On a box with no `gpio` group, `groupadd --system gpio` first: the unit names it, and systemd refuses to start a unit whose group does not exist.
-  2. Copy the ROM image to `/usr/local/share/pi8080d/monitor.bin`.
+  2. Copy the ROM image to the Pi as the binary (2) and install it: `scp rom/monitor.bin pi:/tmp/`, then `ssh pi sudo install -D -m 0644 /tmp/monitor.bin /usr/local/share/pi8080d/monitor.bin`.
   3. Install `scripts/pi8080d-sim.conf` as `/etc/systemd/system/pi8080d.service.d/sim.conf`.
   4. `systemctl daemon-reload`, then `systemctl restart pi8080d`.
 

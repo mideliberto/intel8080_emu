@@ -175,8 +175,8 @@ fn map(c: char, emit: &mut impl FnMut(u8)) {
     s.bytes().for_each(emit);
 }
 
-/// The wrapping (DEVICE_SPECS 8, ASK, Wrapping), incremental: a byte goes out as soon as
-/// no later text can change it.
+/// The wrapping (DEVICE_SPECS 8, ASK, Wrapping), incremental: a byte goes out once it is
+/// outside the held-back part (DEVICE_SPECS 8, ASK, Delivery).
 #[derive(Default)]
 struct Wrap {
     /// The current output line: `line[..sent]` is out, the rest held back.

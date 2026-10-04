@@ -96,6 +96,8 @@ fn monotonic_ns() -> u64 {
 /// The real `Gpio`: the mmapped register block and the RESET line request.
 pub struct GpioMem {
     base: *mut u32,
+    /// `/dev/gpiomem`, kept open for its lock (`pi::open_gpio`).
+    _lock: File,
     /// The line-event fd, after `request_reset`.
     reset: Option<File>,
     /// CLOCK_MONOTONIC of the previous `reset_edge` call (first: the request).
@@ -104,7 +106,7 @@ pub struct GpioMem {
 
 impl GpioMem {
     /// Maps the GPIO block. Refuses anything but a BCM2711 (a Pi 5's RP1 has a different
-    /// register model).
+    /// register model), and refuses if another pi8080d holds the block's lock.
     pub fn open() -> Result<Self, String> {
         let path = "/proc/device-tree/compatible";
         let compatible = std::fs::read(path).map_err(|e| format!("{}: {}", path, e))?;
@@ -112,9 +114,8 @@ impl GpioMem {
             return Err(format!("{}: not a BCM2711 (Pi 4B)", path));
         }
         let path = "/dev/gpiomem";
-        let file = OpenOptions::new().read(true).write(true).custom_flags(libc::O_SYNC).open(path)
-            .map_err(|e| format!("{}: {}", path, e))?;
-        // SAFETY: a fresh shared mapping of the 4 KiB GPIO block; the fd may close after mmap.
+        let file = super::open_gpio(OpenOptions::new().read(true).write(true).custom_flags(libc::O_SYNC), path)?;
+        // SAFETY: a fresh shared mapping of the 4 KiB GPIO block.
         let base = unsafe {
             libc::mmap(std::ptr::null_mut(), 4096, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED,
                        file.as_raw_fd(), 0)
@@ -122,7 +123,7 @@ impl GpioMem {
         if base == libc::MAP_FAILED {
             return Err(format!("{}: mmap: {}", path, std::io::Error::last_os_error()));
         }
-        Ok(GpioMem { base: base as *mut u32, reset: None, last: 0 })
+        Ok(GpioMem { base: base as *mut u32, _lock: file, reset: None, last: 0 })
     }
 
     /// Requests RESET (line 13) as an input with both-edge events on the gpiochip labelled
