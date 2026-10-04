@@ -26,6 +26,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Mailbox `ASK` and Q: Claude via the Messages API, the key on the Pi (Phase 9) | ✅ |
 | R: the registers a program left at its `G` return (Phase 10) | ✅ |
 | Example programs (`examples/hello`, `examples/memtest`) and the user guide (Phase 11) | ✅ |
+| In-circuit ROM burn: `examples/burn` through jumper JP-WE, rehearsed in the emulator with `--jp-we` ([USER_GUIDE](docs/USER_GUIDE.md) 10, Phase 12) | ✅ Code; 🔲 bench |
 
 ## Monitor Commands
 
@@ -104,6 +105,7 @@ rom/
 
 examples/
 ├── Makefile             # make: NAME.hex from NAME.asm (asl + p2hex)
+├── burn.asm / .hex      # Programs the ROM from an image in RAM (JP-WE fitted)
 ├── hello.asm / .hex     # Prints a line, returns to the monitor
 └── memtest.asm / .hex   # RAM test over a range
 

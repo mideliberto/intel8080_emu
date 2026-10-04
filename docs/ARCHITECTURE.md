@@ -61,7 +61,7 @@ The I/O stubs run from RAM as self-modifying code. Real hardware runs it the sam
 ## 2. ROM Organization
 
 - **Source:** `rom/monitor.asm`. **Image:** `rom/monitor.bin`, exactly 4096 bytes, assembled at `ORG 0F000H`, unused bytes 0xFF.
-- **Fixed address:** only one. COLD_START is the first byte of the image (0xF000, which is also 0x0000 through the overlay). Every other routine address can move from build to build.
+- **Fixed address:** only one. COLD_START is the first byte of the image (0xF000, which is also 0x0000 through the overlay). Every other routine address can move from build to build. The image's first 7 bytes are fixed too (3.2, requirement 7).
 - **No WARM vector.** WARM (3.2) has no fixed address. A program reaches it only through the `G` return contract (`MONITOR_SPEC.md`); anything else that wants the monitor back jumps to F000, a cold start (banner, workspace reset). The CP/M exerciser shim (`tests/exerciser.rs`) does that at 0000. (Decided 2026-10-03.)
 - **No public entry points.** User programs MUST NOT call ROM routines by address. Programs do their own I/O through the ports in `DEVICE_SPECS.md`. ROM routine contracts are in `MONITOR_SPEC.md` (ROM Routine Contracts); they describe the code, not an ABI.
 - **Budget:** 4096 bytes. Used bytes = `ROM_END - 0F000H`, where `ROM_END` is a label after the last assembled byte. `make size` prints that number. The padded image size is not a measurement.
@@ -152,7 +152,8 @@ Requirements:
 3. Boot does not drain console input. RESET flushes the Pi's console FIFO (`DEVICE_SPECS.md` rule 2.8), so no stale bytes are waiting.
 4. The ROM never executes `EI` or `HLT`.
 5. **WARM** sits directly before MAIN_LOOP. It sets SP to 0xF000 and does nothing else. `G` pushes G_RETURN's address (`MONITOR_SPEC.md` 8), which ends at WARM. The program-facing return contract is in `MONITOR_SPEC.md` (G Return Contract).
-6. The ROM contains no timing-dependent code (no calibrated delay loops). The emulator runs unthrottled, and the hardware clock (6.1) is a design target, not a ROM dependency.
+6. The ROM contains no timing-dependent code (no calibrated delay loops). The emulator runs unthrottled, and the hardware clock (6.1) is a design target, not a ROM dependency. The one exception is code that writes the EEPROM (6.10 rules 3 and 4): the bytes of a page load each follow the last within tBLC at the slowest legal clock, and a minimum wait of tBLC at the fastest legal clock closes the page load. Both hold at every legal clock, longer waits are always safe, and the end of the write is still detected by polling. Today that code is `examples/burn`, a user program; the ROM has none.
+7. **COLD_START's first 7 bytes are fixed:** `LXI SP,0F000H`, `DI`, `JMP BOOT_CONTINUE` with BOOT_CONTINUE directly after them, so every ROM image starts `31 00 F0 F3 C3 07 F0` (the RAM test build, 2.1: `31 00 F0 F3 C3 07 D0`). `examples/burn` refuses an image whose byte 0 is not 31 or whose byte 6 is not F0, before it writes anything (6.10). Test: `cold_start_layout_is_what_burn_checks` (`tests/monitor_tests.rs`).
 
 ---
 
@@ -424,7 +425,7 @@ The console transport between the terminal and the Pi (UART with RTS/CTS, USB ga
 
 ### 6.10 ROM Write Enable (JP-WE)
 
-Decided 2026-10-03 (Mike). The circuit that lets the 8080 reprogram its own ROM. The routine that would do it (a monitor `burn` command) is Someday (`TODO.md`). This section fixes the circuit, its default and the rules that routine must follow.
+Decided 2026-10-03 (Mike). The circuit that lets the 8080 reprogram its own ROM. The code that does it is a burn program (`examples/burn`, decided 2026-10-04), a user program loaded like any other, not a monitor command: it costs no ROM bytes. Procedure: `USER_GUIDE.md` 10. This section fixes the circuit, its default and the rules that code must follow.
 
 **Circuit.** One 74HCT138 decodes the ROM range during MEMW. Jumper JP-WE connects its output to the EEPROM:
 
@@ -461,10 +462,10 @@ JP-WE pin 2 is AT28C64B /WE (pin 27), which has a 10 kohm pull-up to +5 V.
 
 The 15 ns /WE noise filter (typ, AT28C64B DS 4.6.1 (d)) is not relied on.
 
-**Rules for any code that writes the ROM.** Normative now, so that the Someday routine is built to them:
+**Rules for any code that writes the ROM.** `examples/burn` follows them; its header gives the T-state counts:
 1. **JP-WE is open in normal use.** Fit it only for a burn and remove it afterwards. While it is fitted, any write to F000-FFFF reprograms the monitor: a user program, the E, A, F, L and M commands (they do not guard F000-FFFF, `MONITOR_SPEC.md` 6), and a stack that wraps from SP = 0000 into FFFF.
 2. **Run from RAM with the overlay clear.** After each byte or page write, every read of the EEPROM is a polling read, not data, for up to tWC = 10 ms (AT28C64B DS 4.2, 4.4, 4.5, 16). Code fetched from F000-FFFF, or from the 0000 mirror while the overlay is set, would be garbage during that time.
-3. **Detect the end of a write by polling, never by a delay.** Read the last address written until bit 7 returns the true data (DATA polling, AT28C64B DS 4.4), or until bit 6 stops toggling (AT28C64B DS 4.5). The ROM has no timing-dependent code (3.2, requirement 6).
+3. **Detect the end of a write by polling, never by a delay.** Read the last address written until bit 7 returns the true data (DATA polling, AT28C64B DS 4.4), or until bit 6 stops toggling (AT28C64B DS 4.5). The ROM has no timing-dependent code (3.2, requirement 6). **One exception:** a minimum wait after the last byte of a page, which only closes the page load: at least tBLC at the fastest legal clock (150 us at tCY 0.48 us, 313 T). Longer is always safe. It exists because the datasheet leaves open whether a read inside the page-load window is a polling read (bench item K-1, `HARDWARE_BUILD.md` 6); after the wait, polling is valid under either reading. The end of the write is still detected by polling. `examples/burn` waits 344 T, then toggle-polls I/O6 until two successive reads agree. With JP-WE open nothing toggles, so the poll ends at once and the verify that follows reports the failure, never a hang.
 4. **Page writes.** A page is 1-64 bytes in one 64-byte page: chip A6-A12 must be the same for every byte, which with A12 tied low means one 64-byte-aligned block of F000-FFFF. Each byte must follow the previous one within tBLC = 150 us, or the chip closes the page and ignores the rest (AT28C64B DS 4.3, 16). The routine therefore buffers the data in RAM first and makes no Pi-window access inside a page load: a Pi-window access can wait under READY without bound (6.4, rule 4).
 5. **Software data protection stays disabled.** The part ships with SDP disabled (AT28C64B DS 4.6.2), and the chip MUST be programmed with SDP left off. The SDP enable and disable sequences write to chip address 1555 (AT28C64B DS 19, 20), which needs A12 = 1. A12 is tied low, so the 8080 can neither set nor clear SDP. A chip with SDP set rejects every in-circuit write, and each rejected write still starts a tWC polling period (AT28C64B DS 4.6.2).
 6. **Power transitions.** The chip blocks writes below VCC 3.8 V (typ) and for 5 ms (typ) after VCC reaches it (AT28C64B DS 4.6.1 (a), (b)). The reset supervisor holds RESET below about 4.6 V (6.6). Neither replaces rule 1.
@@ -479,7 +480,7 @@ The 15 ns /WE noise filter (typ, AT28C64B DS 4.6.1 (d)) is not relied on.
 | Opcode or operand fetch before the write cycle ends; a debugger read | Status as above, without flipping bit 6. |
 | Any read after the write cycle | The cell. |
 
-The page load is in cycles, so it follows the CPU, not host time. A write to 0000-0FFF reaches RAM only, with or without the overlay. The RAM side of a write to F000-FFFF is unchanged (section 4: nothing reads it). RESET does not touch the chip. The datasheet leaves open what a read inside the page-load window returns before programming starts (bench item K-1). The default is status, as if polling starts with the first write; the test harness switch `set_load_window_cells(true)` gives the literal reading, the cell, and the tests run both. tWC is a test variable: tests run 1 to 65,535 cycles, and code that writes the ROM MUST NOT depend on it (rule 3). Tests: the `jp_we_` tests in `tests/cpu_tests.rs`, `tests/monitor_tests.rs` and `tests/debugger_tests.rs`.
+The page load is in cycles, so it follows the CPU, not host time. A write to 0000-0FFF reaches RAM only, with or without the overlay. The RAM side of a write to F000-FFFF is unchanged (section 4: nothing reads it). RESET does not touch the chip. The datasheet leaves open what a read inside the page-load window returns before programming starts (bench item K-1). The default is status, as if polling starts with the first write; the test harness switch `set_load_window_cells(true)` gives the literal reading, the cell, and the tests run both. tWC is a test variable: tests run 1 to 65,535 cycles, and code that writes the ROM MUST NOT depend on it (rule 3). Tests: the `jp_we_` tests in `tests/cpu_tests.rs`, `tests/monitor_tests.rs` and `tests/debugger_tests.rs`, and the `burn_` tests in `tests/monitor_tests.rs`, which run `examples/burn` under both readings and several tWC values.
 
 ### 6.11 Status LEDs
 
@@ -700,4 +701,4 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 - **Phase 10 (done 2026-10-03):** the monitor's `R` command and the G_RETURN capture (`MONITOR_SPEC.md` 6.20, 8) and the REGS workspace row (1.1). No circuit change.
 - **Phase 11 (done 2026-10-03):** example programs, the user guide and a consistency pass. No memory-map, circuit or
   ROM change.
-- **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6); a monitor routine that reprograms the ROM through JP-WE (6.10 rules); its emulator model exists (6.10, Emulator).
+- **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6).

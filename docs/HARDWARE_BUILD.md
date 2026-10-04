@@ -32,7 +32,7 @@ All accepted by Mike on 2026-10-02, except ROM-WE, STATUS-LEDS and LA-HEADER (20
 | DEV-RESET | Device reset = rebuild the IoBus and devices from config. |
 | TRACE-FORMAT | Line format only: `ARCHITECTURE.md` 7.3. |
 | HW-STEP | No hardware single-step in v1 (Someday). The emulator is the debugger. |
-| ROM-WE | AT28C64B /WE: 74HCT138 decode of MEMW to F000-FFFF, through jumper JP-WE, pulled up at the chip. Built open. Programmed with SDP off. The burn routine is Someday. `ARCHITECTURE.md` 6.10. |
+| ROM-WE | AT28C64B /WE: 74HCT138 decode of MEMW to F000-FFFF, through jumper JP-WE, pulled up at the chip. Built open. Programmed with SDP off. In-circuit burns: `examples/burn` (`USER_GUIDE.md` 10). `ARCHITECTURE.md` 6.10. |
 | STATUS-LEDS | WAIT, HALT, INTE and HLDA LEDs on 74HCT08 gates. `ARCHITECTURE.md` 6.11. |
 | LA-HEADER | Three 2x10 analyzer headers (LA-A, LA-B, LA-C), 16 channels each, GND on pins 17-20; CPU-side D0-D7 through 1 kohm. `ARCHITECTURE.md` 6.12; pin order in 3.1 here. |
 
@@ -108,6 +108,8 @@ One stage at a time. Do not start a stage until the previous one passes.
 
 
 ROM changes can run on the board before a burn: the RAM test build (`ARCHITECTURE.md` 2.1), loaded through the resident monitor from step 5 on.
+
+The first in-circuit burn (`examples/burn`, `USER_GUIDE.md` 10) comes after step 7: it needs the monitor, the console and storage. Run K-1 (section 6) just before it. Until then, and to recover from a failed burn, use the external programmer.
 
 ### 3.1 Logic Analyzer
 
@@ -237,3 +239,8 @@ These cannot be closed on paper. Each has a bring-up check.
 - **Pi per-access service time** is unmeasured (`PI_DAEMON.md` 12.2, 14). Step 5.
 - **8228 tRD on CPU-side D4/D6.** tRD (30 ns) is characterized at 25 pF, and D4/D6 carry about 33-38 pF before any probe (est, `ARCHITECTURE.md` 6.12 rule 2). Pre-existing: the analyzer only adds to it, through the 1 kohm isolation. The CPU-side data pins have no datasheet margin in sink current either: on a read the 8228 is rated for IOL 2 mA, exactly the 8080A's active pull-up (IDL 2.0 mA), and the analyzer (<= 10 uA, all eight pins) and on D4/D6 the GAL pin-keeper (40 uA typ, no max, ATF22V10C 0735U 8) sit on top of it. That is why CPU-side D0-D7 get no pull-up (`ARCHITECTURE.md` 6.13). Step 3 runs with the analyzer attached and must pass.
 - **NOS chip quality.** Buy spares; never a NEC D8080A without F. Steps 2 and 8.
+- **K-1: does I/O6 toggle inside the page-load window?** The AT28C64B datasheet leaves open whether a read inside tBLC, before programming starts, is a polling read (`ARCHITECTURE.md` 6.10 rule 3). Informational: `examples/burn` waits out tBLC before it polls, so it is correct either way. After step 7, with the monitor at its prompt: paste the record below, fit JP-WE, `G 0300`, remove JP-WE, `D 0380 0380`. The program writes FFFF's own byte back (so the ROM does not change), reads it twice at once, stores the XOR of the two reads at 0380, then waits out the page load and toggle-polls: `LXI H,FFFF / MOV A,M / MOV M,A / MOV A,M / XRA M / STA 0380 / MVI B,14 / DCR B / JNZ 030C / MOV A,M / XRA M / ANI 40 / JNZ 0310 / RET`. 40 at 0380: I/O6 toggled inside tBLC (the emulator's default reading). 00: it did not (the literal reading, `set_load_window_cells`), the chip skipped the identical byte, or JP-WE was open. Record the result in `docs/COLLABORATION_LOG.md`. Test: `jp_we_k1_probe`.
+
+  ```
+  :1803000021FFFF7E777EAE328003061405C20C037EAEE640C21003C910
+  ```

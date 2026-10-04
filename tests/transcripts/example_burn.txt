@@ -1,0 +1,48 @@
+# examples/burn.asm (USER_GUIDE.md 5, 10): paste examples/burn.hex, then run it.
+# The records must equal examples/burn.hex line for line (examples_match_their_hex).
+> :10010000C3050100102A03017EFE31C27C011106E5
+> :1001100000197EFEF0C27C012A0301EB2100F0E50C
+> :10012000D51A7713237DE63FC221012B061405C2A1
+> :100130002E017EAEE640C23201D1E11ABEC2630199
+> :1001400013237DE63FC23B017CB5C21F012A030198
+> :10015000EB2100F01ABEC2630113237CB5C2540127
+> :10016000C300F0E521B101CD9601E17CCD82017D96
+> :10017000CD820121AE01CD9601C37901219F01C33A
+> :100180009601F50F0F0F0FCD8B01F1E60FC69027EB
+> :10019000CE4027D300C97EB7C8D30023C396014EF3
+> :1001A0006F74206120524F4D20696D6167650D0AA3
+> :0E01B000004275726E206661696C6564200005
+> :00010001FE
+Loaded
+# Only the refusals: burn checks the image before it writes anything, so each
+# step returns to the prompt with the ROM untouched, JP-WE open or fitted. A
+# burn ends in a cold start (whose banner a transcript must not match,
+# MONITOR_SPEC 1.1) or in a spin until RESET: those are Rust tests.
+# Junk: byte 0 is not 31.
+> F 1000 1FFF 00
+> G 0100
+Not a ROM image
+# A RAM test build image: byte 6 is D0, not F0.
+< E 1000\r31\r00\rF0\rF3\rC3\r07\rD0\r.
+E 1000
+1000: 00-31
+1001: 00-00
+1002: 00-F0
+1003: 00-F3
+1004: 00-C3
+1005: 00-07
+1006: 00-D0
+1007: 00-
+> G 0100
+Not a ROM image
+# Byte 6 right, byte 0 wrong: each byte is checked.
+< E 1006\rF0\r.
+E 1006
+1006: D0-F0
+1007: 00-
+< E 1000\r21\r.
+E 1000
+1000: 31-21
+1001: 00-
+> G 0100
+Not a ROM image

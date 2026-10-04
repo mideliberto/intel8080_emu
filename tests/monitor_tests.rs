@@ -742,6 +742,26 @@ fn jp_we_fitted_lets_a_ram_program_write_the_rom() {
 }
 
 #[test]
+fn jp_we_k1_probe() {
+    // HARDWARE_BUILD 6, K-1: the record writes FFFF's own byte back, reads it twice at once
+    // (inside tBLC), stores the XOR at 0380, then waits out the page load and toggle-polls.
+    // 40: I/O6 toggled inside tBLC (the model's default reading). 00: it did not (the
+    // literal reading), or JP-WE is open. The ROM never changes.
+    let rom = std::fs::read("rom/monitor.bin").unwrap();
+    for (fitted, cells, want) in [(true, false, 0x40), (true, true, 0x00), (false, false, 0x00)] {
+        let mut m = boot();
+        assert_eq!(m.run(":1803000021FFFF7E777EAE328003061405C20C037EAEE640C21003C910"), "");
+        if fitted {
+            m.cpu.fit_jp_we(20_480);
+            m.cpu.set_load_window_cells(cells);
+        }
+        assert_eq!(m.run("G 0300"), "");
+        assert_eq!(m.mem(0x0380, 1), [want], "fitted {} cells {}", fitted, cells);
+        assert!(m.mem(0xF000, 0x1000) == rom);
+    }
+}
+
+#[test]
 fn hex_loader() {
     boot().play("hex");
 }
@@ -1488,6 +1508,240 @@ fn example_hello() {
 #[test]
 fn example_memtest() {
     boot().play("example_memtest");
+}
+
+#[test]
+fn example_burn() {
+    boot().play("example_burn");
+}
+
+/// A booted monitor with examples/burn.hex pasted and `image` at 1000, its default source.
+fn burner(image: &[u8]) -> Mon {
+    let mut m = boot();
+    for record in std::fs::read_to_string("examples/burn.hex").unwrap().lines() {
+        m.run(record);
+    }
+    m.poke(0x1000, image);
+    m
+}
+
+/// rom/monitor.bin with a change the banner shows (`Ready.` becomes `REady.`) and one in
+/// the last page (the final padding byte becomes 5A).
+fn changed_rom() -> Vec<u8> {
+    let mut rom = std::fs::read("rom/monitor.bin").unwrap();
+    let at = rom.windows(6).position(|w| w == b"Ready.").unwrap();
+    rom[at + 1] = b'E';
+    rom[0xFFF] = 0x5A;
+    rom
+}
+
+impl Mon {
+    /// Type `input` and run `cycles` with no prompt expected (a program that never
+    /// returns); return what was printed.
+    fn run_for(&mut self, input: &[u8], cycles: u64) -> Vec<u8> {
+        self.con().borrow_mut().push_input(input);
+        let start = self.cpu.cycles;
+        while self.cpu.cycles - start < cycles {
+            assert!(!self.cpu.halted, "HLT at PC={:04X}", self.cpu.pc);
+            self.cpu.execute_one();
+            self.ports.extend(self.cpu.transfers().iter().filter(|t| matches!(t, Transfer::In(..) | Transfer::Out(..))));
+        }
+        self.con().borrow_mut().take_output()
+    }
+}
+
+#[test]
+fn burn_programs_a_changed_image() {
+    // ARCHITECTURE 6.10: with JP-WE fitted, examples/burn writes the image to F000-FFFF and
+    // jumps to F000: the new monitor cold-starts, and its banner shows the change. For any
+    // tWC and both readings of the page-load window (6.10, Emulator). Once from an
+    // unaligned source (SRC = 1234), so page offsets come from the destination.
+    let new = changed_rom();
+    let mut runs: Vec<(u64, bool, u16)> = Vec::new();
+    for twc in [1, 20_480, 65_535] {
+        runs.extend([(twc, false, 0x1000), (twc, true, 0x1000)]);
+    }
+    runs.push((20_480, false, 0x1234));
+    for (twc, cells, src) in runs {
+        let at = format!("tWC {} cells {} SRC {:04X}", twc, cells, src);
+        let mut m = burner(&[]);
+        m.poke(src, &new);
+        m.poke(0x0103, &src.to_le_bytes());
+        m.cpu.fit_jp_we(twc);
+        m.cpu.set_load_window_cells(cells);
+        let banner = m.run("G 0100");
+        assert!(banner.starts_with("\\r\\n8080 Monitor v") && banner.ends_with("\\r\\nREady.\\r\\n"), "{}: {}", at, banner);
+        assert!(m.mem(0xF000, 0x1000) == new, "{}: the ROM is not the image", at);
+        assert_eq!(m.run("D FFF0 FFFF"), "FFF0: FF FF FF FF FF FF FF FF  FF FF FF FF FF FF FF 5A  ...............Z\\r\\n", "{}", at);
+    }
+}
+
+#[test]
+fn burn_page_loads_meet_tblc_and_close_before_the_poll() {
+    // ARCHITECTURE 6.10 rule 4: 64 runs of 64 writes, one per 64-byte page in order, at most
+    // 75 cycles apart start to start (tBLC 150 us at the slowest clock, tCY 2.0 us), with no
+    // port access inside a run. Rule 3's exception: from the end of a page's last write to
+    // the next read of the chip, at least 313 cycles (tBLC at the fastest clock, tCY
+    // 0.48 us). And the program never runs ROM code until its final JMP F000.
+    let new = changed_rom();
+    let mut m = burner(&[]);
+    m.poke(0x1234, &new);
+    m.poke(0x0103, &[0x34, 0x12]);
+    m.cpu.fit_jp_we(20_480);
+    m.con().borrow_mut().push_input(b"G 0100\r");
+    m.run_to(0x0100);
+    // (start, end, transfer) for every write or read of the chip and every IN or OUT.
+    let mut seen: Vec<(u64, u64, Transfer)> = Vec::new();
+    while m.cpu.pc < 0xF000 {
+        let start = m.cpu.cycles;
+        assert!(start < BUDGET, "no JMP F000");
+        m.cpu.execute_one();
+        for &t in m.cpu.transfers() {
+            if matches!(t, Transfer::MemWrite(0xF000.., _) | Transfer::MemRead(0xF000.., _) | Transfer::In(..) | Transfer::Out(..)) {
+                seen.push((start, m.cpu.cycles, t));
+            }
+        }
+    }
+    assert_eq!(m.cpu.pc, 0xF000, "left the program other than by JMP F000");
+    // A page load: the writes between two reads of the chip.
+    let mut runs: Vec<Vec<usize>> = Vec::new();
+    let mut open = false;
+    for (i, s) in seen.iter().enumerate() {
+        match s.2 {
+            Transfer::MemWrite(..) if open => runs.last_mut().unwrap().push(i),
+            Transfer::MemWrite(..) => {
+                runs.push(vec![i]);
+                open = true;
+            }
+            Transfer::MemRead(..) => open = false,
+            _ => {}
+        }
+    }
+    assert_eq!(runs.len(), 64, "page loads");
+    for (page, run) in runs.iter().enumerate() {
+        assert_eq!(run.len(), 64, "page {}: bytes in the load", page);
+        for (n, &i) in run.iter().enumerate() {
+            assert!(matches!(seen[i].2, Transfer::MemWrite(a, _) if a == 0xF000 + (page * 64 + n) as u16), "page {} byte {}: {:?}", page, n, seen[i].2);
+            if n > 0 {
+                let gap = seen[i].0 - seen[run[n - 1]].0;
+                assert!(gap <= 75, "page {} byte {}: {} cycles after the last", page, n, gap);
+            }
+        }
+        let (first, last) = (run[0], run[63]);
+        assert!(seen[first..last].iter().all(|s| !matches!(s.2, Transfer::In(..) | Transfer::Out(..))), "page {}: a port access in the page load", page);
+        let read = seen[last..].iter().find(|s| matches!(s.2, Transfer::MemRead(..))).expect("no poll");
+        assert!(read.0 - seen[last].1 >= 313, "page {}: read {} cycles after the last write", page, read.0 - seen[last].1);
+    }
+    let banner = m.step(b"").unwrap();
+    assert!(show(&banner).ends_with("\\r\\nREady.\\r\\n"), "{}", show(&banner));
+    assert!(m.mem(0xF000, 0x1000) == new);
+}
+
+#[test]
+fn burn_with_jp_we_open_fails_at_the_first_differing_byte() {
+    // The likely user error (ARCHITECTURE 6.10): nothing is written, I/O6 never toggles, the
+    // poll ends at once, and verify stops at the first byte that differs, after that page's
+    // writes and no later. It prints the address by OUT 00 and spins in the program, with no
+    // port access, until RESET, which boots the old ROM. A raised byte after five identical
+    // pages, at page offset 3F; a lowered byte with S clear in the last page.
+    let rom = std::fs::read("rom/monitor.bin").unwrap();
+    assert_eq!(rom[0xFC1], 0xFF, "the last page is padding");
+    for (offset, value, writes) in [(0x17F, rom[0x17F].wrapping_add(1), 6 * 64), (0xFC1, 0x5A, 4096)] {
+        let mut image = rom.clone();
+        image[offset] = value;
+        let mut m = burner(&image);
+        m.con().borrow_mut().push_input(b"G 0100\r");
+        m.run_to(0x0100);
+        m.con().borrow_mut().take_output();
+        let from = m.ports.len();
+        let mut n = 0;
+        while !m.con().borrow().output().ends_with(b"\r\n") {
+            assert!(m.cpu.cycles < BUDGET, "{:04X}: no message", offset);
+            m.cpu.execute_one();
+            n += m.cpu.transfers().iter().filter(|t| matches!(t, Transfer::MemWrite(0xF000.., _))).count();
+            m.ports.extend(m.cpu.transfers().iter().filter(|t| matches!(t, Transfer::In(..) | Transfer::Out(..))));
+        }
+        assert_eq!(show(&m.con().borrow_mut().take_output()), format!("Burn failed {:04X}\\r\\n", 0xF000 + offset));
+        assert_eq!(n, writes, "{:04X}: writes before the failure", offset);
+        assert!(m.ports[from..].iter().all(|t| matches!(t, Transfer::Out(0x00, _))), "{:04X}: {:?}", offset, &m.ports[from..]);
+        let ports = m.ports.len();
+        assert_eq!(m.run_for(b"", 1_000_000), b"");
+        assert_eq!(m.ports.len(), ports, "a port access while spinning");
+        assert!((0x0100..0x0200).contains(&m.cpu.pc), "PC={:04X}", m.cpu.pc);
+        assert!(m.mem(0xF000, 0x1000) == rom);
+        m.cpu.reset();
+        let banner = m.step(b"");
+        booted((m, banner));
+    }
+}
+
+#[test]
+fn burn_full_verify_catches_a_page_changed_after_its_verify() {
+    // After the 64 pages, burn verifies all 4096 bytes before it jumps to F000. A page-0
+    // byte changed once page 62 has verified (the chip idle, the last page not yet
+    // written) is caught there.
+    let rom = std::fs::read("rom/monitor.bin").unwrap();
+    let new = changed_rom();
+    let mut m = burner(&new);
+    m.cpu.fit_jp_we(1);
+    m.con().borrow_mut().push_input(b"G 0100\r");
+    m.run_to(0x0100);
+    let mut writes = 0;
+    // Page 62's verify reads FFBE; the poll reads only FFBF.
+    while !(writes == 4032 && m.cpu.transfers().contains(&Transfer::MemRead(0xFFBE, new[0xFBE]))) {
+        assert!(m.cpu.cycles < BUDGET, "page 62 never verified");
+        m.cpu.execute_one();
+        writes += m.cpu.transfers().iter().filter(|t| matches!(t, Transfer::MemWrite(0xF000.., _))).count();
+    }
+    let mut chip = [&new[..0xFC0], &rom[0xFC0..]].concat();
+    chip[0x010] ^= 0xFF;
+    m.cpu.load_rom(&chip);
+    assert_eq!(show(&m.run_for(b"", 2_000_000)), "G 0100\\r\\nBurn failed F010\\r\\n");
+}
+
+#[test]
+fn burn_refuses_a_ram_build_image() {
+    // Byte 6 of the RAM test build is D0 (ARCHITECTURE 3.2): with JP-WE fitted, burn prints
+    // `Not a ROM image`, returns, and the ROM is unchanged. Junk and a lone wrong byte 0 are
+    // in the transcript.
+    let (_, image) = ram_image();
+    let rom = std::fs::read("rom/monitor.bin").unwrap();
+    let mut m = burner(&image);
+    m.cpu.fit_jp_we(20_480);
+    assert_eq!(m.run("G 0100"), "Not a ROM image\\r\\n");
+    assert!(m.mem(0xF000, 0x1000) == rom);
+}
+
+#[test]
+fn burn_of_the_same_image_is_a_dry_run() {
+    // JP-WE open and the image already in the ROM (M F000 1000 1000): every page verifies, and
+    // the ROM monitor cold-starts, unchanged. Also when started from the RAM test build
+    // (ARCHITECTURE 2.1): the JMP F000 lands in the ROM monitor.
+    let rom = std::fs::read("rom/monitor.bin").unwrap();
+    let (lines, _) = ram_image();
+    for ram in [false, true] {
+        let mut m = burner(&[]);
+        if ram {
+            for l in &lines {
+                m.run(l);
+            }
+            assert!(m.run("G D000").split("\\r\\n").nth(1).unwrap().ends_with(" RAM"));
+        }
+        assert_eq!(m.run("M F000 1000 1000"), "");
+        let banner = m.run("G 0100");
+        let first = banner.split("\\r\\n").nth(1).unwrap_or("");
+        assert!(banner.starts_with("\\r\\n8080 Monitor v") && !first.ends_with(" RAM"), "RAM build {}: {}", ram, banner);
+        assert!(m.mem(0xF000, 0x1000) == rom);
+    }
+}
+
+#[test]
+fn cold_start_layout_is_what_burn_checks() {
+    // ARCHITECTURE 3.2: the image starts LXI SP,F000 / DI / JMP BOOT_CONTINUE, so byte 0 is
+    // 31 and byte 6 is the JMP's high byte: F0 in the ROM build, D0 in the RAM test build.
+    let rom = std::fs::read("rom/monitor.bin").unwrap();
+    assert_eq!(rom[..7], [0x31, 0x00, 0xF0, 0xF3, 0xC3, 0x07, 0xF0]);
+    assert_eq!(ram_image().1[..7], [0x31, 0x00, 0xF0, 0xF3, 0xC3, 0x07, 0xD0]);
 }
 
 #[test]
