@@ -1617,6 +1617,88 @@ fn example_burn() {
     boot().play("example_burn");
 }
 
+#[test]
+fn example_mandel() {
+    boot().play("example_mandel");
+}
+
+/// examples/mandel.asm's picture, from the same integer algorithm in Rust: 4.12 fixed
+/// point, exact 32-bit squares, escape when x2 + y2 > 4.0, arithmetic shifts, 16-bit wrap.
+fn mandel_model() -> String {
+    let ramp = b".,:;-~=+*xoO%&$@";
+    let mut s = String::new();
+    for row in 0..19 {
+        let cy: i16 = -9 * 539 + row * 539;
+        for col in 0..40 {
+            let cx: i16 = -8192 + col * 256;
+            let (mut x, mut y) = (cx, cy);
+            let mut ch = b' ';
+            for &escaped in ramp {
+                // One pass per iteration: MAXIT = 16 = the ramp's length.
+                let (xx, yy) = (x as i32 * x as i32, y as i32 * y as i32);
+                if (xx as u32).wrapping_add(yy as u32) > 4 << 24 {
+                    ch = escaped;
+                    break;
+                }
+                let xy = x as i32 * y as i32;
+                (x, y) = ((((xx - yy) >> 12) as i16).wrapping_add(cx), ((xy >> 11) as i16).wrapping_add(cy));
+            }
+            s.push(ch as char);
+        }
+        s.push_str("\r\n");
+    }
+    s
+}
+
+/// A booted monitor with examples/mandel.hex pasted.
+fn mandel() -> Mon {
+    let mut m = boot();
+    for record in std::fs::read_to_string("examples/mandel.hex").unwrap().lines() {
+        m.run(record);
+    }
+    m
+}
+
+#[test]
+fn mandel_matches_the_model() {
+    // The model against known points first: -2 and 0 (row 9, columns 0 and 32) are in the
+    // set, -2-1.18i (the corner) escapes at once (|c| > 2).
+    let pic = mandel_model();
+    let rows: Vec<&str> = pic.split("\r\n").collect();
+    assert_eq!((&rows[9][..1], &rows[9][32..33], &rows[0][..1]), (" ", " ", "."));
+    // About 17M cycles: inside BUDGET.
+    assert_eq!(mandel().run("G 0100"), show(pic.as_bytes()));
+}
+
+#[test]
+fn mandel_mul_is_exact() {
+    // examples/mandel.asm's MUL (D:E:H:L = DE * BC, signed) against i32 multiply, called
+    // directly: every pair of the edge values, then pseudo-random pairs. The picture only
+    // reaches |operand| < 7000H; this covers 8000H and all four sign cases.
+    let mut m = mandel();
+    let code = m.mem(0x0100, 0x0300);
+    let mul = 0x0100 + code.windows(3).position(|w| w == [0x7A, 0xA8, 0xF5]).expect("MUL: MOV A,D; XRA B; PUSH PSW") as u16;
+    let edges: [i16; 14] = [0, 1, -1, 2, -2, 0x7FFF, -0x8000, -0x7FFF, 0x1000, -0x1000, 0x00FF, 0x0100, -0x0100, 0x5A5A];
+    let mut pairs: Vec<(i16, i16)> = edges.iter().flat_map(|&a| edges.iter().map(move |&b| (a, b))).collect();
+    let mut seed: u32 = 1;
+    for _ in 0..1000 {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        pairs.push(((seed >> 16) as i16, seed as i16));
+    }
+    const BACK: u16 = 0xCFF0; // never executed
+    for (a, b) in pairs {
+        [m.cpu.d, m.cpu.e] = a.to_be_bytes();
+        [m.cpu.b, m.cpu.c] = b.to_be_bytes();
+        m.cpu.sp -= 2;
+        let sp = m.cpu.sp;
+        m.poke(sp, &BACK.to_le_bytes());
+        m.cpu.pc = mul;
+        m.run_to(BACK);
+        let got = i32::from_be_bytes([m.cpu.d, m.cpu.e, m.cpu.h, m.cpu.l]);
+        assert_eq!(got, a as i32 * b as i32, "{} * {}", a, b);
+    }
+}
+
 /// A booted monitor with examples/burn.hex pasted and `image` at 1000, its default source.
 fn burner(image: &[u8]) -> Mon {
     let mut m = boot();

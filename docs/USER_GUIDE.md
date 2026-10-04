@@ -120,6 +120,7 @@ In `examples/`, each as `.asm` source and a ready `.hex`. Each has a transcript,
 |---|---|---|
 | `hello` | paste `hello.hex`, `G 0100` | `Hello, 8080!` |
 | `memtest` | paste `memtest.hex`, `G 0100` | `RAM OK`, or `FAIL aaaa` at the first bad byte |
+| `mandel` | paste `mandel.hex`, `G 0100` (8.5 s at 2 MHz) | the Mandelbrot set, 40 by 19 characters |
 | `burn` | the image at 1000, paste `burn.hex`, fit JP-WE, `G 0100` (section 10) | the new monitor's banner, `Bad source`, `Not a ROM image`, or `Burn failed aaaa` |
 
 `memtest`'s range, what it catches and how to change the range are in the header of
