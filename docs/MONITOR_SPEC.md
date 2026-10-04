@@ -152,7 +152,7 @@ These are the exact strings. Each is printed with a trailing `<CR><LF>`.
 | `Address out of range` | HEX: a type 00 record would write outside 0100-EEFF |
 | `Service error` | T, U, N, Q: mailbox status 00 after execute, or 80-FF (for N and Q, 82 too: a bad URL or file name, or an empty or invalid question). U: also DONE before the length byte. A: status 00 after execute, or 80-FF except 82; A then prompts the same address again |
 | `Invalid instruction` | A (Phase 7): mailbox status 82, so the line does not assemble; A prompts the same address again |
-| `Aborted` | N, Q: Esc while the request runs (6.18). Bytes already printed stay on their line, with no `<CR><LF>` before the message, as `Service error` |
+| `Aborted` | N, Q: Esc while the request runs (6.18). Bytes already printed stay on their line, with no `<CR><LF>` before the message, as `Service error`; an abort at a response LF comes after that LF prints, so the message starts a line |
 | `BRK aaaa` | A program started by `G` executed `RST 6` at aaaa (8.1). Not preceded by `<CR><LF>`: it starts where the program left the cursor |
 
 - The ROM MUST NOT contain `File not found`. Mount creates missing files, so that message can never be true.
@@ -391,7 +391,7 @@ Assembles one instruction per line into memory, starting at `addr`. The assemble
 7. On status 82, the line does not assemble. Print `Invalid instruction`, write nothing, and go back to step 2 with the same address.
 8. On status 00 after execute (the Pi restarted) or any other status from 80h to FFh, print `Service error` and go back to step 2 with the address this line started at. ASM never fails after its first byte (`DEVICE_SPECS.md`, ASM), so only a Pi restart can leave part of a line written; typing the line again rewrites it.
 
-- **Only `.` ends A.** An empty line, a line of only spaces, and every failure prompt again. Pasted source therefore never falls through to the command dispatcher, where an instruction would run as a command (`XCHG` as `X CHG`, which mounts a file). A file sent with `<CR><LF>` line ends gives an empty line after every line, which only prompts again. With a dead or Phase 6 Pi service every line prints `Service error`; type `.` to leave.
+- **Only `.` ends A.** An empty line, a line of only spaces, and every failure prompt again. Pasted source therefore never falls through to the command dispatcher, where an instruction would run as a command (`XCHG` as `X CHG`, which mounts a file). A file sent with `<CR><LF>` line ends gives an empty line after every line, which only prompts again. With a Phase 6 Pi service (status 80) every line prints `Service error`; type `.` to leave. A service that restarts while a line is in flight gives `Service error` (status 00) for that line only. A stopped service stalls the machine under READY at its next console or mailbox access (section 11), so nothing prints and `.` cannot be typed.
 - A success prints nothing more. The next prompt's address shows how many bytes were written.
 - **Syntax:** one instruction in the ASM grammar (`DEVICE_SPECS.md` 8, ASM).
 - **No guard**, as E: writes to F000-FFFF have no effect (JP-WE open, `ARCHITECTURE.md` 6.10), but the address still advances. Writing to the workspace (0080-00FF) or the stack page (EF00-EFFF) has undefined results, as F.
@@ -502,7 +502,7 @@ Fetches `url` through the mailbox `GET` (`DEVICE_SPECS.md` 8, GET) and prints th
 - **File form** `N url > file`: prints the 6-digit length (`0012AB`) and `<CR><LF>`. Then `X file` mounts it and `L` loads it. If `file` is already mounted, mount it again to see the new contents (`DEVICE_SPECS.md` 8, GET).
 - **Length:** READ_LINE stores 79 characters, so `url`, ` > ` and `file` share the 77 after `N `. A program that drives the mailbox itself has 124 bytes.
 - **Time limits.** A request that cannot connect or stalls ends by the device's time limits (`DEVICE_SPECS.md` 8, GET, Time limits) and prints `Service error`. At 155 cycles a byte (248 for an LF, which includes the Esc check; counted in the emulator, before READY wait states) the monitor prints about 13 KB/s at 2.048 MHz, so a 700 KB book takes about a minute: fetch it to a file.
-- **Esc aborts.** The shared loop (6.15) checks the keyboard in two places only: on every pass of its own BUSY wait, and at each response LF, before that LF prints. A check reads every byte waiting in the console FIFO (status first: an empty FIFO pops nothing). If any of them is Esc (1Bh), the ROM clears the mailbox (OUT 11h <- 02h), which aborts the request (`DEVICE_SPECS.md` 8, Abort), prints `Aborted` then `<CR><LF>`, and prompts. Every other byte is discarded. Bytes already printed stay on their line, with no `<CR><LF>` before the message (`abAborted`); the LF that saw the Esc does not print.
+- **Esc aborts.** The shared loop (6.15) checks the keyboard in two places only: on every pass of its own BUSY wait, and at each response LF, after that LF prints (as `<CR><LF>`). A check reads every byte waiting in the console FIFO (status first: an empty FIFO pops nothing). If any of them is Esc (1Bh), the ROM clears the mailbox (OUT 11h <- 02h), which aborts the request (`DEVICE_SPECS.md` 8, Abort), prints `Aborted` then `<CR><LF>`, and prompts. Every other byte is discarded. Bytes already printed stay on their line, with no `<CR><LF>` before the message (`abAborted` from the BUSY check). The LF that saw the Esc prints first, so after an LF check `Aborted` starts a line (`ab`, then `Aborted`). A body that ends its lines with CR LF (every ASK reply, most HTTP text) prints `<CR><CR><LF>` there (6.19 step 2), so `Aborted` never overprints the line's text.
   - **Stream form:** stopped while BUSY and at each LF. On the board a fast server keeps every status read at 02 (AVAIL), so only the LF check stops it; a body with no LF (binary, minified HTML or JSON) cannot be stopped in stream form: fetch it with `> file`. `Aborted` means the ROM stopped before it saw the request end; the body may already have been complete.
   - **File form:** nothing prints while the request runs, so it is BUSY until its end, and every Esc in that time aborts. Whenever `Aborted` prints, `file` is untouched (the device removes its temporary file). An Esc typed after the request ends (during the length digits, which have no LF) is not seen; it is ignored at the next prompt (section 2) and `file` holds the new body.
   - **Type-ahead is discarded** while the request runs (section 2, the exception). A key that sends an Esc-prefixed sequence (an arrow or function key, Alt-x) also aborts; any rest of the sequence that is not yet waiting reaches the next prompt.
@@ -549,7 +549,8 @@ Phase 8 tests (and Phase 12, for the Esc rows) MUST cover every row. *ports* and
 | *scripted* statuses [01]: `N x` CR, then Esc, in one step | `Aborted` | after the execute only IN 12 01 reads, then OUT 11 02; no IN 13 |
 | *scripted* statuses [01]: `N x` CR then, in one step, LF Esc; `q` Esc; Esc `[A`; Esc `H 1 1` CR | `Aborted` (each); one prompt, nothing else runs | an Esc behind other waiting bytes aborts, and the bytes waiting after it are discarded; console FIFO empty |
 | *scripted* statuses [01 01 01 02 03], bytes [41]: `N x` CR, nothing more | `A` | 4 IN 01 in the step (the line's bytes): a check pops no byte when none waits |
-| *scripted* statuses [02], bytes `ab` 0A `cd` 0A then 00 forever: `N x` CR, then Esc | `abAborted` | — |
+| *scripted* statuses [02], bytes `ab` 0A `cd` 0A then 00 forever: `N x` CR, then Esc | `ab`, then `Aborted` (bytes `ab` 0D 0A `Aborted` 0D 0A) | — |
+| *scripted* statuses [02], bytes `Hello world` 0D 0A `second` 0D 0A then 00 forever: `Q x` CR, then Esc | `Hello world`, then `Aborted` (bytes `Hello world` 0D 0D 0A `Aborted` 0D 0A): the line is not overprinted | — |
 | *scripted* statuses [02 02 02 02 02 02 03], bytes `a` 0A `b` 0A `c` 0A: `N x` CR `q`, and `N x` CR `H 1 1` CR | `a`, `b`, `c`, an empty line; one prompt, nothing else runs | console FIFO empty |
 | *scripted* statuses [01 02 02 02 02 02 03], bytes `HELLO`: `N x` CR LF | `HELLO`, one prompt (the BUSY check ate the LF) | — |
 | *scripted* statuses [02 02 02 03], bytes `12:`: `T` CR, then Esc | `12:`; the Esc is ignored at the prompt | — |
@@ -571,7 +572,7 @@ Asks Claude one question through the mailbox `ASK` (`DEVICE_SPECS.md` 8, ASK) an
 
 - **Text:** READ_LINE stores 79 characters, so the question has 77 after `Q `. A program that drives the mailbox itself has 124. Case is kept. The space after `Q` is optional (section 3): `Qhello` asks `hello`, and `quit` asks `uit`.
 - **The answer** is plain ASCII in lines of at most 79 characters, wrapped by the Pi. Claude is told about this machine and these commands, and to write code as lines the `A` command accepts.
-- **Time limits and Esc.** Q ends within 120 s, and within about 10 s when the Pi cannot connect. Esc aborts it, as N (6.18, Esc): while BUSY (connecting, the model thinking) and at each LF of the reply. `HelAborted`, or `Aborted` before the first byte. The clear closes the connection.
+- **Time limits and Esc.** Q ends within 120 s, and within about 10 s when the Pi cannot connect. Esc aborts it, as N (6.18, Esc): while BUSY (connecting, the model thinking) and at each LF of the reply. `HelAborted` (BUSY mid-line), `Hello` then `Aborted` on the next line (at an LF), or `Aborted` before the first byte. The clear closes the connection.
 - Each Q is independent: Claude does not see earlier questions.
 - Q keeps no state, writes no memory, and uses ports 10h-13h.
 
@@ -751,7 +752,7 @@ This section owns the program-facing contract. The WARM entry code and the stack
 **On entry to the program:**
 - PC = the target address.
 - SP = EFFEh, and the word at EFFE is the return address, G_RETURN.
-- Interrupts are disabled (the ROM never executes `EI`).
+- INTE: clear after cold start; otherwise as the last program left it (the ROM never executes `EI` or `DI` after boot).
 - A, the flags, BC, DE and HL are unspecified.
 - The overlay is disabled.
 - Console input that READ_LINE has not consumed (for example, the `<LF>` of a CRLF pair) is left in the FIFO for the program.
