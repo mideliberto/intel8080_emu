@@ -53,7 +53,7 @@ Checked 2026-10-04. Distributors: Mouser primary, Pololu direct for the boost mo
 | R4, R5, R13, R14 | 10 kohm 1/4 W, axial | Yageo MFR-25FBF52-10K | 603-MFR-25FBF52-10K (confirm) | 4 | 10 | Unverified | |
 | R6, R7, R12 | 4.7 kohm 1/4 W, axial | Yageo MFR-25FBF52-4K7 | 603-MFR-25FBF52-4K7 (confirm) | 3 | 10 | Unverified | Also the step 0 VBB load (`HARDWARE_BUILD.md` 3). |
 | RN1-RN3 | 10 kohm x8, bused, SIP-9, 2% | Bourns 4609X-101-103LF | 652-4609X-1LF-10K (confirm) | 3 | 5 | Unverified | Bus pull-ups. One more for the jig (section 6). |
-| RN4 | 2.2 kohm x8, bused, SIP-9 | Bourns 4609X-101-222LF | 652-4609X-1LF-2.2K (confirm) | 1 | 2 | Unverified | Step 2 DB pull-down. |
+| RN4 | 2.2 kohm x8, bused, SIP-9 | Bourns 4609X-101-222LF | 652-4609X-1LF-2.2K (confirm) | 1 | 2 | Unverified | Step 2 DB pull-down. Socketed: out from step 3 on. |
 | RN5 | 1 kohm x8, isolated, DIP-16 | Bourns 4116R-1-102LF | 652-4116R-1LF-1K (confirm) | 1 | 2 | Unverified | Analyzer isolation. Soldered. |
 | RN6 | 330 ohm x8, isolated, DIP-16 | Bourns 4116R-1-331LF | 652-4116R-1LF-330 (confirm) | 1 | 2 | Unverified | Pi D0-D7 series array. Soldered. |
 | C1-C21 | 0.1 uF X7R 50 V, 5.08 mm leads | KEMET C322C104K5R5TA | 80-C322C104K5R (confirm) | 21 | 30 | Unverified | Fits the 5.00 mm disc footprint. |
@@ -78,7 +78,7 @@ Checked 2026-10-04. Distributors: Mouser primary, Pololu direct for the boost mo
 | - | Machined DIP socket, 20-pin 0.3 | Mill-Max 110-43-320-41-001000 | 575-11043320 (confirm) | 4 | 4 | Unverified | For U13-U16. |
 | - | Machined DIP socket, 24-pin 0.3 | Mill-Max 110-43-324-41-001000 | 575-11043324 (confirm) | 1 | 2 | Unverified | For U7. The spare is for the chip that comes out for programming. |
 | - | Machined DIP socket, 28-pin 0.6 | Mill-Max 110-43-628-41-001000 | 575-11043628 (confirm) | 4 | 5 | Unverified | For U3-U6. The spare is for the ROM, which comes out for programming. |
-| - | Machined SIP socket strip, 9 pins used | Mill-Max 310-43-109-41-001000 | 575-31043109 (confirm) | 1 | 1 | Unverified | For RN3, which is out for step 2. |
+| - | Machined SIP socket strip, 9 pins used | Mill-Max 310-43-109-41-001000 | 575-31043109 (confirm) | 2 | 2 | Unverified | For RN3, which is out for step 2, and RN4, which is out from step 3 on. |
 
 ### 2.5 Board supply
 

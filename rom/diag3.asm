@@ -6,8 +6,10 @@
 ; CPU in T_W until RESET (ARCHITECTURE 6.4 rule 4).
 ;
 ; Build: cd rom && make (rom/diag3.bin, 4096 bytes, unused bytes FF). Emulator:
-; cargo run -- --rom rom/diag3.bin prints "HLT at PC=0118" (the address after the
-; pass HLT); the fetch trace for the bench: HARDWARE_BUILD.md 3.3.
+; cargo run -- --rom rom/diag3.bin < /dev/null prints "HLT at PC=0118" (the
+; address after the pass HLT; from a terminal without the redirect the halt opens
+; the debugger instead, ARCHITECTURE 7.2); the fetch trace for the bench:
+; HARDWARE_BUILD.md 3.3.
 ;
 ; Sequence (each check HLTs at its own address on a failure):
 ; 1. IN FF: bit 0 (the overlay flip-flop) must read 1 after RESET. OUT FE, then
@@ -29,18 +31,20 @@
 ;
 ; HLT addresses. The bench reads them off the analyzer: status A2 at the HLT's
 ; address, then 8A at the next address, then no further /STSTB (HARDWARE_BUILD.md
-; 3.1). The emulator prints the next address ("HLT at PC=..."). On a march or
-; write-back fail, HL is the failing address, and the last memory read before
-; the HLT (status 82) is that address with the byte read.
-;   F003  IN FF bit 0 = 0 after RESET (overlay not set)
-;   F004  IN FF bit 0 = 1 after OUT FE (overlay not cleared)
-;   F005  march M1: a cell did not read 55h
-;   F006  march M2: a cell did not read AAh
-;   F007  march M3: a cell did not read 55h
-;   F008  march M4: a cell did not read AAh
-;   F009  march M5: a cell did not read 55h
-;   0118  ROM write-back: the second read of a ROM byte differed (HL = the byte)
-;   0117  pass
+; 3.1). The emulator prints the next address ("HLT at PC=...", second column).
+; On a march or write-back fail, HL is the failing address. On the bus the
+; failing read is the third status-82 cycle back from the HLT's A2 fetch, just
+; before the CMP's A2: the last two status-82 cycles are the JNZ's operand bytes.
+;   HLT   prints
+;   F003  F004  IN FF bit 0 = 0 after RESET (overlay not set)
+;   F004  F005  IN FF bit 0 = 1 after OUT FE (overlay not cleared)
+;   F005  F006  march M1: a cell did not read 55h
+;   F006  F007  march M2: a cell did not read AAh
+;   F007  F008  march M3: a cell did not read 55h
+;   F008  F009  march M4: a cell did not read AAh
+;   F009  F00A  march M5: a cell did not read 55h
+;   0118  0119  ROM write-back: the second read of a ROM byte differed (HL = the byte)
+;   0117  0118  pass
 ;
 ; Timing, in T-states (2.048 MHz: 0.488 us each):
 ; - March: 34 T per byte for M0, 55 for M1-M4, 48 for M5: 302 T x 61440 bytes,
