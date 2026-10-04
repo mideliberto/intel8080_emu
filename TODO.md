@@ -44,6 +44,13 @@
   - [x] Taken as recommended (SIM-RESET, SIM-UNIT, RAM-BANNER, RAM-TRANSCRIPTS, the HALT LED term, the 1 kohm CPU-side analyzer taps, SDP off, the JP-WE pull-up): signed off as built.
 - [x] Halt floats the buses: closed 2026-10-03, Mike chose 10 kohm pull-up SIPs. Built as A0-A15 and system DB0-DB7; CPU-side D0-D7 excluded (no datasheet margin against the 8080A IDL, and the GAL pin-keepers already hold its only CMOS inputs). DB SIP socketed, never fitted with the 2.2 kohm bring-up pull-down. ARCHITECTURE 6.13, HARDWARE_BUILD 1-3 and 6, DEVICE_SPECS 2.4 (informative FF note only).
 
+## Done: Examples, diag3 and the Whole-Repo Review (2026-10-04)
+- [x] `rom/diag3.asm` / `diag3.bin`: bring-up step 3 image (HARDWARE_BUILD 3.3, HLT table, emulator trace recipe); `--rom FILE` host flag (ARCHITECTURE 7.2, 7.4); 11 diag tests incl. fault injection
+- [x] Eight example programs, each with a transcript on every path and an independent reference test: tictac (exhaustive minimax check), ed (storage from user code), life and mandel (Rust models), pi (published digits), rpn (u128/i128 cross-check), sieve, hanoi
+- [x] Ultracode adversarial review: 48 raw, 46 unique, 42 confirmed by >= 2 of 3 refute-by-default verifiers, all fixed with tests and checked (5 lanes); 7 refuted. Mike's calls: RN4 socketed with JP2 kept; Esc at an LF prints the LF first (ROM 3218 -> 3214); DEVICE_SPECS 8 follows the code on the first IN 12; G entry INTE reworded, no DI; console documented as unauthenticated, Unix-socket tunnel; kernel-held GPIOs documented as undetected; missing exerciser files fail
+- [x] PI_DAEMON 13.2 re-measured (32 transcripts, 363,800-384,500 accesses, about 5.3 s of the 10 s budget)
+- [ ] Bench: diag3 at step 3 (about 9.8 s); TP6 (+3V3_PI) at step 5 is checked against 3.3 V +/- 5 %, a tolerance chosen at integration with no spec figure behind it: confirm against the Pi's 3V3 spec
+
 ## Done: Phase 12 - Board Artifacts, In-Circuit Burn, Esc, RST 6 (2026-10-04, code; bench pending)
 - [x] Track A: `hw/glue.pld` + `hw/glue.jed` + `tests/gal_tests.rs` (2^16 vectors, OE included; 46 .pld mutants, 42 killed, 4 consistent pin swaps or equivalent); 74HCT125 dropped, NOT RESET on the FF read and IN latch
 - [x] Track A: `hw/board.net.txt` + `tests/netlist_tests.rs` (pad-anchored checks, part values, single-driver contention, 5 V isolation, one mutant per check ID), `hw/board.kicad.net`, `board.kicad_pro`/`_pcb`/`_dru`; TP7/TP8 (phi) dropped, C612 rejects any test point on phi or INTA
@@ -315,6 +322,8 @@ All done 2026-10-03 (step E): the WARM/error-tail/one-parser/RANGE refactor from
 - [ ] One shared PI_WINDOW const for `pi_main.rs`, `gal_tests.rs` and the test files that loop 0x00..=0x6F: if a fourth use appears
 - [ ] `src/pi/linux.rs` private `RESET_LINE = 13` repeats the bit index of `pi::RESET`
 - [ ] Netlist tests: tie HARDWARE_BUILD 2's BOM test-point count to the netlist, and have `order_check` compare each line's Part/MPN with the netlist value (reviewer mutants that survive today: R14 on the 4.7k line, RN5/RN6 swapped)
+- [ ] Storage truncate (DEVICE_SPECS 6 cannot shorten a file; `W` keeps an older file's tail, `ed` uses a 1AH end marker): no consumer (Mike, 2026-10-04). Trigger: a program that needs exact file lengths host-side
+- [ ] pi: the held-9s carry (first at decimal 361) is not reached by `examples/pi`'s 100 decimals; more digits would need a larger per-step cycle BUDGET in the harness
 - [ ] Rename `regs_are_written_only_by_a_g_return` (an RST 6 break also writes REGS; the body is right)
 - [ ] RAM-build debugger symbols (`monitor_ram.sym`): only if debugging the RAM image in the emulator ever needs names
 - [ ] If the ROM runs out of room: move the `?` text (`MSG_HELP`; measure it then) behind a mailbox `HELP` command; `?` becomes a fourth mailbox-client user (about 30 bytes). A protocol addition: Mike decides when it is needed

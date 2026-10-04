@@ -63,6 +63,19 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-04: Review Findings Decided; Truncate Stays Out
+**Decision:** after the whole-repo adversarial review (42 confirmed findings), Mike decided:
+- **RN4:** the 2.2 kohm bring-up pull-down is socketed like the DB pull-up and comes out from step 3; JP-PD (JP2) stays as a second guard. A soldered RN4 with JP2 open joined every DB pair through 4.4 kohm (about 2.7 mA on an SRAM read of FEh against its 2 mA). **BUS-RESISTORS revised.**
+- **Esc at an LF:** the LF prints before `Aborted`, so the body's last line survives (MONITOR_SPEC 6.18; 4 ROM bytes saved).
+- **Mailbox first IN 12 (DEVICE_SPECS 8):** the spec follows the code: it reads BUSY or any later state the request has reached.
+- **G entry INTE:** reworded to "as the last program left it"; no DI.
+- **Console:** documented as unauthenticated (a web page on the tunnel machine can type into it); the tunnel recipe forwards to a Unix socket. No code.
+- **Kernel-held GPIOs (1-Wire):** documented as not detected; no LINEINFO code.
+- **Missing exerciser files fail** instead of passing. ARCHITECTURE 3.2 req. 7 says "every monitor image" (diag3 is not one).
+- **Storage truncate:** not added. No consumer; `W` already documents the kept tail, `ed` uses CP/M's 1AH marker. Someday, with its trigger.
+
+**Rationale:** each fix is the smallest that makes the spec true; three judgment calls went to wording instead of code.
+
 ### 2026-10-04: Phase 12 Specified: Board Artifacts, In-Circuit Burn, Esc, RST 6
 **Decision:** Mike decided about 40 questions in four batched rounds after six drafts were each critiqued through three lenses (hardware, mantra, testability). Homes: ARCHITECTURE 1, 2, 3.2, 6.4-6.13, 8; MONITOR_SPEC 2, 5, 6.18-6.20, 8.1, 9, 11; HARDWARE_BUILD 1-3, 6; `hw/`; `docs/PARTS_ORDER.md`; `examples/burn`.
 - **Board files:** a plain-text netlist (`hw/board.net.txt`) checked by `cargo test`, which also golden-checks the KiCad netlist; Claude writes netlist, footprints, outline (160 x 120 mm) and DRC rules, Mike places and routes. The netlist is the only home of pin numbers; ARCHITECTURE 6 stays normative for circuits, and its 6.10 and HARDWARE_BUILD 3.1 pin tables became pointers. A test checks the routed `.kicad_pcb` against the netlist once it has footprints.
@@ -615,10 +628,12 @@ Console I/O debugging session:
 - R (Phase 10, MONITOR_SPEC 6.20): `G` pushes G_RETURN, which saves A, F, BC, DE, HL in REGS (ARCHITECTURE 1.1) before WARM; R prints them
 - ROM overlay boot mechanism; CONOUT is OUT 00 / RET, so the first Pi access after reset is the banner's OUT 00
 - Esc aborts a running N or Q, and RST 6 breakpoints print `BRK aaaa` (Phase 12, MONITOR_SPEC 6.18, 8.1)
-- 3218 of 4096 bytes used (878 free; `make size`)
+- 3214 of 4096 bytes used (882 free; `make size`)
 - RAM test build (ARCHITECTURE 2.1): `rom/monitor_ram.hex`, the same source at D000 (guard top D000, F/M/L refuse the image, ` RAM` banner), loaded through the resident HEX loader and run with `G D000`, in the harness and over TCP on `pi8080d --sim`. Reviewed and fixed 2026-10-03
 
 **Debugger (host-side, ARCHITECTURE 7.4):** Ctrl-E / `--debug` / `--script`, break, step, registers, memory, disassembly with ROM symbols (`rom/monitor.sym`), watchpoints, I/O breaks, port trace, 256-step trace ring
+
+**Examples and diag3 (2026-10-04):** eight emulator-stressing programs in `examples/` with independent reference tests; `rom/diag3.bin`, the bring-up step 3 image, and `--rom FILE`
 
 **Board files (Phase 12):** `hw/glue.pld`/`glue.jed` (GAL), `hw/board.net.txt` (netlist, the only home of pin numbers) with `hw/board.kicad.net` and KiCad starting files, `docs/PARTS_ORDER.md`; `examples/burn` and the emulator's `--jp-we` model of a fitted JP-WE
 
@@ -630,7 +645,7 @@ Console I/O debugging session:
 **Pi daemon `pi8080d` (code, 2026-10-03; PI_DAEMON.md):** `src/pi/mod.rs` (the `Gpio` seam, `setup_pins`, `serve`: the bus loop, RESET handling, TCP console, trace), `src/pi/linux.rs` (`GpioMem`, the RESET line by raw v2 ioctl, `ntp_local_time`), `src/pi_main.rs`. Every transcript passes through it on the simulated board (`src/pi/sim.rs`). `--sim FILE` runs the same board with the CPU model, so the whole Pi stack runs before the board exists (PI_DAEMON 16). The static aarch64 musl binary cross-builds on the Mac with `rust-lld`. Reviewed and fixed 2026-10-03; the simulator gaps left are listed in `TODO.md`. Not yet run on a Pi (PI_DAEMON 14)
 
 **Testing (verified 2026-10-04):**
-- 6 library + 13 host + 139 CPU + 37 device + 56 mailbox + 73 monitor + 18 Pi daemon + 17 debugger + 8 terminal + 4 GAL + 7 netlist = 378, all passing (the GET, N, ASK and Q tests run curl against a local test server, never the internet or the API, key or no key) (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
+- 6 library + 13 host + 142 CPU + 37 device + 57 mailbox + 94 monitor + 21 Pi daemon + 20 debugger + 8 terminal + 4 GAL + 7 netlist + 11 diag = 420, all passing (the GET, N, ASK and Q tests run curl against a local test server, never the internet or the API, key or no key) (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 - 3 `#[ignore]` GET time-limit tests (connect 10 s, stall 30 s twice) pass: `cargo test --test mailbox_tests -- --ignored`
 - 1 `#[ignore]` live ASK test, not yet run with a key: `ANTHROPIC_API_KEY=... cargo test --test mailbox_tests ask_live -- --ignored`
@@ -666,6 +681,13 @@ Phase 12 logged doc conflicts the bench should settle (8228 strobes in RESET, th
 ---
 
 ## Recent Sessions
+
+### 2026-10-04: Examples, diag3, Whole-Repo Review
+- Built: `rom/diag3` (the step 3 image HARDWARE_BUILD described but nobody had written) and `--rom`; eight example programs, each checked against an independent reference (published pi digits, Rust models of Life and the fixed-point Mandelbrot, exhaustive minimax for tictac, u128 for rpn). 9 parallel lanes, then one integration.
+- Reviewed: 10 finder dimensions, dedupe, 3 refute-by-default verifiers per finding, a completeness round (159 agents). 42 confirmed, 1 major (RN4), all fixed in 5 lanes with a check pass each. Tests 378 -> 420, ROM 3214, exercisers 4/4, three clean full runs.
+- Decided: Key Decisions "Review Findings Decided; Truncate Stays Out".
+- What bit us: macOS make's 1-second mtimes left stale .hex files in mutation loops (five builders hit it; use `make -B`). A 30M-cycle per-step BUDGET capped mandel at 40x19 and pi at 100 digits. Stray emulator and daemon processes left by review agents ran for hours until killed. A new test for the mailbox flake was itself a 500 ms timing flake; it now waits on events.
+- Not run: the live Q (no key), every [bench] item.
 
 ### 2026-10-04: Phase 12 (Tracks A and B)
 - Built: the GAL (`hw/glue.pld`/`.jed`, an exhaustive fuse-map test against the emulator's decode), the board netlist with a pad-anchored checker and KiCad starting files, `docs/PARTS_ORDER.md`; Esc for N and Q, RST 6 breakpoints, `examples/burn` and the `--jp-we` model. ROM 3116 -> 3218, tests 342 -> 378, exercisers 4/4, clippy clean on both targets.

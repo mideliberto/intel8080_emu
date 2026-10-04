@@ -376,7 +376,8 @@ make size               # bytes used of 4096
 
    ```
    cd rom && make                                    # on the Mac
-   scp monitor.bin pi:/var/lib/pi8080d/MONITOR.BIN   # emulator: cp monitor.bin ../storage/MONITOR.BIN
+   scp monitor.bin pi:/tmp/                          # emulator: cp monitor.bin ../storage/MONITOR.BIN
+   ssh pi sudo install -o pi8080 -g pi8080 -m 0644 /tmp/monitor.bin /var/lib/pi8080d/MONITOR.BIN
    ```
 
    Then at the monitor:

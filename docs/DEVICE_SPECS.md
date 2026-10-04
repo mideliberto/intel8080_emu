@@ -225,7 +225,7 @@ Example values: 82 (not mounted), 03 (mounted, inside the file), 83 (mounted, at
 - A client detects failure by reading status bit 0 after its transfer (after its final flush, for writes). The same check catches a Pi service restart in the middle of a transfer (rule 2.9).
 - `L` and `W` perform this check and print `Storage error` when bit 0 is 0 (`MONITOR_SPEC.md`, L: Load from storage and W: Write to storage).
 - An fsync error during unmount, or during the unmount step of a mount, is not reported: 0F still reads 00 for unmount. Software that needs certainty flushes and checks bit 0 before it unmounts.
-- The error path cannot be exercised by `cargo test` (no fault injection), and neither can fsync. Both are verified by review and on hardware. The emulator fsyncs with `File::sync_all`, and dropping the device (process exit, device reset) unmounts it the same way.
+- The read-error path is exercised by `cargo test` (`ed_drops_a_line_cut_by_a_storage_error`, `tests/monitor_tests.rs`, shrinks the host file under the device's cached size after the mount). The write and flush error paths cannot be (no fault injection), and neither can fsync. Both are verified by review and on hardware. The emulator fsyncs with `File::sync_all`, and dropping the device (process exit, device reset) unmounts it the same way.
 
 ### Power-on
 

@@ -16,7 +16,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Storage device (24-bit, 16MB) | ✅ |
 | Monitor ROM v0.9 (20 commands + Intel HEX loader) | ✅ |
 | Host-side debugger (breakpoints, watchpoints, I/O breaks, port trace, trace ring, ROM symbols) | ✅ |
-| 378 tests (6 library + 13 host + 139 CPU + 37 device + 56 mailbox + 73 monitor + 18 Pi daemon + 17 debugger + 8 terminal + 4 GAL + 7 netlist), plus 9 `#[ignore]` (4 exercisers, 3 GET time limits, 1 live ASK, 1 measurement) | ✅ |
+| 420 tests (6 library + 13 host + 142 CPU + 37 device + 57 mailbox + 94 monitor + 21 Pi daemon + 20 debugger + 8 terminal + 4 GAL + 7 netlist + 11 diag), plus 9 `#[ignore]` (4 exercisers, 3 GET time limits, 1 live ASK, 1 measurement) | ✅ |
 | Intel HEX loader (Phase 5) | ✅ |
 | Service Mailbox (ports 10-13) and `TIME` / T (Phase 6) | ✅ |
 | Mailbox `ASM`/`DIS`, A and U (Phase 7) | ✅ |
@@ -25,7 +25,8 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Mailbox `GET` and N: HTTP and HTTPS via `curl` on the Pi (Phase 8); Esc aborts N and Q (Phase 12) | ✅ |
 | Mailbox `ASK` and Q: Claude via the Messages API, the key on the Pi (Phase 9) | ✅ |
 | R: the registers a program left at its `G` return (Phase 10) or at an `RST 6` breakpoint (Phase 12) | ✅ |
-| Example programs (`examples/hello`, `examples/memtest`) and the user guide (Phase 11) | ✅ |
+| Example programs (`examples/`: hello, memtest, and eight that stress the emulator: tictac, ed, life, mandel, pi, rpn, sieve, hanoi) and the user guide (Phase 11, 2026-10-04) | ✅ |
+| Bring-up step 3 diagnostic image `rom/diag3.bin` and the `--rom FILE` host flag | ✅ Code; 🔲 bench |
 | In-circuit ROM burn: `examples/burn` through jumper JP-WE, rehearsed in the emulator with `--jp-we` ([USER_GUIDE](docs/USER_GUIDE.md) 10, Phase 12) | ✅ Code; 🔲 bench |
 
 ## Monitor Commands
@@ -108,8 +109,16 @@ rom/
 examples/
 ├── Makefile             # make: NAME.hex from NAME.asm (asl + p2hex)
 ├── burn.asm / .hex      # Programs the ROM from an image in RAM (JP-WE fitted)
+├── ed.asm / .hex        # Line editor; files through the storage ports
+├── hanoi.asm / .hex     # Recursive Towers of Hanoi, 16 frames deep
 ├── hello.asm / .hex     # Prints a line, returns to the monitor
-└── memtest.asm / .hex   # RAM test over a range
+├── life.asm / .hex      # Conway's Life on a 32x16 torus
+├── mandel.asm / .hex    # ASCII Mandelbrot, 4.12 fixed point
+├── memtest.asm / .hex   # RAM test over a range
+├── pi.asm / .hex        # 100 decimals of pi (spigot)
+├── rpn.asm / .hex       # RPN calculator on packed BCD (DAA)
+├── sieve.asm / .hex     # Primes below 8192
+└── tictac.asm / .hex    # Tic-tac-toe against a minimax player
 
 hw/
 ├── Makefile             # make: glue.jed from glue.pld (galette 0.3.0)
