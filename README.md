@@ -58,15 +58,7 @@ ANTHROPIC_API_KEY=... cargo test --test mailbox_tests ask_live -- --ignored
 
 Mailbox `GET` and `ASK` (the N and Q commands) run `/usr/bin/curl` 8.4.0 or later; macOS ships it. Their tests use a local test server, never the internet or the API, with or without `ANTHROPIC_API_KEY` exported. Q needs `ANTHROPIC_API_KEY` in the environment of `cargo run` (or of `pi8080d`: [docs/PI_DAEMON.md](docs/PI_DAEMON.md) 11); without it Q prints `Service error`.
 
-The Pi daemon `pi8080d` (Linux; with `--sim`, also macOS) cross-builds on the Mac as a static binary, with the linker Rust ships:
-
-```bash
-rustup target add aarch64-unknown-linux-musl     # once
-cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d
-scp target/aarch64-unknown-linux-musl/release/pi8080d pi:/usr/local/bin/
-```
-
-On the Pi: `pi8080d --storage DIR [--listen ADDR:PORT] [--trace FILE] [--sim FILE]`, or the unit `scripts/pi8080d.service`. `--sim rom/monitor.bin` runs the emulated 8080 on a simulated board instead of GPIO, on the Pi or the Mac (`cargo run --bin pi8080d -- --sim rom/monitor.bin --storage /tmp/pi8080d`); the unit drop-in is `scripts/pi8080d-sim.conf` ([docs/PI_DAEMON.md](docs/PI_DAEMON.md) 16). The console is TCP, `127.0.0.1:8080` by default: `ssh -L 8080:localhost:8080 pi`, then `socat -,rawer,escape=0x1d TCP:localhost:8080`. Deployment: [docs/PI_DAEMON.md](docs/PI_DAEMON.md) 11.
+The Pi daemon `pi8080d` (Linux; with `--sim`, also macOS): cross-build, deploy, `--sim`, and the TCP console are in [docs/USER_GUIDE.md](docs/USER_GUIDE.md) section 9 (one copy; the normative rules are [docs/PI_DAEMON.md](docs/PI_DAEMON.md)).
 
 ## ROM Development
 

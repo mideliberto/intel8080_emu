@@ -274,6 +274,7 @@ Restarting the daemon is the power cycle (PI_DAEMON 16).
 Build on the Mac and copy it over (PI_DAEMON 2, 11):
 
 ```
+rustup target add aarch64-unknown-linux-musl     # once
 cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d
 scp target/aarch64-unknown-linux-musl/release/pi8080d pi:/usr/local/bin/
 ```

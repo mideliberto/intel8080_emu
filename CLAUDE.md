@@ -9,7 +9,7 @@
 - RAM test build (ARCHITECTURE 2.1): `rom/monitor_ram.hex`, the monitor at D000, loaded through the resident HEX loader for testing ROM changes on the board. Board debug aids specified 2026-10-03: analyzer headers, status LEDs, JP-WE (ARCHITECTURE 6.10-6.12).
 - 342 tests passing (6 library + 13 host + 130 CPU + 37 device + 56 mailbox + 58 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 9 `#[ignore]`: 4 CPU exercisers (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`), the 3 GET time-limit tests (`cargo test --test mailbox_tests -- --ignored`, about 35 s), the live ASK test (needs `ANTHROPIC_API_KEY`; skips without it) and `w_command_cycles`; all passing (the live ASK test not yet run with a key)
 - Monitor ROM v0.9, 20 commands plus the `:` HEX loader, matches MONITOR_SPEC. 3116 of 4096 bytes used (`cd rom && make size`), 980 bytes headroom
-- Spec: four normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC since 2026-10-02; PI_DAEMON since 2026-10-03). Open decisions: the choices flagged in the 2026-10-03 additions (`--sim`, RAM build, JP-WE, analyzer) and the halt bus float (`TODO.md`).
+- Spec: four normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC since 2026-10-02; PI_DAEMON since 2026-10-03). Open decisions: none (`TODO.md`). Phases 1-11 done; Monitor 1.0 = a tag on a board-proven image (End State).
 - Live task list: `TODO.md`
 
 ## Roles
@@ -32,6 +32,7 @@
 - `cargo test` / `cargo run`
 - ROM: `cd rom && make` (AS Macro Assembler: `asl` + `p2bin`). Commit `monitor.bin`, `monitor.sym` (debugger symbols) and `monitor_ram.hex` (RAM test build, ARCHITECTURE 2.1), not `.lst`/`.p`/`.noi`.
 - Examples: `cd examples && make`. Commit each `.hex` with its `.asm` (the transcripts paste the `.hex`).
+- Requires `/usr/bin/curl` 8.4.0+ (mailbox `GET` and `ASK`; their tests run it against a local server, never the internet or the API). `cargo test -- --ignored` also runs the GET time-limit tests (~35 s) and the exercisers (after `scripts/fetch_exercisers.sh`); the live ASK test runs only with `ANTHROPIC_API_KEY` set.
 
 ## Key Files
 - `docs/COLLABORATION_LOG.md` - history, decisions, lessons. Read Current State first.
