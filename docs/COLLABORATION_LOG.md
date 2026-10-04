@@ -622,16 +622,17 @@ Console I/O debugging session:
 
 - **Phase 6:** done 2026-10-03 (Service Mailbox, `TIME`, T, v0.5).
 - **Phase 7:** done 2026-10-03 (mailbox `ASM`/`DIS`, A, U, v0.6).
-- **Phase 8:** done 2026-10-03 (mailbox `GET`, N, v0.7). The by-hand Gutenberg fetch and the Pi bench rows remain (`TODO.md`).
+- **Phase 8:** done 2026-10-03 (mailbox `GET`, N, v0.7). The Gutenberg criterion was verified live 2026-10-03; the Pi bench rows remain (`TODO.md`).
 - **Phase 9:** done 2026-10-03 (mailbox `ASK`, Q, v0.8), reviewed and fixed the same day. The live ASK test by hand and the Pi bench row remain (`TODO.md`).
 - **Phase 10:** done 2026-10-03 (R, the G_RETURN capture, REGS, v0.9).
-- **Phase 11:** done 2026-10-03 (examples, `docs/USER_GUIDE.md`, the consistency pass, Monitor 1.0 defined; no ROM change). The socat console by hand remains (`TODO.md`). Next: the board (1.0 is a tag on a board-proven image).
+- **Phase 11:** done 2026-10-03 (examples, `docs/USER_GUIDE.md`, the consistency pass, Monitor 1.0 defined; no ROM change). The socat `--sim` console was verified live 2026-10-03.
+- **Next:** Track A, the board design artifacts (schematic/netlist, GAL equations, connectivity test, parts order, PCB split), and Track B, the deliberately deferred Someday items, each needing a named consumer first. The live Q check waits for Mike's API key. Monitor 1.0 is a tag on a board-proven image.
 - **Pi daemon:** specified and built 2026-10-03 (`docs/PI_DAEMON.md`); the bench checks (PI_DAEMON 14) wait for the board.
 - **Review findings:** 2026-10-02 review found CPU flag bugs, ROM range and parse bugs, and vacuous tests. All fixed by 2026-10-03 (steps A-E); `TODO.md` keeps the repros.
 
 ### Open Decisions
 
-Four open, from Phase 11 (`TODO.md`): CLAUDE.md Status and this section disagree on whether open decisions remain; README Building and USER_GUIDE 9 both hold the Pi deploy and console recipe; HARDWARE_BUILD 3 step 8's exerciser shim jumps to "the monitor warm entry", which ARCHITECTURE 2 does not publish; how transcripts replay on the board (Q11-REPLAY, decided at bring-up step 6). Before Phase 11: none open. The choices flagged while building `--sim`, the RAM test build and the board debug aids, and the halted 8080's floating buses (10 kohm pull-ups, ARCHITECTURE 6.13), closed 2026-10-03; see Key Decisions. The MONITOR_SPEC 6.17 U cost figure was corrected to the measurement 2026-10-03. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon, Phase 7, Phase 8, Phase 9 and Phase 10 sets closed 2026-10-03 too. Left to Mike: the CLAUDE.md Build line for curl (`TODO.md`). The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
+None. The Phase 11 doc items (CLAUDE.md Status vs this log, README vs USER_GUIDE 9, the shim's exit wording, the curl Build line) were fixed 2026-10-03. Deferred by design, not open: how transcripts replay on the board (Q11-REPLAY, decided at bring-up step 6). Every earlier set is closed; see Key Decisions. The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
 
 ### Blocked/Deferred
 
@@ -639,14 +640,20 @@ Four open, from Phase 11 (`TODO.md`): CLAUDE.md Status and this section disagree
 - **Pi services:** one Service Mailbox at 0x10-0x13. Phase 6 `TIME`, 7 `ASM`/`DIS`, 8 `GET` (the background worker and BUSY) and 9 `ASK` (Claude) done
 - **8253 timer / interrupts:** Someday
 
-### Future Vision (Documented, Not Started)
+### Future Vision
 
-- HTTP client, system time device, Gutenberg e-reader, Claude API device
-- Hardware prototype (Pi 4B + real 8080; `docs/HARDWARE_BUILD.md`, `docs/PI_DAEMON.md`)
+- Built in software: the HTTP client (N), system time (T), the Claude device (Q), and the Gutenberg path (N to a storage file, then L). They run on the emulator, under `pi8080d --sim`, and on the board once it exists.
+- Not started: the physical machine (Pi 4B + real 8080; `docs/HARDWARE_BUILD.md`, `docs/PI_DAEMON.md`), and a Gutenberg *reader* program for the 8080 (Someday).
 
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Session Close (2026-10-02 to 03 Marathon)
+- Built: every phase, 1-11; the debugger; the Pi daemon with `--sim`; the RAM test build; the hardware reference; and the full hardware design on paper. The whole review, decide, build cycle ran as ultracode workflows, with Mike deciding every question.
+- Decided: 40 Key Decisions entries for 2026-10-02 and 03 (most bundle several choices). The ones that shaped everything: the Pi FIFO console and READY wait-state; one Service Mailbox; RESET = power-on state; strict arguments; the WAIT set via STSTB, not SYNC; curl as the GET/ASK worker, which keeps the musl gate.
+- What bit us: tests that didn't test (zeroed RAM hid a broken overlay; vacuous branch tests); a stale committed ROM; an idle-wait rule that slowed compute 15x; my demo leaving a stray emulator process. Each was caught and fixed, and the fix is in the log entries above.
+- Next session: the carryover prompt for Track A (board artifacts) and Track B (Someday items, each needing a named consumer); then the live Q with Mike's key.
 
 ### 2026-10-03: Phases 8-11 Verified Live
 - Phases 8-11 built in sequence (spec, cross-check of 17 conflicts, build, adversarial review, commit each). Monitor v0.9, 3116/4096 bytes, 342 tests.
