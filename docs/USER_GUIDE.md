@@ -121,6 +121,7 @@ In `examples/`, each as `.asm` source and a ready `.hex`. Each has a transcript,
 | `hello` | paste `hello.hex`, `G 0100` | `Hello, 8080!` |
 | `memtest` | paste `memtest.hex`, `G 0100` | `RAM OK`, or `FAIL aaaa` at the first bad byte |
 | `burn` | the image at 1000, paste `burn.hex`, fit JP-WE, `G 0100` (section 10) | the new monitor's banner, `Bad source`, `Not a ROM image`, or `Burn failed aaaa` |
+| `rpn` | paste `rpn.hex`, `G 0100`, then lines such as `12 34 + p`; `q` quits | an RPN calculator on signed 16-digit BCD numbers: `+ - * /`, `p`, `s`, `c` (tokens in the header of `examples/rpn.asm`) |
 
 `memtest`'s range, what it catches and how to change the range are in the header of
 `examples/memtest.asm`. **Under the RAM test build** (section 10), set the last address to CFFF
