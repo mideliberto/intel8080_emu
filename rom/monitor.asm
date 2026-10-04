@@ -429,7 +429,8 @@ SKIP_SPACES:
 ;            character other than a hex digit before the space or NUL that
 ;            must end it. HL is somewhere in the token.
 ; Callers of a required argument test only CY. Callers of an optional one
-; test Z (absent) first, then CY (invalid): present-invalid is never absent.
+; test Z (absent) first, then CY (invalid), or CY first, then Z (CMD_GO):
+; valid is CY=0 Z=0, and present-invalid is never absent.
 ; Trashes: A, B, C, flags; READ_HEX_ADDR24 also DE
 READ_HEX_ADDR24:
         MVI     B,7                 ; 6 digits allowed
@@ -615,9 +616,9 @@ MBN_DIGIT:
         RET
 
 ; MB_KEY - Esc check for a running N or Q request (MONITOR_SPEC 6.18, 6.19).
-; Reads every console byte waiting. Esc: clears the mailbox (aborts the
-; request), prints Aborted and enters WARM; does not return. Every other byte
-; is discarded. Returns when no byte waits.
+; Reads every console byte waiting. Esc: reads the rest that waits, clears the
+; mailbox (aborts the request), prints Aborted and enters WARM; does not return.
+; Every other byte is discarded. Returns when no byte waits.
 ; Trashes: A, flags
 MB_KEY:
         IN      CONSOLE_STATUS
@@ -626,6 +627,13 @@ MB_KEY:
         IN      CONSOLE_DATA_IN
         CPI     ESC
         JNZ     MB_KEY              ; any other byte: discarded, look again
+MK_ESC:
+        IN      CONSOLE_STATUS      ; Esc: discard the rest that waits
+        RRC
+        JNC     MK_ABORT
+        IN      CONSOLE_DATA_IN
+        JMP     MK_ESC
+MK_ABORT:
         MVI     A,02H
         OUT     MAILBOX_CTRL        ; clear: aborts the request
         LXI     H,MSG_ABORTED

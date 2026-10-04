@@ -9,7 +9,7 @@ Normative. This is the contract for everything the monitor ROM shows the user: t
 - `DEVICE_SPECS.md`: every port protocol (console, storage, mount, Service Mailbox, system control) and the READY contract as software sees it.
 - `TODO.md`: the work queue and every known difference between the code and this spec.
 
-**Status of this spec.** All decisions are made (2026-10-02 and 2026-10-03; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6, v0.5) is implemented (2026-10-03). 6.16 and 6.17 (`A` and `U`, Phase 7, v0.6) and the section 9 mailbox client are implemented (2026-10-03). 6.18 (`N`, Phase 8, v0.7) is specified (2026-10-03); implemented (2026-10-03). 6.19 (`Q`, Phase 9, v0.8) is specified (2026-10-03); implemented (2026-10-03). 6.20 (`R`, Phase 10, v0.9) and the G_RETURN capture in section 8 are implemented (2026-10-03). 8.1 (RST 6 breakpoints, Phase 12) is specified (2026-10-04); implemented (2026-10-04).
+**Status of this spec.** All decisions are made (2026-10-02, 2026-10-03 and 2026-10-04; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6, v0.5) is implemented (2026-10-03). 6.16 and 6.17 (`A` and `U`, Phase 7, v0.6) and the section 9 mailbox client are implemented (2026-10-03). 6.18 (`N`, Phase 8, v0.7) is specified (2026-10-03); implemented (2026-10-03). 6.19 (`Q`, Phase 9, v0.8) is specified (2026-10-03); implemented (2026-10-03). 6.20 (`R`, Phase 10, v0.9) and the G_RETURN capture in section 8 are implemented (2026-10-03). Esc in 6.18 and 6.19 (Phase 12) is specified (2026-10-04); implemented (2026-10-04). 8.1 (RST 6 breakpoints, Phase 12) is specified (2026-10-04); implemented (2026-10-04).
 
 ---
 
@@ -48,7 +48,7 @@ Ready.<CR><LF>
 
 ### 1.2 Prompt
 
-The prompt is the two bytes `> ` (3Eh 20h). No `<CR><LF>` comes before it. Every command's output ends with `<CR><LF>`, so the prompt starts a new line. The exception is a program returning through `G` (G Return Contract), or stopping at an `RST 6` (8.1): its last output may leave the cursor mid-line.
+The prompt is the two bytes `> ` (3Eh 20h). No `<CR><LF>` comes before it. Every command's output ends with `<CR><LF>`, so the prompt starts a new line. The exception is a program returning through `G` (G Return Contract): its last output may leave the cursor mid-line. After an `RST 6` (8.1) the `BRK` line may start mid-line, but the prompt still follows its `<CR><LF>`.
 
 ---
 
@@ -547,6 +547,7 @@ Phase 8 tests MUST cover every row. *ports* and *scripted* as in 6.17.1. *server
 | *scripted* statuses [02 02 01 83], bytes [61 62]: `N x` | `abService error` | — |
 | *scripted* statuses [02 03], bytes [0A]: `N x` | an empty line, then an empty line (bytes 0D 0A 0D 0A) | — |
 | *scripted* statuses [01]: `N x` CR, then Esc, in one step | `Aborted` | after the execute only IN 12 01 reads, then OUT 11 02; no IN 13 |
+| *scripted* statuses [01]: `N x` CR then, in one step, LF Esc; `q` Esc; Esc `[A`; Esc `H 1 1` CR | `Aborted` (each); one prompt, nothing else runs | an Esc behind other waiting bytes aborts, and the bytes waiting after it are discarded; console FIFO empty |
 | *scripted* statuses [01 01 01 02 03], bytes [41]: `N x` CR, nothing more | `A` | 4 IN 01 in the step (the line's bytes): a check pops no byte when none waits |
 | *scripted* statuses [02], bytes `ab` 0A `cd` 0A then 00 forever: `N x` CR, then Esc | `abAborted` | — |
 | *scripted* statuses [02 02 02 02 02 02 03], bytes `a` 0A `b` 0A `c` 0A: `N x` CR `q`, and `N x` CR `H 1 1` CR | `a`, `b`, `c`, an empty line; one prompt, nothing else runs | console FIFO empty |
@@ -691,7 +692,7 @@ Because of step 6, a record that is accepted writes only inside 0100-EEFF. The R
 | Type 01 (EOF) | Nothing. Once the checksum passes, LL, AAAA and any data are ignored | `Loaded` |
 
 - The guard (step 6) applies only to records that write. The standard EOF record `:00000001FF`, at address 0000, is accepted.
-- The guard ranges come from the memory map (`ARCHITECTURE.md`, Memory Map): 0000-007F is unused, 0080-00FF is the workspace (including LINE_BUFFER), EF00-EFFF is the monitor stack, and F000-FFFF is ROM. Writes can never reach LINE_BUFFER, so the loader may read data bytes from the buffer while it writes them.
+- The guard ranges come from the memory map (`ARCHITECTURE.md`, Memory Map): 0000-007F is unused (except 0030-0032, which G writes, 8.1), 0080-00FF is the workspace (including LINE_BUFFER), EF00-EFFF is the monitor stack, and F000-FFFF is ROM. Writes can never reach LINE_BUFFER, so the loader may read data bytes from the buffer while it writes them.
 - The loader does not change LAST_DUMP_ADDR or LAST_EXAM_ADDR.
 
 ### 7.4 Echo and paste

@@ -32,7 +32,7 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 | N | `N url [> file]` | HTTP GET (to the console, or to a storage file); `Service error` on any failure (mailbox `GET`); Esc aborts (`Aborted`) |
 | O | `O port val` | Output to port |
 | Q | `Q text` | Ask Claude; the answer in plain ASCII lines of at most 79 characters; `Service error` on any failure (mailbox `ASK`); Esc aborts (`Aborted`) |
-| R | `R` | Registers A, F, BC, DE, HL saved at the last `G` return (`RET`) |
+| R | `R` | Registers A, F, BC, DE, HL saved at the last `G` return (`RET`) or `RST 6` break |
 | S | `S start end b1 [.. b8]` | Search for 1-8 bytes |
 | T | `T` | Show time (mailbox `TIME`); `Service error` on a mailbox failure |
 | U | `U addr [cnt]` | Unassemble `cnt` instructions, default 8 (mailbox `DIS`) |

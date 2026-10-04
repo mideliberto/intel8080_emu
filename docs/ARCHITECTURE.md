@@ -62,7 +62,7 @@ The I/O stubs run from RAM as self-modifying code. Real hardware runs it the sam
 
 - **Source:** `rom/monitor.asm`. **Image:** `rom/monitor.bin`, exactly 4096 bytes, assembled at `ORG 0F000H`, unused bytes 0xFF.
 - **Fixed address:** only one. COLD_START is the first byte of the image (0xF000, which is also 0x0000 through the overlay). Every other routine address can move from build to build.
-- **No WARM vector.** WARM (3.2) has no fixed address. A program reaches it only through the `G` return contract (`MONITOR_SPEC.md`); anything else that wants the monitor back jumps to F000, a cold start (banner, workspace reset). The CP/M exerciser shim (`tests/exerciser.rs`) does that at 0000. (Decided 2026-10-03.)
+- **No WARM vector.** WARM (3.2) has no fixed address. A program reaches it only through the `G` return contract (`MONITOR_SPEC.md`), or by stopping at a planted `RST 6` breakpoint (`MONITOR_SPEC.md` 8.1, a debugging aid, not an exit); anything else that wants the monitor back jumps to F000, a cold start (banner, workspace reset). The CP/M exerciser shim (`tests/exerciser.rs`) does that at 0000. (Decided 2026-10-03.)
 - **No public entry points.** User programs MUST NOT call ROM routines by address. Programs do their own I/O through the ports in `DEVICE_SPECS.md`. ROM routine contracts are in `MONITOR_SPEC.md` (ROM Routine Contracts); they describe the code, not an ABI.
 - **Budget:** 4096 bytes. Used bytes = `ROM_END - 0F000H`, where `ROM_END` is a label after the last assembled byte. `make size` prints that number. The padded image size is not a measurement.
 - **RAM test build:** the same source assembled at D000 as `rom/monitor_ram.hex`, so a ROM change can run on the board without burning an EEPROM (2.1).
