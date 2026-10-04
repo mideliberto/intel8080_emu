@@ -11,7 +11,7 @@
 | 5 | Program Loading | ✅ Complete |
 | 6 | Time | ✅ Complete |
 | 7 | Development Tools | ✅ Complete |
-| 8 | Internet Services | 🔲 Future |
+| 8 | Internet Services | ✅ Complete |
 | 9 | Claude Integration | 🔲 Future |
 | 10 | R command (debugger done early) | 🔲 Future |
 | 11 | Polish | 🔲 Future |
@@ -159,9 +159,29 @@ No timer in v1. The Pi keeps wall-clock time via NTP. A periodic interrupt sourc
 
 ---
 
-## Phase 8: Internet Services
+## Phase 8: Internet Services ✅ COMPLETE (2026-10-03)
 
-HTTP via mailbox `GET`; N command. Large bodies go to a storage file. Designed when the phase starts, including how a hung request ends.
+**Goal:** The 8080 fetches from the web: mailbox `GET`, the first background command, and the `N` command.
+
+**Specified 2026-10-03** (decisions: COLLABORATION_LOG Key Decisions, "Phase 8 Specified"): `GET`, Background commands and the vectors in `DEVICE_SPECS.md` 8; `N` in `MONITOR_SPEC.md` 6.18, with the vectors in 6.18.1; the worker's process, cores and lifetime in `PI_DAEMON.md` 1 and 11.
+
+**Tasks:**
+- [x] `storage.rs`: the mount name rule as one function (`file_name`: fold, check, `Option<String>`), called by mount and by `GET`
+- [x] `mailbox.rs`: `Mailbox::new(clock, storage_dir)` (`build_bus` and the harnesses pass it); `GET` grammar (82); the `/usr/bin/curl` worker with `env_clear`, its argument list and flag notes in the module header (`-N` in the stream form: without it curl holds about 4 KB before N prints anything); stream form (non-blocking pipe, 4096-byte reads at `IN 12` only) and file form (remove a stale `~FILE`, curl's size limit, fsync, rename, directory fsync, the 6-digit length); BUSY; abort on execute, clear and `Drop`; on Linux the `pre_exec` (affinity, `PR_SET_PDEATHSIG`). The module header loses "no background worker"
+- [x] `mailbox.rs` unit test: the curl argument list, exactly (`curl_argument_list`)
+- [x] `main.rs`: `drop(cpu)` before the bad-`--script` `std::process::exit(2)`, so the mailbox aborts its worker (and storage flushes)
+- [x] ROM: `N` (dispatch, `CMD_NET` with the `CN_SEND` label Phase 9's Q enters at, `STR_GET`), T's loop prints LF as CR LF and gains `CT_EXEC`; help line; banner v0.7
+- [x] Tests: the test HTTP server `H` in `tests/support/http.rs` (shared by the GET and N tests; Phase 9 extends it); `tests/mailbox_tests.rs`: every DEVICE_SPECS 8 GET vector (three `#[ignore]`); `placeholder_commands_are_unknown` keeps only `ASK`
+- [x] Tests, `tests/monitor_tests.rs`: every MONITOR_SPEC 6.18.1 row (server rows on a wall-clock deadline); `help.txt` gains the `N` line
+- [x] `cargo test -- --ignored` green once (the time limits: 10.0 s connect, 30 s stall before the first byte and mid-body), and the musl `cargo check`/`clippy` gate (the `pre_exec` is Linux-only)
+
+**Done:** +67 bytes (2893 -> 2960, 1136 free), as the sketch measured: dispatch 5, `CMD_NET` 14, `STR_GET` 5, help line 31, T's LF-to-CR LF 12. N prints a body at 155 cycles a byte (206 for an LF), about 13 KB/s at 2.048 MHz before READY wait states. Tests: 15 GET tests and 3 ignored time-limit tests in `mailbox_tests.rs`, 5 N tests in `monitor_tests.rs`, 1 unit test. The 6.18.1 first row's expected output was corrected to what 6.18 steps 2-3 print for the vectors' `/hello` body (`Hello` CR LF: `Hello` CR CR LF, then CR LF), which the file row's `000007` already required. Two more wording changes, both to match the device: the same row's `IN 12` = 01 reads may fall anywhere among the pairs (after the last buffered byte is popped the status is BUSY again), and PI_DAEMON 1 says the device reads the bus thread's mask before the fork.
+
+**Success criteria:**
+- [x] `N http://H/hello` against the test server prints `Hello`, and `N http://H/hello > F` then `X F` and `L` load it, in `cargo test`, with no internet.
+- [x] Clear, execute and drop kill a running worker within the access (`cargo test`). The time limits are pinned by the argument-list unit test in `cargo test` and shown by the ignored tests (`cargo test -- --ignored`): a request that never answers ends in 83.
+- [ ] By hand, not in `cargo test`: `N https://www.gutenberg.org/cache/epub/1342/pg1342.txt > PRIDE.TXT` in the emulator, then `X PRIDE.TXT` and `L`.
+- [x] `t_runs_the_reference_client` passes unchanged.
 
 ---
 

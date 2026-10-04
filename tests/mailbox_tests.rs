@@ -10,18 +10,27 @@
 // API used (only `rig_with_clock` names the device):
 //   - build_bus(dir, mailbox::local_time) maps one Service Mailbox device at 10, 11, 12, 13, using the host clock.
 //   - intel8080_emu::io::devices::mailbox::Mailbox implements IoDevice.
-//   - Mailbox::new(clock), clock a plain fn returning Some((year, month, day, hour, minute,
+//   - Mailbox::new(clock, storage_dir), clock a plain fn returning Some((year, month, day, hour, minute,
 //     second)) of local time, or None for "not set" (TIME gives 83). A plain fn can't
 //     capture, so the test clock reads a thread-local (each test runs on its own
 //     thread) that `set_clock` changes.
 //
-// Not testable at port level until a command runs in the background (Phase 8): BUSY
-// (TIME, ASM and DIS complete within execute), a request that produces bytes later or
-// fails mid-response, an empty response, abort of a running background request,
-// interrupts (rule 2.7). Rule 2.9 (Pi service restart) only as "a fresh device reads 00".
+// GET (Phase 8, the background command) runs its vectors against the test HTTP server H
+// (tests/support/http.rs) through the real `/usr/bin/curl` worker; no test touches the
+// internet. The three time-limit rows take 10 s or more and are #[ignore] (run with
+// `cargo test -- --ignored`).
+//
+// Not testable at port level: interrupts (rule 2.7); rule 2.9 (Pi service restart) only
+// as "a fresh device reads 00"; the Linux pre_exec (affinity, PDEATHSIG: bench, PI_DAEMON
+// 14); a real TLS handshake and DNS failure (they would need the network); curl missing.
 
 use std::cell::{Cell, RefCell};
+use std::path::Path;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+mod support;
+use support::http;
 
 use intel8080_emu::io::build_bus;
 use intel8080_emu::io::devices::mailbox::{self, Mailbox};
@@ -48,6 +57,7 @@ const STATUS: u8 = 0x12;
 const RESP: u8 = 0x13;
 
 const IDLE: u8 = 0x00;
+const BUSY: u8 = 0x01;
 const AVAIL: u8 = 0x02;
 const DONE: u8 = 0x03;
 const E_UNKNOWN: u8 = 0x80;
@@ -72,7 +82,7 @@ fn rig() -> Rig {
 /// build_bus, then ports 10-13 replaced by a mailbox whose clock reads NOW (set_clock).
 fn rig_with_clock() -> Rig {
     let mut r = rig();
-    let mb = Rc::new(RefCell::new(Mailbox::new(test_clock)));
+    let mb = Rc::new(RefCell::new(Mailbox::new(test_clock, r._dir.path().to_path_buf())));
     for port in 0x10..=0x13 {
         r.bus.map_port(port, mb.clone());
     }
@@ -595,10 +605,10 @@ fn command_bytes_are_any_value() {
 
 #[test]
 fn placeholder_commands_are_unknown() {
-    // Command format: "A placeholder word in the Commands table (GET, ASK) is unknown until
+    // Command format: "A placeholder word in the Commands table (ASK) is unknown until
     // its phase ships, so it gives 80, with or without arguments."
     let mut r = rig();
-    for command in [&b"GET"[..], b"GET x", b"ASK", b"ASK hi"] {
+    for command in [&b"ASK"[..], b"ASK hi"] {
         assert_eq!(r.command(command), E_UNKNOWN, "{:?}", String::from_utf8_lossy(command));
     }
 }
@@ -959,4 +969,419 @@ fn reset_is_rebuilding_the_bus() {
         let (got, end) = r.drain();
         assert!(end == DONE && is_time_shape(&got), "after {}: {:?}", leave, String::from_utf8_lossy(&got));
     }
+}
+
+// ---------- GET (DEVICE_SPECS 8: Background commands, GET, GET conformance vectors) ----------
+//
+// "Final" is the status after polling IN 12 until it is not 01. "Response" is every byte
+// read from 13. "A status may read 01 before any IN 12 read. Every polling loop has a 10 s
+// Instant deadline and fails with a message naming the row".
+
+impl Rig {
+    fn dir(&self) -> &Path {
+        self._dir.path()
+    }
+
+    /// Clear, the bytes, execute. Returns IN 12 right after execute: "Right after execute,
+    /// IN 12 reads 01, 81, 82 or 83" (80 for an unknown word, as for every command).
+    fn start(&mut self, bytes: &[u8]) -> u8 {
+        self.clear();
+        self.send(bytes);
+        self.out(CTL, EXECUTE);
+        let s = self.inp(STATUS);
+        assert!(matches!(s, BUSY | 0x80..=0x83), "{:?}: right after execute IN 12 = {:02X}", String::from_utf8_lossy(bytes), s);
+        s
+    }
+
+    /// Poll IN 12 until it reads neither 01 nor 02, reading IN 13 at each 02. Returns the
+    /// final status and the response. Fails after `secs`.
+    fn finish_within(&mut self, row: &str, secs: u64) -> (u8, Vec<u8>) {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        let mut got = Vec::new();
+        loop {
+            match self.inp(STATUS) {
+                BUSY => {}
+                AVAIL => got.push(self.inp(RESP)),
+                s => return (s, got),
+            }
+            assert!(Instant::now() < deadline, "{}: no end within {} s ({} bytes)", row, secs, got.len());
+        }
+    }
+
+    fn finish(&mut self, row: &str) -> (u8, Vec<u8>) {
+        self.finish_within(row, 10)
+    }
+
+    /// The storage directory's file names, sorted.
+    fn listing(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(self.dir()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        names.sort();
+        names
+    }
+}
+
+#[test]
+fn get_stream_vectors() {
+    // Stream form: "The response is the body." Body: "unchanged: no character-set
+    // conversion, no line-ending change, any byte 00-FF." Redirects: "followed, at most 5".
+    let h = http::start();
+    let bin: Vec<u8> = (0..=255).collect();
+    let rows: [(String, &[u8]); 5] = [
+        (format!("GET http://{}/hello", h.host()), b"Hello\r\n"),
+        (format!("GET   http://{}/hello  ", h.host()), b"Hello\r\n"),
+        (format!("GET http://{}/lf", h.host()), b"a\nb\n"),
+        (format!("GET http://{}/bin", h.host()), &bin),
+        (format!("GET http://{}/r5", h.host()), b"ok"),
+    ];
+    for (command, body) in rows {
+        let mut r = rig();
+        assert_eq!(r.start(command.as_bytes()), BUSY, "{}", command);
+        assert_eq!(r.finish(&command), (DONE, body.to_vec()), "{}", command);
+        assert_eq!(r.listing(), Vec::<String>::new(), "{}: storage directory", command);
+    }
+}
+
+#[test]
+fn get_flow_control() {
+    // "Flow control. Streamed output waits in the worker's pipe (64 KiB on Linux) until the
+    // 8080 reads it." Row: /chunk, "wait 200 ms before the first IN 12 | 200, chunked, 100
+    // KiB of a pattern (more than a pipe holds, so curl blocks) | 03 after the same bytes".
+    let h = http::start();
+    let mut r = rig();
+    r.clear();
+    r.send(format!("GET {}", h.url("/chunk")).as_bytes());
+    r.out(CTL, EXECUTE);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(r.finish("/chunk"), (DONE, http::pattern(100 * 1024)));
+}
+
+#[test]
+fn get_empty_bodies_go_straight_to_done() {
+    // "An empty body goes from BUSY straight to DONE." Status: "Any other final status
+    // (2xx, or a 3xx that is not followed, such as 304) delivers its body, which may be empty."
+    let h = http::start();
+    for path in ["/empty", "/304"] {
+        let mut r = rig();
+        assert_eq!(r.start(format!("GET {}", h.url(path)).as_bytes()), BUSY);
+        assert_eq!(r.finish(path), (DONE, vec![]), "{}: no AVAIL ever", path);
+    }
+}
+
+#[test]
+fn get_failures_are_83_with_no_byte() {
+    // Errors: "83 for everything after it: ... DNS, connect or TLS failure, ... a status
+    // of 400 or above, too many redirects". Status: "400 or above gives 83, and no byte of
+    // its body is delivered."
+    let h = http::start();
+    let closed = closed_port();
+    for command in [
+        format!("GET {}", h.url("/r6")),
+        format!("GET {}", h.url("/404")),
+        format!("GET {}", h.url("/500")),
+        format!("GET http://127.0.0.1:{}/", closed),
+        format!("GET https://{}/hello", h.host()),
+    ] {
+        let mut r = rig();
+        assert_eq!(r.start(command.as_bytes()), BUSY, "{}", command);
+        assert_eq!(r.finish(&command), (E_SERVICE, vec![]), "{}", command);
+        assert_eq!(r.inp(RESP), 0x00);
+        assert_eq!(r.listing(), Vec::<String>::new(), "{}", command);
+    }
+}
+
+/// A port nothing listens on: bind one, note it, close it.
+fn closed_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
+#[test]
+fn only_in_12_checks_the_worker() {
+    // "The device checks the worker when the 8080 reads IN 12 in BUSY, and at no other
+    // time." "IN 13 ... in BUSY it reads 00 with no side effect". Row: /hang; IN 13; IN 12 |
+    // IN 13 = 00, then IN 12 = 01.
+    let h = http::start();
+    let mut r = rig();
+    assert_eq!(r.start(format!("GET {}", h.url("/hang")).as_bytes()), BUSY);
+    assert_eq!(r.inp(RESP), 0x00);
+    assert_eq!(r.inp(STATUS), BUSY);
+}
+
+#[test]
+fn the_last_pop_goes_busy_without_a_check() {
+    // Background commands: "When it pops the last byte read so far, the status goes back to
+    // BUSY without a check." /chunk is 100 KB; one check reads at most 4096 bytes, so after
+    // popping exactly those the next IN 13 is in BUSY and reads 00.
+    let h = http::start();
+    let mut r = rig();
+    assert_eq!(r.start(format!("GET {}", h.url("/chunk")).as_bytes()), BUSY);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(r.inp(STATUS), AVAIL);
+    for i in 0..4096usize {
+        assert_eq!(r.inp(RESP), (i % 251) as u8, "byte {}", i);
+    }
+    assert_eq!(r.inp(RESP), 0x00, "the last pop checked the worker");
+}
+
+#[test]
+fn get_to_a_file() {
+    // File form: "The response is the body length as 6 uppercase hex digits, with no line
+    // ending". Step 3: "renames it over FILE (created if it does not exist)". "An empty body
+    // gives an empty FILE." Step 1: "At execute, the device removes any leftover temporary
+    // file for FILE". The name is checked as mount does (folded to uppercase).
+    let h = http::start();
+    let rows = [
+        (format!("GET {} > BOOK.TXT", h.url("/hello")), "BOOK.TXT", &b"000007"[..], &b"Hello\r\n"[..]),
+        (format!("GET {}   >   book.txt ", h.url("/hello")), "BOOK.TXT", b"000007", b"Hello\r\n"),
+        (format!("GET {} > E.BIN", h.url("/empty")), "E.BIN", b"000000", b""),
+    ];
+    for (command, name, response, body) in rows {
+        let mut r = rig();
+        assert_eq!(r.start(command.as_bytes()), BUSY);
+        assert_eq!(r.finish(&command), (DONE, response.to_vec()), "{}", command);
+        assert_eq!(std::fs::read(r.dir().join(name)).unwrap(), body, "{}", command);
+        assert_eq!(r.listing(), [name], "{}: no ~{}", command, name);
+    }
+    // A stale ~E.BIN is removed before the worker starts, so an empty body is never junk.
+    // /304 has no body, so curl creates no file; only the removal keeps the junk out.
+    let mut r = rig();
+    std::fs::write(r.dir().join("~E.BIN"), b"junk").unwrap();
+    r.start(format!("GET {} > E.BIN", h.url("/304")).as_bytes());
+    assert_eq!(r.finish("stale ~E.BIN"), (DONE, b"000000".to_vec()));
+    assert_eq!(std::fs::read(r.dir().join("E.BIN")).unwrap(), b"");
+    assert_eq!(r.listing(), ["E.BIN"]);
+}
+
+#[test]
+fn get_file_size_limit() {
+    // Step 2: "A body longer than FFFFFF bytes fails with 83 as soon as the worker sees it,
+    // and the temporary file is removed." Rows /max (FFFFFF bytes) and /over (1000000h, chunked).
+    let h = http::start();
+    let mut r = rig();
+    r.start(format!("GET {} > M.BIN", h.url("/max")).as_bytes());
+    assert_eq!(r.finish("/max"), (DONE, b"FFFFFF".to_vec()));
+    assert!(std::fs::read(r.dir().join("M.BIN")).unwrap() == http::pattern(0xFF_FFFF), "M.BIN is not the body");
+    let mut r = rig();
+    r.start(format!("GET {} > O.BIN", h.url("/over")).as_bytes());
+    assert_eq!(r.finish("/over"), (E_SERVICE, vec![]));
+    assert_eq!(r.listing(), Vec::<String>::new());
+}
+
+#[test]
+fn a_failed_get_leaves_file_untouched() {
+    // "On any failure or abort before that, FILE is untouched and the temporary file is removed."
+    let h = http::start();
+    let mut r = rig();
+    std::fs::write(r.dir().join("KEEP.TXT"), b"old").unwrap();
+    r.start(format!("GET {} > KEEP.TXT", h.url("/404")).as_bytes());
+    assert_eq!(r.finish("/404 > KEEP.TXT"), (E_SERVICE, vec![]));
+    assert_eq!(std::fs::read(r.dir().join("KEEP.TXT")).unwrap(), b"old");
+    assert_eq!(r.listing(), ["KEEP.TXT"]);
+}
+
+#[test]
+fn a_mounted_file_keeps_its_old_contents_until_mounted_again() {
+    // "A mounted FILE: the mount keeps reading the file it opened, which is the old
+    // contents, until FILE is mounted again." "The mailbox does not consult the storage device."
+    let h = http::start();
+    let mut r = rig();
+    std::fs::write(r.dir().join("F.TXT"), b"old").unwrap();
+    let mount = |r: &mut Rig| {
+        r.out(0x0E, 0x03);
+        for &b in b"F.TXT" {
+            r.out(0x0D, b);
+        }
+        r.out(0x0E, 0x01);
+        assert_eq!(r.inp(0x0F), 0x00);
+    };
+    mount(&mut r);
+    r.start(format!("GET {} > F.TXT", h.url("/hello")).as_bytes());
+    assert_eq!(r.finish("mounted F.TXT"), (DONE, b"000007".to_vec()));
+    assert_eq!(r.inp(0x0B), b'o', "the old mount");
+    assert_eq!(std::fs::read(r.dir().join("F.TXT")).unwrap(), b"Hello\r\n");
+    mount(&mut r);
+    assert_eq!(r.inp(0x0B), b'H');
+}
+
+#[test]
+fn clear_kills_the_worker() {
+    // Background commands: "Execute and clear abort a running request (Abort, above): the
+    // device kills the worker and reaps it within the OUT 11 access, discards its output and
+    // removes its temporary file."
+    let h = http::start();
+    let mut r = rig();
+    r.start(format!("GET {}", h.url("/hang")).as_bytes());
+    assert!(h.sees_request());
+    assert_eq!(r.inp(STATUS), BUSY);
+    r.clear();
+    assert_eq!(r.inp(STATUS), IDLE);
+    assert!(h.sees_close(), "/hang: the worker was not killed");
+
+    let mut r = rig();
+    r.start(format!("GET {} > H.BIN", h.url("/hang")).as_bytes());
+    assert!(h.sees_request());
+    r.clear();
+    assert_eq!(r.inp(STATUS), IDLE);
+    assert!(h.sees_close(), "/hang > H.BIN: the worker was not killed");
+    assert_eq!(r.listing(), Vec::<String>::new(), "no H.BIN, no ~H.BIN");
+
+    // /drip: read 3 bytes, then IN 12 = 01; after clear 00, and IN 13 = 00.
+    let mut r = rig();
+    r.start(format!("GET {}", h.url("/drip")).as_bytes());
+    assert!(h.sees_request());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut got = Vec::new();
+    while got.len() < 3 {
+        match r.inp(STATUS) {
+            BUSY => assert!(Instant::now() < deadline, "/drip: no abc within 10 s"),
+            AVAIL => got.push(r.inp(RESP)),
+            s => panic!("/drip: status {:02X}", s),
+        }
+    }
+    assert_eq!(got, b"abc");
+    assert_eq!(r.inp(STATUS), BUSY);
+    r.clear();
+    assert_eq!((r.inp(STATUS), r.inp(RESP)), (IDLE, 0x00));
+    assert!(h.sees_close(), "/drip: the worker was not killed");
+}
+
+#[test]
+fn execute_kills_the_worker() {
+    // "One request at a time. Execute and clear abort a running request". Row: /hang;
+    // execute TIME | the TIME response; the server sees the close.
+    let h = http::start();
+    let mut r = rig();
+    r.start(format!("GET {}", h.url("/hang")).as_bytes());
+    assert!(h.sees_request());
+    r.send(b"TIME"); // no clear: the execute alone must abort the GET
+    assert_eq!(r.execute(), AVAIL);
+    let (got, end) = r.drain();
+    assert!(end == DONE && is_time_shape(&got), "{:?}", String::from_utf8_lossy(&got));
+    assert!(h.sees_close());
+}
+
+#[test]
+fn the_worker_gets_an_empty_environment() {
+    // GET client: "run ... with an empty environment". The emulator binary runs with proxy
+    // variables pointing at a closed port; N still reaches H, so curl never saw them.
+    // A subprocess, so this test process's environment is untouched.
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let h = http::start();
+    let proxy = format!("http://127.0.0.1:{}", closed_port());
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("rom")).unwrap();
+    for f in ["monitor.bin", "monitor.sym"] {
+        std::fs::copy(Path::new("rom").join(f), dir.path().join("rom").join(f)).unwrap();
+    }
+    let mut child = Command::new(env!("CARGO_BIN_EXE_intel8080"))
+        .current_dir(dir.path())
+        .envs([("http_proxy", &proxy), ("HTTP_PROXY", &proxy), ("ALL_PROXY", &proxy), ("all_proxy", &proxy)])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    // N, then a HLT at 0100 to end the piped run.
+    let input = format!("N {}\rF 0100 0100 76\rG 0100\r", h.url("/hello"));
+    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let out = String::from_utf8_lossy(&out.stdout);
+    assert!(out.contains(&format!("N {}\r\nHello\r\r\n\r\n> ", h.url("/hello"))), "{:?}", out);
+}
+
+#[test]
+fn reset_kills_the_worker() {
+    // "RESET and power-on abort it the same way (rule 2.8). In the emulator and the daemon,
+    // dropping the device does it." Row: /hang > D.BIN; drop the device | the server sees
+    // the close | no ~D.BIN.
+    let h = http::start();
+    let mut r = rig();
+    r.start(format!("GET {} > D.BIN", h.url("/hang")).as_bytes());
+    assert!(h.sees_request());
+    let (bus, _con) = build_bus(r.dir(), mailbox::local_time);
+    r.bus = bus;
+    assert!(h.sees_close());
+    assert_eq!(r.listing(), Vec::<String>::new());
+}
+
+#[test]
+#[ignore = "takes 10 s: cargo test -- --ignored"]
+fn get_connect_limit() {
+    // Time limits: "each connection (name lookup, TCP connect, TLS handshake) takes at most
+    // 10 s, or the request fails with 83." Row: https://S/, S accepts and never answers |
+    // 83 after 10-12 s.
+    let s = http::silent();
+    let mut r = rig();
+    let t = Instant::now();
+    r.start(format!("GET https://{}/", s).as_bytes());
+    assert_eq!(r.finish_within("https://S/", 15), (E_SERVICE, vec![]));
+    let secs = t.elapsed().as_secs_f64();
+    assert!((10.0..12.0).contains(&secs), "{} s", secs);
+}
+
+#[test]
+#[ignore = "takes 30 s: cargo test -- --ignored"]
+fn get_stall_limit_before_the_first_byte() {
+    // "Stall: from the first connect on, including the wait for the response headers, a
+    // request that moves less than 1 byte per second averaged over 30 s fails with 83."
+    // Row: /hang | 83 after 30-35 s.
+    let h = http::start();
+    let mut r = rig();
+    let t = Instant::now();
+    r.start(format!("GET {}", h.url("/hang")).as_bytes());
+    assert_eq!(r.finish_within("/hang", 40), (E_SERVICE, vec![]));
+    let secs = t.elapsed().as_secs_f64();
+    assert!((30.0..35.0).contains(&secs), "{} s", secs);
+}
+
+#[test]
+#[ignore = "takes 30 s: cargo test -- --ignored"]
+fn get_stall_limit_mid_body() {
+    // Row: /drip | 03 never; abc, then 83 after 30-40 s. Stream form: "A failure after some
+    // bytes (a stall, a dropped connection) is ERROR 83 mid-response".
+    let h = http::start();
+    let mut r = rig();
+    let t = Instant::now();
+    r.start(format!("GET {}", h.url("/drip")).as_bytes());
+    assert_eq!(r.finish_within("/drip", 45), (E_SERVICE, b"abc".to_vec()));
+    let secs = t.elapsed().as_secs_f64();
+    assert!((30.0..40.0).contains(&secs), "{} s", secs);
+}
+
+#[test]
+fn get_grammar_errors_are_82() {
+    // Grammar: "Anything else gives 82: no token ..., two tokens (GET url >FILE), a second
+    // token other than >, four or more tokens." "<url> begins with http:// or https://
+    // exactly (lowercase), has at least one byte after the //, and has every byte in
+    // 21h-7Eh." "<FILE> is checked by section 7, Mount steps 2-3."
+    let h = http::start();
+    let url = |p: &str| h.url(p);
+    let mut rows: Vec<Vec<u8>> = vec![
+        b"GET".to_vec(), b"GET ".to_vec(), b"GET    ".to_vec(),
+        format!("GET ftp://{}/", h.host()).into_bytes(),
+        format!("GET HTTP://{}/", h.host()).into_bytes(),
+        b"GET http://".to_vec(), b"GET hello".to_vec(),
+        format!("GET {}\tb", url("/a")).into_bytes(),
+        format!("GET {} b", url("/a")).into_bytes(),
+        format!("GET {} >F", url("/a")).into_bytes(),
+        format!("GET {} > F G", url("/a")).into_bytes(),
+        format!("GET {} < F", url("/a")).into_bytes(),
+        format!("GET {} > ", url("/a")).into_bytes(),
+        format!("GET {} > BAD/NAME", url("/a")).into_bytes(),
+        format!("GET {} > 1234567890123", url("/a")).into_bytes(),
+        format!("GET {} > ..", url("/a")).into_bytes(),
+    ];
+    let mut high = format!("GET {}", url("/")).into_bytes();
+    high.push(0x80);
+    rows.push(high);
+    for command in rows {
+        let mut r = rig();
+        assert_eq!(r.start(&command), E_ARGS, "{:?}", String::from_utf8_lossy(&command));
+        assert_eq!(r.listing(), Vec::<String>::new());
+    }
+    let mut r = rig();
+    assert_eq!(r.start(format!("get {}", url("/hello")).as_bytes()), E_UNKNOWN);
+    let mut long = b"GET ".to_vec();
+    long.extend([b'a'; 125]);
+    assert_eq!(r.start(&long), E_OVERFLOW);
 }

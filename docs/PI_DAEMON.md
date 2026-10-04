@@ -4,7 +4,7 @@ Normative: the fourth normative spec, with `ARCHITECTURE.md`, `DEVICE_SPECS.md` 
 
 **Scope (one fact, one home):**
 - `ARCHITECTURE.md` 6.4 owns the circuit, the 20-GPIO pin map, the IN/OUT handshake and the power and boot rules. `ARCHITECTURE.md` 6.6 owns RESET. `ARCHITECTURE.md` 7.3 owns the port-trace line format and 7.4 the trace diff recipe. This file says how the daemon meets them and cites them; it does not restate them.
-- `DEVICE_SPECS.md` owns every port's behavior, rule 2.8 (RESET), rule 2.9 (service restart), section 3 (the READY contract and the Pi obligations), section 4 (console) and section 8 (mailbox, TIME clock).
+- `DEVICE_SPECS.md` owns every port's behavior, rule 2.8 (RESET), rule 2.9 (service restart), section 3 (the READY contract and the Pi obligations), section 4 (console) and section 8 (mailbox, TIME clock, `GET`).
 - `HARDWARE_BUILD.md` owns the bring-up steps and the platform decisions (PI-PLATFORM, CONSOLE-TRANSPORT, CONSOLE-OUTPUT, RESET-TIMING, RESET-SOURCE, DEV-RESET, TRACE-FORMAT). Its section 5 keeps the decisions and points here for the service model.
 
 **Conventions:** "MUST" binds the daemon. **[bench]** marks something only a measurement on the built board can close; section 14 is the one list of them. BCM numbers are GPIO numbers as in `ARCHITECTURE.md` 6.4. Hex is uppercase. A bare section number ("5.2") is a section of this file; every other reference names its document ("`DEVICE_SPECS.md` 3.3", meaning section 3 item 3).
@@ -16,14 +16,18 @@ The rule behind every section: **the daemon is the emulator's port map behind GP
 ## 1. Shape
 
 - One process, **one thread**. The thread owns the IoBus, busy-polls GPLEV0, serves each request inline, and in the gaps runs the console's TCP socket and the trace file. The IoBus and devices stay `Rc<RefCell<..>>` and are never shared across threads (devices are not `Send`: COLLABORATION_LOG Key Decisions, 2026-10-03, Pi Daemon). Under `--sim` (16) a second thread plays the 8080 on the simulated board; this thread does not change.
-- No interrupts, no async runtime, no worker threads. v1 has no mailbox worker: `TIME`, `ASM` and `DIS` complete within the execute access, inline on this thread (`DEVICE_SPECS.md` 3.3, 8). Mailbox commands that do not complete within the execute access run on other cores; Phase 8 designs that worker (`TODO.md`, Someday).
+- No interrupts, no async runtime, no worker threads. `TIME`, `ASM` and `DIS` complete within the execute access, inline on this thread (`DEVICE_SPECS.md` 3.3, 8). A background mailbox command (`GET`) runs as a **child process** (`curl`) that the mailbox device spawns. This thread only spawns it, reads its pipe non-blocking, waits for its exit non-blocking and kills it (`DEVICE_SPECS.md` 8, Background commands). The IoBus and the devices never leave this thread.
+- **The worker's cores and lifetime.** On Linux the device spawns the worker with a `pre_exec` (`libc`) that does two things:
+  - **Affinity.** A child inherits the affinity of the thread that forks it, which is core 3 under the unit (11), and with `isolcpus=3` the kernel never moves it off. The device reads this thread's mask (`sched_getaffinity`) before the fork, and the `pre_exec` sets the worker's affinity to the online CPUs not in it (`sched_setaffinity`). If that set is empty (an unpinned process, as under `--sim` or in tests), the affinity is left alone.
+  - **Lifetime.** `prctl(PR_SET_PDEATHSIG, SIGKILL)`: the worker dies with the thread that spawned it, which is this thread, the process's main thread. That covers a crash and a hand-run `--sim`, where systemd's cleanup (11) does not apply.
+  On macOS (the emulator) neither applies. A worker orphaned by a killed emulator ends by itself: the stream form at its next write (the pipe is gone) or by the stall limit, the file form when its download ends; its temporary file is removed by the next `GET` to that file.
 - The daemon serves every port 00-6F (`ARCHITECTURE.md` 6.3). It never sees 70-FF.
 
 ---
 
 ## 2. Crate Layout and Build
 
-One crate, a second binary (`HARDWARE_BUILD.md` 5, Code). No new dependencies: `libc` is already a direct dependency.
+One crate, a second binary (`HARDWARE_BUILD.md` 5, Code). No new crate dependencies: `libc` is already a direct dependency. One runtime dependency: `/usr/bin/curl` 8.4.0 or later, the `GET` worker (11).
 
 | Path | Contents | Compiled on |
 |------|----------|-------------|
@@ -333,6 +337,7 @@ Command-line flags only. No config file.
 - **Scheduling:** normal priority (`SCHED_OTHER`), no `SCHED_FIFO`. A busy-looping real-time task is throttled by the kernel's RT limit (50 ms of every second by default) and starves the per-CPU kernel threads; isolation, not priority, keeps the core to itself.
 - **User:** a system user `pi8080` in group `gpio`. Raspberry Pi OS gives `/dev/gpiomem` and `/dev/gpiochip*` to `root:gpio` mode 0660 through udev, so the daemon needs no root and no capabilities.
 - **Time zone:** set at install (8).
+- **curl:** `GET`'s worker (`DEVICE_SPECS.md` 8, GET client): `/usr/bin/curl` 8.4.0 or later, which is the Trixie-based Raspberry Pi OS (Bookworm's 7.88.1 does not stop an oversized chunked body). Install it if the image lacks it: `sudo apt install curl`. The unit's default `KillMode=control-group` stops a running worker with the daemon, on stop, restart and crash alike.
 - **Unit** `/etc/systemd/system/pi8080d.service` (the repo copy is `scripts/pi8080d.service`):
 
 ```ini
@@ -371,6 +376,10 @@ This is the home of the service-time estimates. All are estimates until measured
 | REQ rising to ACK rising, `IN/OUT 0B` (one `pread`/`pwrite`-sized syscall pair) | a few microseconds more |
 | `reset_edge()` syscall | at most one access per millisecond pays it (5.1) |
 | fsync, mount | bounded, may be seconds (`DEVICE_SPECS.md` 3.3) |
+| `GET` execute: spawning `curl` (fork, `pre_exec`, exec; `pre_exec` rules out `posix_spawn`) | est. 1-5 ms **[bench]** |
+| `IN 12` while a `GET` runs: one non-blocking `read` (at most 4096 bytes) or `waitpid` | est. a few us more than a register access **[bench]** |
+| Abort of a running `GET` (execute, clear, RESET): `kill` and reap | est. under 1 ms |
+| The `IN 12` that ends a `GET > FILE`: fsync of up to 16 MiB, rename, directory fsync | bounded, may be seconds, as fsync |
 | Blanking after ACK | at least 500 ns (not in the REQ-to-ACK figure) |
 | Console pass | at most one per millisecond, est. 5-20 us |
 | CPU | one isolated core at 100% |
@@ -485,6 +494,10 @@ The one list. Each closes on the built board, at the bring-up step given (`HARDW
 | Every transcript over TCP; HEX paste loses nothing; whole-command overhead (12.2 method 2) | 6 |
 | `T` right after boot with the network down prints `Service error`; after timesyncd syncs it prints the local time | 6 |
 | Storage conformance under `stress-ng`; RESET mid-fsync reboots to the banner, storage unmounted, no hang | 7 |
+| `/usr/bin/curl --version` is 8.4.0 or later; `N https://example.com` prints the page; `N https://... > F` and `X F`, `L` load it; with the network down, `N` prints `Service error` within about 10 s | 6 |
+| The service time of a `GET` execute and of a BUSY `IN 12` against 12.1 (12.2 method 1) | 6 |
+| During a long `GET > FILE` the worker runs on cores 0-2 (`ps -o psr= -C curl`) and the 12.2 method 1 service times do not move | 6 |
+| `systemctl restart pi8080d` during a `GET`, and `kill -9` of a hand-run `--sim` during a `GET`, leave no `curl` behind (`pgrep curl`) | 6 |
 | Tick jitter on the isolated core; `nohz_full` support; no thermal throttling over an 8080EXM run (about 3.2 h) | 5, 8 |
 
 ---
@@ -498,7 +511,7 @@ The one list. Each closes on the built board, at the bring-up step given (`HARDW
 - A measurement mode (`--measure`): the scope and the TCP client give the step 5 numbers (12.2). Add a tool only if the bench shows one is needed.
 - RESET under `--sim` (16.3): restarting the daemon is the power cycle.
 - A throttled or cycle-timed `--sim` 8080. The ROM is timing-independent (`ARCHITECTURE.md` 3.2 requirement 6).
-- A mailbox worker thread (Phase 8).
+- A URL allow-list or deny-list for `GET` (`DEVICE_SPECS.md` 8, GET, Reach).
 - Statistics, a status port, a web page. The trace and the logs are the instruments.
 
 ---

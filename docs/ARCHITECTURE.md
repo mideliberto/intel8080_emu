@@ -358,7 +358,7 @@ The Pi's GPIO runs at 3.3 V and is not 5 V tolerant. Every 5 V signal reaches it
 - on startup, the service sets D0-D7 to input and drives ACK and LATCH low before anything else;
 - the Pi service checks the REQ level when it starts and serves any request already pending. It MUST NOT depend on seeing a REQ edge.
 
-**One codebase.** The emulator and the Pi daemon build the same IoBus with the same device mapping for 00-6F (one function). Each Pi-window access in the emulator, and each serviced REQ on the Pi, is exactly one IoBus read or write. Devices do only bounded local work in read and write (DEVICE_SPECS 3.3). Host I/O goes through Console push_input/take_output. RESET rebuilds the IoBus, so post-reset state equals power-on state by construction. The Pi service is specified in `PI_DAEMON.md`: one thread busy-polls the mmapped GPIO block on an isolated core and calls the IoBus inline. Mailbox commands that do not complete within the execute access run on other cores (DEVICE_SPECS 3.3). The target Pi uses the BCM2711 register model (Pi 4B for v1, decision PI-PLATFORM).
+**One codebase.** The emulator and the Pi daemon build the same IoBus with the same device mapping for 00-6F (one function). Each Pi-window access in the emulator, and each serviced REQ on the Pi, is exactly one IoBus read or write. Devices do only bounded local work in read and write (DEVICE_SPECS 3.3). Host I/O goes through Console push_input/take_output. RESET rebuilds the IoBus, so post-reset state equals power-on state by construction. The Pi service is specified in `PI_DAEMON.md`: one thread busy-polls the mmapped GPIO block on an isolated core and calls the IoBus inline. Mailbox commands that do not complete within the execute access run in a worker process on other cores (DEVICE_SPECS 8, Background commands; PI_DAEMON 1). The target Pi uses the BCM2711 register model (Pi 4B for v1, decision PI-PLATFORM).
 
 ### 6.5 Overlay Glue (0xFE, 0xFF)
 
@@ -683,6 +683,7 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 
 - **Phase 6 (done 2026-10-03):** Service Mailbox device (ports 10-13), mailbox `TIME`, and the `T` command. Protocol: `DEVICE_SPECS.md` (Service Mailbox). Command: `MONITOR_SPEC.md`. No memory-map or circuit change.
 - **Phase 7 (done 2026-10-03):** mailbox `ASM` and `DIS`, and the `A` and `U` commands (`DEVICE_SPECS.md` 8, `MONITOR_SPEC.md` 6.16-6.17). No memory-map or circuit change.
-- **Phases 8-9:** more mailbox commands (`GET`, `ASK`). No architecture change.
+- **Phase 8 (done 2026-10-03):** mailbox `GET` and the `N` command (`DEVICE_SPECS.md` 8, `MONITOR_SPEC.md` 6.18). The first background command, its worker a `curl` process. No memory-map or circuit change.
+- **Phase 9:** mailbox `ASK`. No architecture change.
 - **Phase 10:** what is left after the debugger (7.4): the monitor's `R` command, which needs the `G` return contract to capture registers.
 - **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6); a monitor routine that reprograms the ROM through JP-WE (6.10 rules), with its emulator model.

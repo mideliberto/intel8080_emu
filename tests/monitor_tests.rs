@@ -35,7 +35,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use intel8080_emu::cpu::Transfer;
 use intel8080_emu::debugger::Debugger;
@@ -47,6 +47,9 @@ use intel8080_emu::pi;
 use intel8080_emu::pi::sim::{Bridge, Knobs, SimBoard};
 use intel8080_emu::Intel8080;
 
+mod support;
+use support::http;
+
 /// HLT. A NOP-like byte (00, or A5 = ANA L) would slide execution into F000 and
 /// boot the ROM even with the overlay missing. RST 0 would jump back to 0000.
 /// HLT stops the CPU at the first junk byte it executes, and a halt fails the step.
@@ -55,6 +58,9 @@ const JUNK: u8 = 0x76;
 const JUNK_SP: u16 = 0x0000;
 /// Cycles per step. `C 0000 FFFF` is the slowest command and needs about 10M.
 const BUDGET: u64 = 30_000_000;
+/// A step of an N server row (MONITOR_SPEC 6.18.1) waits on the network, not on the
+/// 8080, so it is bounded by wall-clock time instead of BUDGET.
+const NET_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Where the console is: the Console itself, or the daemon's TCP client.
 enum Side {
@@ -68,6 +74,8 @@ struct Mon {
     dir: tempfile::TempDir,
     /// Every IN and OUT since power-on, in order.
     ports: Vec<Transfer>,
+    /// Steps end at NET_DEADLINE instead of BUDGET (N server rows).
+    net: bool,
 }
 
 /// Power on with junk RAM and the port map main.rs uses (build_bus); returns the
@@ -91,7 +99,7 @@ fn start(bus: IoBus, side: Side, dir: tempfile::TempDir, overlay: bool) -> (Mon,
     if !overlay {
         cpu.rom_overlay_enabled = false;
     }
-    let mut m = Mon { cpu, side, dir, ports: Vec::new() };
+    let mut m = Mon { cpu, side, dir, ports: Vec::new(), net: false };
     let banner = m.step(b"");
     (m, banner)
 }
@@ -172,6 +180,7 @@ impl Mon {
             Side::Daemon(client) => client.write_all(input).unwrap(),
         }
         let start = self.cpu.cycles;
+        let started = Instant::now();
         // Since the step began: IN 01 count, OUT 00 bytes.
         let (mut read, mut out) = (0, Vec::new());
         let mut quiet_since = None;
@@ -179,9 +188,11 @@ impl Mon {
             if self.cpu.halted {
                 return Err(format!("HLT at PC={:04X} after {:?}", self.cpu.pc, show(input)));
             }
-            if self.cpu.cycles - start > BUDGET {
-                return Err(format!("no prompt within {} cycles after {:?}, PC={:04X}, output {:?}",
-                    BUDGET, show(input), self.cpu.pc, show(&out)));
+            let over = if self.net { started.elapsed() > NET_DEADLINE } else { self.cpu.cycles - start > BUDGET };
+            if over {
+                let budget = if self.net { format!("{:?}", NET_DEADLINE) } else { format!("{} cycles", BUDGET) };
+                return Err(format!("no prompt within {} after {:?}, PC={:04X}, output {:?}",
+                    budget, show(input), self.cpu.pc, show(&out)));
             }
             self.cpu.execute_one();
             for &t in self.cpu.transfers() {
@@ -827,7 +838,9 @@ fn t_runs_the_reference_client() {
     // 6.15 step 1: "Runs the mailbox command TIME through the mailbox client (section 9;
     // DEVICE_SPECS.md, Service Mailbox, Reference client): clear (OUT 11h <- 02h), send T I
     // M E to OUT 10h, execute (OUT 11h <- 01h), then poll IN 12h."
-    // Step 2: "Each response byte read from IN 13h is printed to the console as it arrives."
+    // Step 2: "Each response byte read from IN 13h is printed to the console as it arrives,
+    // except that an LF (0Ah) prints as <CR><LF>. TIME's response has no LF, so T's output
+    // does not change."
     // Step 3: "On status 03h (DONE), prints <CR><LF>."
     // "T sends exactly TIME." "T uses ports 10h-13h."
     // The clear comes first (DEVICE_SPECS 8, resync rule), so a half-sent command left in
@@ -914,7 +927,7 @@ fn t_prints_service_error() {
     // 6.15 step 4: "On status 00h after execute (Pi service restarted) or 80h-FFh, prints
     // Service error then <CR><LF>. Any response bytes already printed stay on the same
     // line, with no <CR><LF> before the message: an error after 2026- prints 2026-Service error."
-    // Messages (5): "Service error | T, U: mailbox status 00 after execute, or 80-FF".
+    // Messages (5): "Service error | T, U, N: mailbox status 00 after execute, or 80-FF".
     for status in [0x00, 0x80, 0x81, 0x82, 0x83, 0x84, 0xC0, 0xFF] {
         assert_eq!(scripted(&[status], b"").run("T"), "Service error\\r\\n", "status {:02X}", status);
     }
@@ -942,10 +955,98 @@ fn t_with_the_pi_clock_not_set_prints_service_error() {
     // DEVICE_SPECS 8, TIME: "If the clock is not set, the result is 83." 6.15 step 4:
     // 80h-FFh prints Service error.
     let mut m = boot();
-    let mb = Rc::new(RefCell::new(Mailbox::new(|| None)));
+    let mb = Rc::new(RefCell::new(Mailbox::new(|| None, m.dir.path().to_path_buf())));
     m.map_mailbox(mb);
     assert_eq!(m.run("T"), "Service error\\r\\n");
     assert_eq!(m.run("I 12"), "83\\r\\n");
+}
+
+// ---------- N (MONITOR_SPEC 6.18, 6.18.1) ----------
+//
+// Server rows use the real Mailbox from build_bus and the test HTTP server H
+// (tests/support/http.rs), its address typed into the line, on a wall-clock deadline.
+// The /hello body is `Hello` CR LF (the DEVICE_SPECS 8 vectors), so N prints `Hello`, the
+// body's CR, the body's LF as CR LF (step 2), then CR LF on DONE (step 3).
+
+/// Boot for server rows: steps on NET_DEADLINE.
+fn net() -> Mon {
+    let mut m = boot();
+    m.net = true;
+    m
+}
+
+const HELLO: &str = "Hello\\r\\r\\n\\r\\n";
+
+#[test]
+fn n_runs_the_mailbox_client() {
+    // 6.18.1 ports row: "OUT 11 02; OUT 10 GET then  http://H/hello (the space after N
+    // included); OUT 11 01; then IN 12 / IN 13 pairs reading Hello, an IN 12 that may
+    // read 01 before any of them, and a final IN 12 03". Step 1: "N parses nothing".
+    use Transfer::{In, Out};
+    let h = http::start();
+    let mut m = net();
+    let n = m.ports.len();
+    assert_eq!(m.run(&format!("N {}", h.url("/hello"))), HELLO);
+    let seen: Vec<Transfer> = m.mailbox_ports(n).into_iter().filter(|&t| t != In(0x12, 0x01)).collect();
+    let mut want = vec![Out(0x11, 0x02)];
+    want.extend(format!("GET  {}", h.url("/hello")).bytes().map(|b| Out(0x10, b)));
+    want.push(Out(0x11, 0x01));
+    for &b in b"Hello\r\n" {
+        want.extend([In(0x12, 0x02), In(0x13, b)]);
+    }
+    want.push(In(0x12, 0x03));
+    assert_eq!(seen, want);
+}
+
+#[test]
+fn n_prints_the_body() {
+    // 6.18.1 server rows. Step 2: "an LF prints as <CR><LF>, every other byte unchanged."
+    // "The space after N is optional (section 3). n works."
+    let h = http::start();
+    let mut m = net();
+    assert_eq!(m.run(&format!("N {}", h.url("/lf"))), "a\\r\\nb\\r\\n\\r\\n");
+    assert_eq!(m.run(&format!("N{}", h.url("/hello"))), HELLO);
+    assert_eq!(m.run(&format!("n {}", h.url("/hello"))), HELLO);
+    assert_eq!(m.run(&format!("N {}", h.url("/404"))), "Service error\\r\\n");
+}
+
+#[test]
+fn n_to_a_file_then_x_and_l() {
+    // 6.18.1: "N http://H/hello > book.txt, then X BOOK.TXT, L 0 0200 7, D 0200 0206 |
+    // 000007, Mounted, Loaded, the dump shows Hello.. | BOOK.TXT = Hello 0D 0A".
+    let h = http::start();
+    let mut m = net();
+    assert_eq!(m.run(&format!("N {} > book.txt", h.url("/hello"))), "000007\\r\\n");
+    assert_eq!(std::fs::read(m.dir.path().join("BOOK.TXT")).unwrap(), b"Hello\r\n");
+    assert_eq!(m.run("X BOOK.TXT"), "Mounted\\r\\n");
+    assert_eq!(m.run("L 0 0200 7"), "Loaded\\r\\n");
+    let dump = m.run("D 0200 0206");
+    // D prints the whole 16-byte line; the bytes after 0206 are junk RAM.
+    assert!(dump.starts_with("0200: 48 65 6C 6C 6F 0D 0A") && dump.contains("  Hello.."), "{}", dump);
+}
+
+#[test]
+fn n_bad_arguments_print_service_error() {
+    // 6.18.1: "N, N ftp://x, N http://x > .. | Service error (each) | mailbox ports
+    // written; nothing in the storage directory". Step 4: "This covers 82".
+    let mut m = boot();
+    for line in ["N", "N ftp://x", "N http://x > .."] {
+        let n = m.ports.len();
+        assert_eq!(m.run(line), "Service error\\r\\n", "{}", line);
+        assert!(m.mailbox_ports(n).contains(&Transfer::Out(0x11, 0x01)), "{}: no execute", line);
+        assert_eq!(m.run("I 12"), "82\\r\\n", "{}", line);
+    }
+    assert_eq!(std::fs::read_dir(m.dir.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn n_handles_every_status_the_reference_client_does() {
+    // 6.18.1 scripted rows.
+    assert_eq!(scripted(&[0x01, 0x01, 0x02, 0x01, 0x02, 0x03], b"AB").run("N x"), "AB\\r\\n");
+    assert_eq!(scripted(&[0x01, 0x01, 0x83], b"").run("N x"), "Service error\\r\\n");
+    assert_eq!(scripted(&[0x00], b"").run("N x"), "Service error\\r\\n");
+    assert_eq!(scripted(&[0x02, 0x02, 0x01, 0x83], b"ab").run("N x"), "abService error\\r\\n");
+    assert_eq!(scripted(&[0x02, 0x03], b"\n").run("N x"), "\\r\\n\\r\\n");
 }
 
 // ---------- A and U (MONITOR_SPEC 6.16, 6.17, 6.17.1) ----------

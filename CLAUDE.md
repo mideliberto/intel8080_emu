@@ -5,10 +5,10 @@
 **Mantra:** "A fool admires complexity, genius admires simplicity."
 
 ## Status
-- Phase 7 complete (mailbox `ASM`/`DIS`, A and U, the shared ROM mailbox client). Pi daemon `pi8080d` (`docs/PI_DAEMON.md`) code done 2026-10-03: `src/pi/`, `src/pi_main.rs`; every transcript passes through it on the simulated board (`src/pi/sim.rs`); `--sim` runs the whole Pi stack on that board with the CPU model (PI_DAEMON 16); the static aarch64 musl binary links. Bench checks pending (PI_DAEMON 14).
+- Phase 8 complete (mailbox `GET`, the first background command, its worker a `/usr/bin/curl` child process; the N command). Phase 7 before it: mailbox `ASM`/`DIS`, A and U, the shared ROM mailbox client. Pi daemon `pi8080d` (`docs/PI_DAEMON.md`) code done 2026-10-03: `src/pi/`, `src/pi_main.rs`; every transcript passes through it on the simulated board (`src/pi/sim.rs`); `--sim` runs the whole Pi stack on that board with the CPU model (PI_DAEMON 16); the static aarch64 musl binary links. Bench checks pending (PI_DAEMON 14).
 - RAM test build (ARCHITECTURE 2.1): `rom/monitor_ram.hex`, the monitor at D000, loaded through the resident HEX loader for testing ROM changes on the board. Board debug aids specified 2026-10-03: analyzer headers, status LEDs, JP-WE (ARCHITECTURE 6.10-6.12).
-- 300 tests passing (13 host + 130 CPU + 37 device + 34 mailbox + 44 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 4 `#[ignore]` CPU exercisers, all passing (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`)
-- Monitor ROM v0.6, 17 commands plus the `:` HEX loader, matches MONITOR_SPEC. 2893 of 4096 bytes used (`cd rom && make size`), ~1.2KB headroom
+- 321 tests passing (1 library + 13 host + 130 CPU + 37 device + 49 mailbox + 49 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 8 `#[ignore]`: 4 CPU exercisers (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`), the 3 GET time-limit tests (`cargo test --test mailbox_tests -- --ignored`, about 35 s) and `w_command_cycles`; all passing
+- Monitor ROM v0.7, 18 commands plus the `:` HEX loader, matches MONITOR_SPEC. 2960 of 4096 bytes used (`cd rom && make size`), ~1.1KB headroom
 - Spec: four normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC since 2026-10-02; PI_DAEMON since 2026-10-03). Open decisions: the choices flagged in the 2026-10-03 additions (`--sim`, RAM build, JP-WE, analyzer) and the halt bus float (`TODO.md`).
 - Live task list: `TODO.md`
 

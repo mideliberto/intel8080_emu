@@ -222,7 +222,7 @@ Decisions only. The service model (bus loop, RESET handling, console transport, 
 - **Bus service:** one thread busy-polls the mmapped GPIO block (`/dev/gpiomem`) on an isolated core and calls the IoBus inline. Cost: one core at 100%. `PI_DAEMON.md` 1, 4, 11; service-time estimates in 12.
 - **RESET:** kernel-latched edges from the GPIO character device (raw v2 ioctl, no crate). No rppal: it was archived 2025-07-01. `PI_DAEMON.md` 5.
 - **Console:** one TCP listener in the daemon; a new client replaces the old (CONSOLE-TRANSPORT). TCP backpressure is the out-of-band input flow control `DEVICE_SPECS.md` 4 requires. Address and access: `PI_DAEMON.md` 7, 10, 11. Use socat to bridge a serial port or USB gadget if wanted.
-- **Background work:** mailbox commands that do not complete within the execute access (`DEVICE_SPECS.md` 3.3, 8) run on the other cores, never under READY.
+- **Background work:** network work runs in a worker process on the other cores; the device starts, checks and finishes it under READY as bounded work (`DEVICE_SPECS.md` 3.3; `PI_DAEMON.md` 1).
 - **Code:** one crate, two binaries. The emulator and the daemon call the same port-mapping function to build the same IoBus. Build: `PI_DAEMON.md` 2.
 
 ---

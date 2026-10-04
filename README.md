@@ -14,15 +14,16 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Memory subsystem with ROM overlay | ✅ |
 | Console device | ✅ |
 | Storage device (24-bit, 16MB) | ✅ |
-| Monitor ROM v0.6 (17 commands + Intel HEX loader) | ✅ |
+| Monitor ROM v0.7 (18 commands + Intel HEX loader) | ✅ |
 | Host-side debugger (breakpoints, watchpoints, I/O breaks, port trace, trace ring, ROM symbols) | ✅ |
-| 300 tests (13 host + 130 CPU + 37 device + 34 mailbox + 44 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 4 exercisers (`#[ignore]`) | ✅ |
+| 321 tests (1 library + 13 host + 130 CPU + 37 device + 49 mailbox + 49 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 8 `#[ignore]` (4 exercisers, 3 GET time limits, 1 measurement) | ✅ |
 | Intel HEX loader (Phase 5) | ✅ |
 | Service Mailbox (ports 10-13) and `TIME` / T (Phase 6) | ✅ |
 | Mailbox `ASM`/`DIS`, A and U (Phase 7) | ✅ |
 | Pi daemon `pi8080d` ([PI_DAEMON](docs/PI_DAEMON.md)): every transcript passes through it on a simulated board; `--sim` runs the whole Pi stack with the CPU model before the board exists; static aarch64 binary links | ✅ Code; 🔲 bench |
 | RAM test build of the monitor (`rom/monitor_ram.hex`, `G D000`): ROM changes on the board without a burn ([ARCHITECTURE](docs/ARCHITECTURE.md) 2.1) | ✅ |
-| Mailbox: HTTP, Claude (Phases 8-9) | 🔲 Future |
+| Mailbox `GET` and N: HTTP and HTTPS via `curl` on the Pi (Phase 8) | ✅ |
+| Mailbox: Claude (Phase 9) | 🔲 Future |
 
 ## Monitor Commands
 
@@ -37,6 +38,7 @@ H num1 num2           - Hex math (sum, difference)
 I port                - Input from I/O port
 L stor mem [cnt]      - Load from storage to memory
 M src dst cnt         - Move memory block
+N url [> file]        - HTTP GET to the console, or to a storage file
 O port val            - Output to I/O port
 S start end bytes     - Search for pattern
 T                     - Show time (YYYY-MM-DD HH:MM:SS)
@@ -47,7 +49,7 @@ X [file | -]          - Mount/unmount storage
 ?                     - Help
 ```
 
-Coming: N (HTTP GET), Q (ask Claude), R (registers). Full contract for every command, argument and message: [docs/MONITOR_SPEC.md](docs/MONITOR_SPEC.md).
+Coming: Q (ask Claude), R (registers). Full contract for every command, argument and message: [docs/MONITOR_SPEC.md](docs/MONITOR_SPEC.md).
 
 ## Storage System
 
@@ -75,7 +77,12 @@ cargo test
 # CPU exercisers (8080EXM takes about 20 s)
 scripts/fetch_exercisers.sh
 cargo test --release --test exerciser -- --ignored --nocapture
+
+# Mailbox GET time limits (about 35 s)
+cargo test --test mailbox_tests -- --ignored
 ```
+
+Mailbox `GET` (the N command) runs `/usr/bin/curl` 8.4.0 or later; macOS ships it. Its tests use a local test server, never the internet.
 
 The Pi daemon `pi8080d` (Linux; with `--sim`, also macOS) cross-builds on the Mac as a static binary, with the linker Rust ships:
 
@@ -98,7 +105,7 @@ You'll see:
 8080 Emulator
 Built: 2026-10-02 19:20:00        <- emulator build time (build.rs)
 
-8080 Monitor v0.6
+8080 Monitor v0.7
 Built: 10/02/2026 19:13:00        <- ROM assembly time (asl DATE/TIME)
 Ready.
 > 

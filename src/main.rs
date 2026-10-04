@@ -153,6 +153,7 @@ fn main() {
         Exit::Quit => println!(),
         Exit::BadScript => {
             drop(dbg); // writes the pending port trace lines
+            drop(cpu); // the mailbox kills a running GET worker; storage flushes
             std::process::exit(2);
         }
     }

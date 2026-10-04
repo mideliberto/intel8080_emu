@@ -63,6 +63,20 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-03: Phase 8 Specified: GET, the Background Worker, N
+**Decision:** Mike accepted every Phase 8 recommendation, and the Phases 8-11 cross-check fixes that apply to Phase 8. Homes: DEVICE_SPECS 8 (Background commands, GET, vectors), MONITOR_SPEC 6.18 (N, 6.18.1 vectors), PI_DAEMON 1 and 11 (the worker process, its cores and lifetime), the `mailbox.rs` header (the curl argument list).
+- **Q-CLIENT:** the `GET` worker is a `/usr/bin/curl` (8.4.0+) child process, empty environment, that the mailbox device spawns, checks non-blocking at `IN 12` only and kills on abort. No thread, no channel, no crate, no proxy support. ureq + rustls declined: ring breaks the musl cross check on the Mac.
+- **Q-HUNG:** each connection 10 s, stall under 1 B/s over 30 s, 83. No keyboard abort; reset stays the only way out of a command. Merged with Phase 9's Q-ABORT (MB_GET is shared by T, A, U, N and Q): one answer, no abort.
+- **Q-LF:** T and N share a print loop that prints LF as CR LF. The device stays byte-exact.
+- **Q-FILE:** `GET url > FILE` writes `~FILE`, fsyncs, renames over `FILE`, fsyncs the directory; the response is the 6-digit length; at most FFFFFF bytes. The stream form is unbounded by design; the file form is how large bodies reach storage, which keeps the 2026-10-02 "large results land in storage files" decision.
+- **Q-STATUS:** final status 400+ is 83 with no body.
+- **Q-SCOPE:** any http/https URL.
+- **Q-N-82:** N prints `Service error` for every failure (with Phase 9's Q in view: they share `CT_END`).
+- **Cross-check fixes taken into Phase 8:** curl `-N` in the stream form (without it N printed nothing until about 4 KB or the end); the test HTTP server lives in `tests/support/http.rs`, shared by the GET, N and later ASK tests; `CMD_NET` carries the label `CN_SEND` (0 bytes) where Phase 9's Q enters; README's command block gains N in this phase.
+
+**Rationale:** The Pi already has an HTTP client that does TLS, redirects and timeouts. Wrapping it costs one `Command`; reimplementing it costs 43 crates and the cross build.
+**Mantra check:** declined: an HTTP crate, a worker thread and channel, a keyboard abort, a URL policy, ROM-side URL parsing, proxy support, a second size-limit path.
+
 ### 2026-10-03: Board Choices Signed Off; Bus Pull-Ups
 **Decision:** Mike signed off on every choice flagged in "`pi8080d --sim`, the RAM Test Build, Board Debug Aids", as built:
 - **RAM build:** at D000, guard top D000, user area 0100-CFFF under it; `IMG_GUARD` on F/M/L in the RAM build only (E and A unguarded); the ` RAM` banner suffix; `rom/monitor_ram.hex` committed beside `.bin`/`.sym`, named by the CLAUDE.md ROM rule; every transcript but `hex` and `search` runs on it.
@@ -531,41 +545,44 @@ Console I/O debugging session:
 
 **CPU Core:** All 256 opcodes (5 undocumented aliases decoded), flags match ARCHITECTURE 5.1-5.3 including AC, 8080A interrupt input (EI delay, HLT wake), reset() = RESET pin. All four exercisers pass, 8080EXM included
 
-**Monitor ROM v0.6:**
-- 17 commands: A, C, D, E, F, G, H, I, L, M, O, S, T, U, W, X, ?, to MONITOR_SPEC sections 1-6, 8, 9, 11 (strict arguments, WARM, G return, memmove, Storage error, Mount failed)
+**Monitor ROM v0.7:**
+- 18 commands: A, C, D, E, F, G, H, I, L, M, N, O, S, T, U, W, X, ?, to MONITOR_SPEC sections 1-6, 8, 9, 11 (strict arguments, WARM, G return, memmove, Storage error, Mount failed)
 - Intel HEX loader (Phase 5, MONITOR_SPEC 7): a `:` line is one record, validated in full (pass 1: steps 1-4) before the type, the guard and the write (pass 2)
 - T (Phase 6, MONITOR_SPEC 6.15): mailbox `TIME`, `Service error` on 00 after execute or 80-FF
-- A and U (Phase 7, MONITOR_SPEC 6.16-6.17): mailbox `ASM` and `DIS`; only `.` ends A. T, A and U share MB_SEND/MB_PUT/MB_GET, the DEVICE_SPECS 8 reference client
+- A and U (Phase 7, MONITOR_SPEC 6.16-6.17): mailbox `ASM` and `DIS`; only `.` ends A. T, A, U and N share MB_SEND/MB_PUT/MB_GET, the DEVICE_SPECS 8 reference client
+- N (Phase 8, MONITOR_SPEC 6.18): mailbox `GET` with the rest of the line verbatim; shares T's print loop, which prints LF as CR LF
 - ROM overlay boot mechanism; CONOUT is OUT 00 / RET, so the first Pi access after reset is the banner's OUT 00
-- 2893 of 4096 bytes used (1203 free; `make size`)
+- 2960 of 4096 bytes used (1136 free; `make size`)
 - RAM test build (ARCHITECTURE 2.1): `rom/monitor_ram.hex`, the same source at D000 (guard top D000, F/M/L refuse the image, ` RAM` banner), loaded through the resident HEX loader and run with `G D000`, in the harness and over TCP on `pi8080d --sim`. Reviewed and fixed 2026-10-03
 
 **Debugger (host-side, ARCHITECTURE 7.4):** Ctrl-E / `--debug` / `--script`, break, step, registers, memory, disassembly with ROM symbols (`rom/monitor.sym`), watchpoints, I/O breaks, port trace, 256-step trace ring
 
 **Devices:**
-- Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), Service Mailbox (0x10-0x13, `TIME`, `ASM`, `DIS`; the clock is a plain fn passed to `Mailbox::new`; `ASM`/`DIS` read the one opcode table in `src/disasm.rs`, which the debugger shares), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
+- Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), Service Mailbox (0x10-0x13, `TIME`, `ASM`, `DIS`, and `GET`, the background command whose worker is a `/usr/bin/curl` child process checked at `IN 12`; the clock is a plain fn passed to `Mailbox::new`; `ASM`/`DIS` read the one opcode table in `src/disasm.rs`, which the debugger shares), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
 **Pi daemon `pi8080d` (code, 2026-10-03; PI_DAEMON.md):** `src/pi/mod.rs` (the `Gpio` seam, `setup_pins`, `serve`: the bus loop, RESET handling, TCP console, trace), `src/pi/linux.rs` (`GpioMem`, the RESET line by raw v2 ioctl, `ntp_local_time`), `src/pi_main.rs`. Every transcript passes through it on the simulated board (`src/pi/sim.rs`). `--sim FILE` runs the same board with the CPU model, so the whole Pi stack runs before the board exists (PI_DAEMON 16). The static aarch64 musl binary cross-builds on the Mac with `rust-lld`. Reviewed and fixed 2026-10-03; the simulator gaps left are listed in `TODO.md`. Not yet run on a Pi (PI_DAEMON 14)
 
 **Testing (verified 2026-10-03):**
-- 13 host + 130 CPU + 37 device + 34 mailbox + 44 monitor + 18 Pi daemon + 16 debugger + 8 terminal = 300, all passing (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
+- 1 library + 13 host + 130 CPU + 37 device + 49 mailbox + 49 monitor + 18 Pi daemon + 16 debugger + 8 terminal = 321, all passing (the GET and N tests run curl against a local test server, never the internet) (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
+- 3 `#[ignore]` GET time-limit tests (connect 10 s, stall 30 s twice) pass: `cargo test --test mailbox_tests -- --ignored`
 
 ### In Progress
 
 - **Phase 6:** done 2026-10-03 (Service Mailbox, `TIME`, T, v0.5).
 - **Phase 7:** done 2026-10-03 (mailbox `ASM`/`DIS`, A, U, v0.6).
+- **Phase 8:** done 2026-10-03 (mailbox `GET`, N, v0.7). The by-hand Gutenberg fetch and the Pi bench rows remain (`TODO.md`).
 - **Pi daemon:** specified and built 2026-10-03 (`docs/PI_DAEMON.md`); the bench checks (PI_DAEMON 14) wait for the board.
 - **Review findings:** 2026-10-02 review found CPU flag bugs, ROM range and parse bugs, and vacuous tests. All fixed by 2026-10-03 (steps A-E); `TODO.md` keeps the repros.
 
 ### Open Decisions
 
-None open. The choices flagged while building `--sim`, the RAM test build and the board debug aids, and the halted 8080's floating buses (10 kohm pull-ups, ARCHITECTURE 6.13), closed 2026-10-03; see Key Decisions. The MONITOR_SPEC 6.17 U cost figure was corrected to the measurement 2026-10-03. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon and Phase 7 sets closed 2026-10-03 too. The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
+None open. The choices flagged while building `--sim`, the RAM test build and the board debug aids, and the halted 8080's floating buses (10 kohm pull-ups, ARCHITECTURE 6.13), closed 2026-10-03; see Key Decisions. The MONITOR_SPEC 6.17 U cost figure was corrected to the measurement 2026-10-03. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon, Phase 7 and Phase 8 sets closed 2026-10-03 too. Left to Mike: the CLAUDE.md Build line for curl (`TODO.md`). The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
 
 ### Blocked/Deferred
 
 - **R command:** Needs return mechanism (Phase 10). The debugger itself shipped 2026-10-03
-- **Pi services:** one Service Mailbox at 0x10-0x13. Phase 6 `TIME` and 7 `ASM`/`DIS` done; 8 `GET` (brings the background worker and BUSY), 9 `ASK`
+- **Pi services:** one Service Mailbox at 0x10-0x13. Phase 6 `TIME`, 7 `ASM`/`DIS` and 8 `GET` (the background worker and BUSY) done; 9 `ASK` next
 - **8253 timer / interrupts:** Someday
 
 ### Future Vision (Documented, Not Started)
@@ -576,6 +593,20 @@ None open. The choices flagged while building `--sim`, the RAM test build and th
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Phase 8 Review Fixes
+- `execute_kills_the_worker` used `command()`, which clears first, so it tested clear twice and execute never. It now sends TIME and executes with no clear; deleting the abort in `Mailbox::execute` fails it.
+- Stale `~FILE` row moved to `/304`: curl 8.7.1 creates `-o` for a 200 with an empty body, so `/empty` passed without the removal. Module header reworded (no file when there is no body).
+- New tests: `the_worker_gets_an_empty_environment` (the binary with proxy variables at a closed port, N still reaches H) and `the_last_pop_goes_busy_without_a_check` (pop exactly 4096 bytes, next IN 13 = 00). `curl_argument_list` compares element by element. Each new or changed test kills its hand mutant (execute abort, stale removal, `env_clear`, IN 13 check).
+- Disclosed two wording changes the build made silently: 6.18.1 row 1's IN 12 = 01 placement and PI_DAEMON 1's mask read before the fork (TODO Phase 8 item 6, roadmap).
+- Tests 319 -> 321. What bit us: a helper that does "the reference client's resync" also hides the one path a test is named for.
+
+### 2026-10-03: Phase 8 - Internet Services
+- Specs integrated: DEVICE_SPECS 8 gains Background commands, GET and its vectors; MONITOR_SPEC 6.18/6.18.1 (N); PI_DAEMON 1/2/11/12.1/14/15 (the curl worker, its cores and lifetime); ARCHITECTURE 6.4/8, HARDWARE_BUILD 5; Key Decision "Phase 8 Specified" with the cross-check fixes (curl `-N`, `tests/support/http.rs`, `CN_SEND`, README).
+- Built: `storage::file_name` (the mount name rule, now shared), `GET` in `mailbox.rs` with a `/usr/bin/curl` worker (`env_clear`, non-blocking pipe, checked only at `IN 12`, `~FILE` -> fsync -> rename -> dir fsync, abort on execute/clear/Drop, Linux `pre_exec`), `drop(cpu)` before the bad-script exit, ROM v0.7 with N at +67 bytes (2960), exactly the sketch.
+- Tests 300 -> 319 (+3 ignored): every GET vector against a local server, the three time limits measured (connect 10.0 s, stall 30 s), every 6.18.1 row. Release exercisers 4/4; clippy clean on the host and aarch64 musl.
+- Fixed in the spec: 6.18.1's first row said body `Hello`, but `/hello` is `Hello` CR LF everywhere else (the file row's `000007` needs it); the row now gives the printed bytes. 6.18's print speed measured: 155 cycles a byte (206 for an LF), not est. 175. Also changed to match the device: 6.18.1 row 1's IN 12 = 01 reads may come anywhere among the pairs (the last pop goes BUSY), and PI_DAEMON 1's affinity mask is read before the fork.
+- What bit us: the first abort tests cleared before curl had even connected, so "the server sees the close" never fired. H now reports the request too, and the tests wait for it before they abort.
 
 ### 2026-10-03: `--sim`, RAM Build and Board Aids Review Fixes
 - `sim_mode_plays_transcripts_over_tcp` gained a fourth run: paste `rom/monitor_ram.hex` over TCP, `G D000`, one guarded F, each step expected to print what it prints on the local path. On a closed console, a read error or a bad exit it kills the daemon and fails with the daemon's stderr, where a board violation's panic lands.

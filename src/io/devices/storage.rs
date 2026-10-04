@@ -11,6 +11,20 @@ use std::path::PathBuf;
 /// The address reaches 0xFFFFFF, so a file can hold 0x1000000 bytes.
 const MAX_SIZE: u64 = 0x100_0000;
 
+/// The mount name rule (DEVICE_SPECS 7, Mount steps 2-3): `a`-`z` fold to `A`-`Z`, then
+/// 1-12 characters of `A-Z 0-9 . - _`, not `.` or `..`. None is "invalid" (02). Mount and
+/// the mailbox `GET > FILE` (DEVICE_SPECS 8, GET) both use it.
+pub fn file_name(name: &[u8]) -> Option<String> {
+    let name = name.to_ascii_uppercase();
+    let valid = !name.is_empty()
+        && name.len() <= 12
+        && name != b"."
+        && name != b".."
+        && name.iter().all(|&c| c.is_ascii_uppercase() || c.is_ascii_digit() || b".-_".contains(&c));
+    // Valid names are ASCII, so from_utf8 can't fail.
+    valid.then(|| String::from_utf8(name).unwrap())
+}
+
 pub struct Storage {
     dir: PathBuf,
     file: Option<File>,
@@ -40,17 +54,10 @@ impl Storage {
 
     fn mount(&mut self) -> u8 {
         self.unmount();
-        let name = self.name.to_ascii_uppercase();
-        let valid = !name.is_empty()
-            && name.len() <= 12
-            && name != b"."
-            && name != b".."
-            && name.iter().all(|&c| c.is_ascii_uppercase() || c.is_ascii_digit() || b".-_".contains(&c));
-        if !valid {
+        let Some(name) = file_name(&self.name) else {
             return 0x02;
-        }
-        // Valid names are ASCII, so this can't fail.
-        let path = self.dir.join(std::str::from_utf8(&name).unwrap());
+        };
+        let path = self.dir.join(name);
         let Ok(file) = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path) else {
             return 0x01;
         };

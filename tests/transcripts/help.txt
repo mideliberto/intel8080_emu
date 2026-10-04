@@ -11,6 +11,7 @@ Commands:
   I port           - Input from port
   L stor mem [cnt] - Load from storage
   M src dst cnt    - Move memory
+  N url [> file]   - HTTP GET
   O port value     - Output to port
   S start end pat  - Search memory
   T                - Show time
@@ -31,6 +32,7 @@ Commands:
   I port           - Input from port
   L stor mem [cnt] - Load from storage
   M src dst cnt    - Move memory
+  N url [> file]   - HTTP GET
   O port value     - Output to port
   S start end pat  - Search memory
   T                - Show time

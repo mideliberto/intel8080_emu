@@ -6,7 +6,7 @@ Normative. Every I/O port the 8080 can see, at register level. Where the emulato
 - This file covers the port map, what every register returns and does, and the READY contract as software sees it.
 - `ARCHITECTURE.md` covers port-range ownership, the memory map, reset and boot, CPU behavior (including interrupts), the circuits (WAIT flip-flop and handshake, Pi data path, overlay 74HCT74, decode, reset wiring, level translation, clock, power) and host-side emulator conveniences, including the host key map.
 - `MONITOR_SPEC.md` covers monitor commands, messages, line input and the HEX loader. This file names a ROM routine only where it is the reference client of a protocol.
-- `PI_DAEMON.md` covers the Pi software that serves 00-6F: the bus loop, RESET handling, the console transport, the TIME clock source, build and deployment. It meets the contracts in this file and does not restate them.
+- `PI_DAEMON.md` covers the Pi software that serves 00-6F: the bus loop, RESET handling, the console transport, the TIME clock source, the `GET` worker's cores and lifetime, build and deployment. It meets the contracts in this file and does not restate them.
 
 **Conventions:** Port numbers and values are hex. "R" means `IN` and "W" means `OUT`. "Ignored" means no state changes. All decisions in this file were made by Mike (COLLABORATION_LOG Key Decisions) and are binding.
 
@@ -47,19 +47,20 @@ Normative. Every I/O port the 8080 can see, at register level. Where the emulato
 2. **Writing a read-only register** (`OUT` 01, 02, 0F, 12, 13) is ignored.
 3. **Unassigned Pi-window ports** (03-07, 14-6F): `IN` returns FF and `OUT` is ignored. The Pi still completes the READY handshake, so the access never hangs.
 4. **Unmapped ports outside the Pi window** (70-FD, `IN` FE, `OUT` FF): `OUT` is ignored. The value `IN` returns is undefined on hardware, because nothing drives the bus. Software MUST NOT depend on it. The emulator returns FF (`src/io/bus.rs:26`). (`IN` FF is the system status port, section 5.) Informative, not part of this contract: on the board the system data bus pull-ups (`ARCHITECTURE.md` 6.13) make such an `IN` read FF in practice.
-5. **Reads with side effects:** only `IN 01` (pops the console FIFO), `IN 0B` (advances the storage address) and `IN 13` in the AVAIL state (pops the mailbox response). Every other `IN` has no side effect and can be repeated. The monitor's `I` command triggers the same side effects.
+5. **Reads with side effects:** only `IN 01` (pops the console FIFO), `IN 0B` (advances the storage address) and `IN 13` in the AVAIL state (pops the mailbox response). Every other `IN` has no side effect and can be repeated. One exception: while a background mailbox request runs, `IN 12` is where the device checks on it (section 8, Background commands). A status read never pops a byte, but it can see the request end, and for `GET > FILE` that puts the file in place. The monitor's `I` command triggers the same side effects.
 6. **Undefined values** written to a command or control register (0C, 0E, 11) change nothing, with one exception: every write to 0E, whatever the value, clears the filename buffer (section 7).
 7. **No device raises an interrupt.** Hardware v1 has no interrupt source. The interrupt input and its future tick source are in `ARCHITECTURE.md` (Interrupts).
 8. **RESET** (power-on or the reset button) returns the whole machine to its power-on state, RAM excepted:
    - It clears the WAIT flip-flop, so READY is high and no Pi request is pending, and it sets the overlay flip-flop (section 5). Circuit: `ARCHITECTURE.md` (Reset).
    - The Pi sees RESET on an edge-latched GPIO input. It drops any request in flight without raising ACK, and returns devices to their power-on state when RESET is released. The next request it serves is a new access.
-   - Every Pi device returns to its power-on state: storage unmounted (flushed durably and closed, address 000000), filename buffer empty, mount status 01, mailbox IDLE with the command buffer and response cleared and any running request aborted, console input FIFO empty, console output buffer empty.
+   - Every Pi device returns to its power-on state: storage unmounted (flushed durably and closed, address 000000), filename buffer empty, mount status 01, mailbox IDLE with the command buffer and response cleared and any running request aborted (its worker killed; a `GET > FILE` that has not ended leaves `FILE` untouched, section 8, GET), console input FIFO empty, console output buffer empty.
    - An access cut off by RESET may or may not have taken effect. Its device state is then reset as above.
    - No ROM code is involved.
    - **Emulator:** RESET happens only at process start, when `build_bus` (`src/io/mod.rs`) creates every device in its power-on state. Any future host-side reset (Phase 10) MUST also return every device to its power-on state, by calling `build_bus` again.
 9. **Pi service restart:** if the Pi's device service restarts (crash, update or reboot) while the 8080 runs, every Pi device returns to its power-on state and the 8080 is not notified. Clients detect this by checking status:
    - storage: status bit 0 drops to 0 (section 6);
    - mailbox: status reads 00 after an execute (section 8).
+   - A background request dies with the service, its worker included (`PI_DAEMON.md` 11). A `GET > FILE` that had not ended leaves `FILE` untouched. Its temporary file can remain, and the 8080 cannot see it (section 8, GET).
 
 ---
 
@@ -76,7 +77,7 @@ The circuit is in `ARCHITECTURE.md` (Pi Window and READY). This section is the c
    - After raising ACK, read it back high and wait at least 500 ns before treating REQ as a new access. Never wait for REQ to go low.
    - Separate dependent GPIO steps (drive data, LATCH, ACK) with a read-back of the GPIO level register.
    - On RESET, drop any request in flight without raising ACK, and never ACK across a RESET (rule 2.8). The check before each ACK is in `ARCHITECTURE.md` 6.6 (Reset). It relies on the reset source holding RESET for at least 150 ms (a DS1813, decision RESET-SOURCE), which lets the latched-edge part of the check run at most once per millisecond.
-   - Do only bounded local work under READY: console byte transfer, storage address, data and control operations (including fsync and filling a past-EOF gap), mount commands (open, create, fsync or close a local file), and the mailbox commands that complete within the execute access (`TIME`, `ASM`, `DIS`; section 8). "Bounded" means the operation always finishes. It does not mean it is fast: an fsync, or a write at FFFFFF in an empty file, can hold READY for seconds.
+   - Do only bounded local work under READY: console byte transfer, storage address, data and control operations (including fsync and filling a past-EOF gap), mount commands (open, create, fsync or close a local file), the mailbox commands that complete within the execute access (`TIME`, `ASM`, `DIS`; section 8), and for a background mailbox command, starting, checking and stopping its worker: spawning the process, a non-blocking pipe read, a non-blocking wait for its exit, killing and reaping it, and the file fsync, rename and directory fsync that finish a `GET > FILE`. "Bounded" means the operation always finishes. It does not mean it is fast: an fsync, or a write at FFFFFF in an empty file, can hold READY for seconds.
    - Never wait on the network, an external service or user input while holding READY. Every other mailbox command is unbounded work: it runs in the background and reports through mailbox status (section 8).
 4. **No timeout.** The 8080 waits as long as the access is pending. A dead Pi stalls the 8080 until RESET. Until the Pi's device service is running, the first Pi-window access stalls and then completes once the Pi services it. At boot that access is the banner's first `OUT 00`. The stalled access MUST NOT complete with a floating bus (`ARCHITECTURE.md`, Pi Window and READY, rule 3 and Power and boot independence). No ROM code handles the stall.
 5. **Timing:** on hardware every Pi-window access costs 10 T-states plus at least one wait state. T3 starts 0.4-0.9 us after the Pi's ACK, and the Pi's service time comes on top (on the order of microseconds on a busy-polling Pi 4, est). Software MUST NOT depend on how long an `IN` or `OUT` takes. The emulator models no wait states: `IN` and `OUT` take 10 T-states, and device effects are applied within the instruction.
@@ -310,7 +311,7 @@ The monitor's `X name` follows this sequence and prints `Invalid filename` for 0
 
 ## 8. Service Mailbox (Ports 10-13)
 
-One device carries every Pi service. The 8080 writes a text command and reads back a byte stream. The Pi handles TLS, DNS, JSON, NTP and the API key. The device logic is Rust behind `IoDevice`: the emulator bus calls it, and on the Pi a GPIO front end calls the same code. Phase 6 brought `TIME`, Phase 7 `ASM` and `DIS`.
+One device carries every Pi service. The 8080 writes a text command and reads back a byte stream. The Pi handles TLS, DNS, JSON, NTP and the API key. The device logic is Rust behind `IoDevice`: the emulator bus calls it, and on the Pi a GPIO front end calls the same code. Phase 6 brought `TIME`, Phase 7 `ASM` and `DIS`, and Phase 8 `GET`, the first background command.
 
 ### Registers
 
@@ -343,12 +344,12 @@ One device carries every Pi service. The 8080 writes a text command and reads ba
 | The request fails (including mid-response) | BUSY, AVAIL | ERROR. Unread response bytes are discarded |
 | `OUT 11` = 02 (clear) | any | IDLE. Abort any running request, discard the response and empty the command buffer |
 
-- BUSY can follow AVAIL in the middle of a response, for streamed results (Phase 8 and later). One polling loop handles every case.
+- BUSY can follow AVAIL in the middle of a response, for streamed results (`GET`). One polling loop handles every case.
 - DONE and ERROR persist until the next execute or clear.
 - A response may be empty.
 - Response bytes can be any value 00-FF. The end is marked by status, not by a terminator.
 - **Abort** completes within the `OUT 11` access and never waits on the network. The device marks the old request cancelled, and nothing a cancelled request produces is ever delivered.
-- **Commands that complete within the execute access:** `TIME` (Phase 6), `ASM` and `DIS` (Phase 7). Right after execute, `IN 12` reads 02 or an error code, or 00 after a Pi service restart (rule 2.9). It never reads 01. `TIME` can give 80-83; `ASM` and `DIS` can give 80-82 and never 83. The emulator needs no background worker until a command that takes time exists (Phase 8).
+- **Commands that complete within the execute access:** `TIME` (Phase 6), `ASM` and `DIS` (Phase 7). Right after execute, `IN 12` reads 02 or an error code, or 00 after a Pi service restart (rule 2.9). It never reads 01. `TIME` can give 80-83; `ASM` and `DIS` can give 80-82 and never 83. Every other command runs in the background (Background commands, below).
 
 ### Reading 13 in each state
 
@@ -367,10 +368,10 @@ One device carries every Pi service. The 8080 writes a text command and reads ba
 
 ### Command format
 
-- The **command word** is the bytes before the first 20h, or the whole buffer when it contains no 20h. It is matched exactly and case-sensitively against the uppercase names below. An empty word, a lowercase word or an unknown word gives 80. A placeholder word in the Commands table (`GET`, `ASK`) is unknown until its phase ships, so it gives 80, with or without arguments.
+- The **command word** is the bytes before the first 20h, or the whole buffer when it contains no 20h. It is matched exactly and case-sensitively against the uppercase names below. An empty word, a lowercase word or an unknown word gives 80. A placeholder word in the Commands table (`ASK`) is unknown until its phase ships, so it gives 80, with or without arguments.
 - The **argument string** is everything after the first 20h, passed verbatim and possibly empty. URLs are case-sensitive.
 - There is no terminator: execute ends the command.
-- Text responses use CR LF (0D 0A) between lines and after each line. The exceptions are `TIME` (no line ending), `ASM` (binary machine code) and the first byte of a `DIS` response (a binary length). Each is specified below.
+- Text responses use CR LF (0D 0A) between lines and after each line. The exceptions are `TIME` (no line ending), `ASM` (binary machine code), the first byte of a `DIS` response (a binary length), and `GET` (the stream form is the body's bytes unchanged; the file form is a length with no line ending). Each is specified below.
 
 ### Error codes
 
@@ -379,7 +380,7 @@ One device carries every Pi service. The 8080 writes a text command and reads ba
 | 80 | Unknown or empty command word |
 | 81 | Command buffer overflowed (more than 128 bytes) |
 | 82 | Bad or missing arguments for a known command |
-| 83 | Service failed (no network, API error, clock not set, host error) |
+| 83 | Service failed (no network, HTTP error status, time limit, API error, clock not set, host error) |
 | 84-FF | Reserved |
 
 **Precedence on execute:** 81 beats 80 and 82, which beat 83. An overflowed buffer gives 81 whatever it holds, because it is not parsed. A buffer that does not parse gives 80 or 82 without consulting the clock or any service. Only a valid command can give 83.
@@ -391,10 +392,10 @@ One device carries every Pi service. The 8080 writes a text command and reads ba
 | `TIME` | 6 | `TIME` only. Any other buffer whose command word is `TIME` (for example `TIME ` or `TIME UTC`) gives 82 | 19 bytes, `YYYY-MM-DD HH:MM:SS`: local time, 24-hour, every field zero-padded, with no line ending. Example: `2026-10-02 14:30:05`. A year below 1000 is zero-padded to four digits (`0999-01-02 03:04:05`). A year above 9999 gives 83. If the clock is not set, the result is 83. Clock rules: TIME clock, below |
 | `ASM <line>` | 7 | `ASM`, one 20h, then one instruction in the notation `DIS` prints. Grammar: ASM, below | The instruction's 1-3 bytes of machine code, binary, opcode first, then the operand (a word low byte first). No line ending |
 | `DIS AAAA B0 B1 B2` | 7 | `DIS`, one 20h, then exactly `AAAA B0 B1 B2`. Grammar: DIS, below | One length byte (binary 01-03), then the instruction line, then CR LF |
-| `GET <url> [> FILE]` | 8 | Placeholder. Gives 80 until Phase 8 ships it | Designed in Phase 8, including how it interacts with the mounted file |
+| `GET <url>` or `GET <url> > <FILE>` | 8 | `GET`, one 20h, then the arguments. Grammar: GET, below | `GET <url>`: the response body, bytes unchanged. `GET <url> > <FILE>`: the body goes to `FILE` in the storage directory, and the response is its length as 6 uppercase hex digits, with no line ending. Background command |
 | `ASK <prompt>` | 9 | Placeholder. Gives 80 until Phase 9 ships it | Designed in Phase 9 |
 
-Large results go to storage files, and the 8080 reads them through section 6. How long a request may run, and how a hung request ends, is designed in Phase 8 with `GET`. `TIME`, `ASM` and `DIS` cannot hang.
+Large results go to storage files, and the 8080 reads them through section 6 (`GET <url> > <FILE>`). `TIME`, `ASM` and `DIS` cannot hang. A background command ends by itself under its own time limits (GET, Time limits); a client can also abort it.
 
 ### TIME clock
 
@@ -499,9 +500,111 @@ Device-level tests MUST cover every row. Responses are shown as hex bytes; for D
 | `DIS 0100 3E 0D 00 ` (trailing space), `DIS 0100  3E 0D 00` (double space) | 82 | none |
 | `DIS 0100 3E 0D 0G`, `DIS 0100 +E 0D 00` | 82 | none |
 
+### Background commands
+
+A background command (`GET`) runs in a **worker**, a process on the Pi apart from the device service's bus thread. The device and its state stay on the bus thread (`PI_DAEMON.md` 1). The worker does the network I/O. The device starts it, checks on it and stops it, each as bounded local work (section 3.3).
+
+- **Execute** validates the request (80, 81, 82 at once, as for every command), then starts the worker and goes to BUSY. A worker that cannot be started gives 83 at once. Right after execute, `IN 12` reads 01, 81, 82 or 83, or 00 after a Pi service restart (rule 2.9).
+- **Progress is seen at `IN 12`.** The device checks the worker when the 8080 reads `IN 12` in BUSY, and at no other time. A check is one non-blocking read of the worker's output (at most 4096 bytes) or one non-blocking wait for its exit. BUSY becomes AVAIL, DONE or ERROR at the read that sees it. `IN 13` behaves as in every command: in BUSY it reads 00 with no side effect, and in AVAIL it pops a byte. When it pops the last byte read so far, the status goes back to BUSY without a check. A client that wants the result polls `IN 12` until DONE or ERROR, as MB_GET does.
+- **Flow control.** Streamed output waits in the worker's pipe (64 KiB on Linux) until the 8080 reads it. A client that stops reading stops the transfer; if the server gives up meanwhile, the request ends in 83.
+- **One request at a time.** Execute and clear abort a running request (Abort, above): the device kills the worker and reaps it within the `OUT 11` access, discards its output and removes its temporary file. Nothing the aborted request did becomes visible later.
+- **RESET and power-on** abort it the same way (rule 2.8). In the emulator and the daemon, dropping the device does it.
+
+### GET
+
+`GET <url>` fetches `<url>` and responds with the body. `GET <url> > <FILE>` writes the body to `FILE` instead.
+
+**Grammar.** The argument string is split into tokens at runs of 20h. Spaces before the first token and after the last are ignored.
+
+- One token: `<url>`, the stream form.
+- Three tokens, the second exactly `>`: `<url>` and `<FILE>`, the file form.
+- Anything else gives 82: no token (`GET`, `GET ` and `GET` followed by only spaces), two tokens (`GET url >FILE`), a second token other than `>`, four or more tokens.
+- `<url>` begins with `http://` or `https://` exactly (lowercase), has at least one byte after the `//`, and has every byte in 21h-7Eh. Anything else gives 82, including `HTTP://`, `ftp://`, a Tab, and bytes 80-FF. The device checks nothing else about the URL. A URL the HTTP client cannot use (an empty host, a bad port) fails with 83.
+- `<FILE>` is checked by section 7, Mount steps 2-3. A name that mount would answer with 02 gives 82.
+- The 128-byte buffer leaves 124 bytes for the arguments. A longer command gives 81.
+
+**Request.** One HTTP GET with no request body and no added headers. The device asks for no content encoding, so the body arrives as the server sends it. A server that compresses anyway delivers compressed bytes.
+
+- **Schemes:** `http` and `https`. HTTPS certificates are verified against the Pi's CA store, and a certificate that fails gives 83. Nothing can turn verification off.
+- **Redirects:** followed, at most 5, and only to `http` or `https` URLs. A sixth redirect, or a redirect to any other scheme, gives 83.
+- **Status:** the final response's status decides. 400 or above gives 83, and no byte of its body is delivered. Any other final status (2xx, or a 3xx that is not followed, such as 304) delivers its body, which may be empty.
+- **Body:** the bytes of the response body after transfer decoding (chunked), unchanged: no character-set conversion, no line-ending change, any byte 00-FF. The `Content-Type` header is ignored.
+
+**Stream form** (`GET <url>`). The response is the body. An empty body goes from BUSY straight to DONE. The stream has no size limit; a body too large for the console belongs in the file form. A failure after some bytes (a stall, a dropped connection) is ERROR 83 mid-response (Transitions), so a client that prints as it reads has printed part of the body.
+
+**File form** (`GET <url> > <FILE>`). Nothing is delivered while the request runs.
+
+1. At execute, the device removes any leftover temporary file for `FILE`, then starts the worker. The body is written to a temporary file in the storage directory, named `~` followed by `FILE` (`~BOOK.TXT`). `~` is not a name character, so no mount can reach it.
+2. A body longer than FFFFFF bytes fails with 83 as soon as the worker sees it, and the temporary file is removed. Every file a GET writes can therefore be mounted and addressed in full (section 6).
+3. When the worker has finished, at the `IN 12` that sees it: the device fsyncs the temporary file, renames it over `FILE` (created if it does not exist), and fsyncs the storage directory. `FILE` therefore holds either its old contents or exactly the new body, never a mix, and when DONE is reported the new `FILE` is durable, as after a storage flush (section 6). An empty body gives an empty `FILE`.
+4. The response is the body length as 6 uppercase hex digits, with no line ending (`0012AB`), then DONE.
+
+`FILE` changes only at the `IN 12` that ends the request. On any failure or abort before that, `FILE` is untouched and the temporary file is removed. A RESET or Pi service restart after that `IN 12`, while the length is being read, reports a failure (status 00), but `FILE` already holds the new body. A Pi service restart or a power loss during the request can leave a temporary file behind; the next `GET` to the same `FILE` removes it (step 1).
+
+- **A mounted `FILE`:** the mount keeps reading the file it opened, which is the old contents, until `FILE` is mounted again. Writes made through that mount after the rename are lost when it unmounts. To see the new body, mount `FILE` again (`X FILE`). The mailbox does not consult the storage device.
+- **A client that never polls** never sees `FILE` change.
+
+**Time limits** (the hung-request rule).
+
+- Connect: each connection (name lookup, TCP connect, TLS handshake) takes at most 10 s, or the request fails with 83. A redirect opens a new connection with its own 10 s.
+- Stall: from the first connect on, including the wait for the response headers, a request that moves less than 1 byte per second averaged over 30 s fails with 83. A server that accepts and never answers ends in 83 after about 30 s.
+- There is no limit on the total time. A body that keeps arriving keeps the request alive. A long stream ends at its end, by abort, or by RESET.
+
+**Reach.** Any `http` or `https` URL the Pi can reach: the internet, the LAN and the Pi itself. The 8080 has what the daemon's user has. One URL is a foot-gun: the daemon's own console listener (`http://127.0.0.1:8080/` with the default `--listen`). The worker connects as a new console client, which replaces the operator's terminal (`PI_DAEMON.md` 7.1), and its HTTP request (`GET / HTTP/1.1`, `Host: ...`, `User-Agent: ...`, `Accept: */*`) lands in the 8080's console input. The request stalls, ends in 83, and then the monitor reads those lines as commands (`G`, `H`, `U`, `A`). With today's command set each is an argument error, which writes nothing (`MONITOR_SPEC.md` 4), but the operator must reconnect.
+
+**Errors:** 82 for a bad argument string (Grammar). 83 for everything after it: the worker cannot start, DNS, connect or TLS failure, a time limit, a status of 400 or above, too many redirects, a file-form body over FFFFFF bytes, a host error writing, syncing or renaming the file. 80 and 81 as for every command.
+
+**GET client** (as TIME clock above: the contract, then what supplies it). The worker is `/usr/bin/curl`, 8.4.0 or later, run without a shell and with an empty environment, on the emulator and the Pi alike. Exit status 0 is success; any other is 83. Its argument list is in the `mailbox.rs` header and is pinned by a unit test (section 10). Where it runs: `PI_DAEMON.md` 1 and 11. If `curl` is missing, every GET gives 83.
+
+### GET conformance vectors
+
+Device-level tests MUST cover every row. `H` is the test HTTP server in `tests/support/http.rs`, shared by the GET and N tests: a `std::net::TcpListener` on `127.0.0.1:0`, one thread per connection, canned responses by path. A connection whose first bytes are not `GET ` is closed at once. The `/hang` and `/drip` handlers send their bytes, then block on `read` until the client closes; they report the request's arrival and the close on an mpsc channel, so a test can wait until the worker is connected before it aborts it. No test touches the internet.
+
+"Final" is the status after polling `IN 12` until it is not 01. "Response" is every byte read from 13, in hex or as quoted text. A status may read 01 before any `IN 12` read. Every polling loop has a 10 s `Instant` deadline and fails with a message naming the row; "the server sees the close" waits with `recv_timeout(5 s)`. Rows marked *ignored* take 10 s or more and are `#[ignore]` tests, run with `cargo test -- --ignored`.
+
+| Command buffer | Server | Final, response | Storage directory afterwards |
+|---|---|---|---|
+| `GET http://H/hello` | 200, `Hello` 0D 0A | 03 after `"Hello"` 0D 0A | unchanged |
+| `GET   http://H/hello  ` (extra spaces) | as above | as above | unchanged |
+| `GET http://H/lf` | 200, `a` 0A `b` 0A | 03 after 61 0A 62 0A (no translation) | unchanged |
+| `GET http://H/bin` | 200, the 256 bytes 00-FF | 03 after the same 256 bytes | unchanged |
+| `GET http://H/chunk`; wait 200 ms before the first `IN 12` | 200, chunked, 100 KiB of a pattern (more than a pipe holds, so curl blocks) | 03 after the same bytes in order | unchanged |
+| `GET http://H/empty` | 200, empty | 03, no AVAIL ever | unchanged |
+| `GET http://H/304` | 304, empty | 03, no AVAIL ever | unchanged |
+| `GET http://H/r5` | 5 redirects, then 200 `ok` | 03 after `"ok"` | unchanged |
+| `GET http://H/r6` | 6 redirects | 83, no AVAIL ever | unchanged |
+| `GET http://H/404` | 404 with a body | 83, no AVAIL ever | unchanged |
+| `GET http://H/500` | 500 with a body | 83, no AVAIL ever | unchanged |
+| `GET http://127.0.0.1:P/` (P a closed port) | none | 83 | unchanged |
+| `GET https://H/hello` | plain HTTP; closes the TLS hello | 83 (no TLS server needed) | unchanged |
+| `GET http://H/hang`; `IN 13`; `IN 12` | accepts, never answers | `IN 13` = 00, then `IN 12` = 01 | unchanged |
+| `GET http://H/hello > BOOK.TXT` | as `/hello` | 03 after `"000007"` | `BOOK.TXT` = `Hello` 0D 0A; no `~BOOK.TXT` |
+| `GET http://H/hello   >   book.txt ` | as `/hello` | 03 after `"000007"` | `BOOK.TXT` as above |
+| `GET http://H/empty > E.BIN` | 200, empty | 03 after `"000000"` | `E.BIN` exists, empty |
+| `~E.BIN` = `junk` in the directory; `GET http://H/empty > E.BIN` | 200, empty | 03 after `"000000"` | `E.BIN` exists, empty; no `~E.BIN` |
+| `GET http://H/max > M.BIN` | 200, FFFFFF bytes | 03 after `"FFFFFF"` | `M.BIN` is FFFFFF bytes, equal to the body |
+| `GET http://H/over > O.BIN` | 200, chunked, 1000000h = 16,777,216 bytes (FFFFFF + 1) | 83 | no `O.BIN`, no `~O.BIN` |
+| `GET http://H/404 > KEEP.TXT`, `KEEP.TXT` = `old` | 404 | 83 | `KEEP.TXT` = `old`; no `~KEEP.TXT` |
+| Mount `F.TXT` = `old`; `GET http://H/hello > F.TXT`; then `IN 0B` | as `/hello` | 03 after `"000007"`; `IN 0B` = `o` (the old mount) | `F.TXT` = `Hello` 0D 0A; after `X F.TXT` again, `IN 0B` = `H` |
+| `GET http://H/hang`; `IN 12`; clear | accepts, never answers | `IN 12` = 01; after clear 00; the server sees the close (the worker was killed) | unchanged |
+| `GET http://H/hang > H.BIN`; clear | as above | 00; the server sees the close | no `H.BIN`, no `~H.BIN` |
+| `GET http://H/drip`; read 3 bytes; clear | `abc`, then silence | reads `abc`, then `IN 12` = 01; after clear 00, and `IN 13` = 00 | unchanged |
+| `GET http://H/hang`; execute `TIME` | as above | the TIME response; the server sees the close | unchanged |
+| `GET http://H/hang > D.BIN`; drop the device (RESET) | as above | the server sees the close | no `~D.BIN` |
+| *ignored:* `GET https://S/` (`S` accepts and never answers) | none | 83 after 10-12 s | unchanged |
+| *ignored:* `GET http://H/hang` | as above | 83 after 30-35 s | unchanged |
+| *ignored:* `GET http://H/drip` | as above | 03 never; `abc`, then 83 after 30-40 s | unchanged |
+| `GET`, `GET `, `GET    ` | none | 82 at execute | unchanged |
+| `GET ftp://H/`, `GET HTTP://H/`, `GET http://`, `GET hello` | none | 82 | unchanged |
+| `GET http://H/a` Tab `b`, `GET http://H/` 80 | none | 82 | unchanged |
+| `GET http://H/a b`, `GET http://H/a >F`, `GET http://H/a > F G`, `GET http://H/a < F` | none | 82 | unchanged |
+| `GET http://H/a > `, `GET http://H/a > BAD/NAME`, `GET http://H/a > 1234567890123`, `GET http://H/a > ..` | none | 82 | unchanged |
+| `get http://H/hello` | none | 80 | unchanged |
+| `GET ` followed by 125 bytes (129 in all) | none | 81 | unchanged |
+
 ### Reference client
 
-This is the monitor's mailbox client (`MONITOR_SPEC.md` 9: MB_SEND, MB_PUT and MB_GET in `rom/monitor.asm`). MB_SEND clears the mailbox (the resync) and sends a NUL-terminated string, and MB_PUT appends one without the clear. The caller executes. MB_GET then waits for the next result and returns one of three outcomes: a response byte, done (03), or failed with the status (00 after execute, meaning the Pi restarted, or 80-FF). Each monitor command's sink and messages: `MONITOR_SPEC.md` 6.15-6.17.
+This is the monitor's mailbox client (`MONITOR_SPEC.md` 9: MB_SEND, MB_PUT and MB_GET in `rom/monitor.asm`), used by T, A, U and N. MB_SEND clears the mailbox (the resync) and sends a NUL-terminated string, and MB_PUT appends one without the clear. The caller executes. MB_GET then waits for the next result and returns one of three outcomes: a response byte, done (03), or failed with the status (00 after execute, meaning the Pi restarted, or 80-FF). Each monitor command's sink and messages: `MONITOR_SPEC.md` 6.15-6.18.
 
 ```asm
 ; HL -> NUL-terminated command text
@@ -553,5 +656,5 @@ Superseded on 2026-10-02 (see COLLABORATION_LOG Key Decisions):
 | Port map 00-6F | `build_bus` (`src/io/mod.rs`), used by `main.rs` and every test harness. It takes the TIME clock as a parameter, `build_bus(storage_dir, clock)`, and the emulator's callers pass `mailbox::local_time` | Pi daemon (`src/pi/`): the same function, with its own clock, `ntp_local_time` (`PI_DAEMON.md` 6, 8) |
 | Console 00-02 | `src/io/devices/console.rs` (input FIFO and output buffer, no terminal code); the terminal side is `src/main.rs` | Pi: the same Rust code, with the terminal connected to the Pi over TCP (`PI_DAEMON.md` 7) |
 | Storage 08-0C, Mount 0D-0F | `src/io/devices/storage.rs`, one device (std::fs) | Pi: the same Rust code, files on its SD card |
-| Service Mailbox 10-13 | `src/io/devices/mailbox.rs`. `TIME` reads a clock passed to `Mailbox::new` (a plain fn returning the date and time fields, or None for "not set"). The device formats the 19 bytes, so the emulator and the Pi daemon share the formatter. `build_bus` passes the host's local time (`mailbox::local_time`, `localtime_r` through the `libc` crate); tests pass a fixed or a failing one. `ASM` and `DIS` call `src/disasm.rs`: `assemble` reads the opcode table backwards, and `line` formats the DIS line, which the debugger reuses | Pi: the same Rust code and formatter behind GPIO, with a clock that reports "not set" (83) unless the kernel is NTP-synchronized (section 8, TIME clock; `PI_DAEMON.md` 8). `ASM` and `DIS` are the same code |
+| Service Mailbox 10-13 | `src/io/devices/mailbox.rs`. `TIME` reads a clock passed to `Mailbox::new` (a plain fn returning the date and time fields, or None for "not set"). The device formats the 19 bytes, so the emulator and the Pi daemon share the formatter. `build_bus` passes the host's local time (`mailbox::local_time`, `localtime_r` through the `libc` crate); tests pass a fixed or a failing one. `ASM` and `DIS` call `src/disasm.rs`: `assemble` reads the opcode table backwards, and `line` formats the DIS line, which the debugger reuses. `GET` (section 8, GET client) spawns `/usr/bin/curl` with `std::process::Command` (`env_clear`) and keeps the `Child`: stream form, its stdout made non-blocking with `fcntl` (`libc`); file form, `-o` the `~FILE` temporary. The curl argument list and the reason for each flag are in the `mailbox.rs` header; a unit test asserts the list. `Mailbox::new(clock, storage_dir)`: `build_bus` passes its storage directory. Abort is `kill` and `wait`; `Drop` aborts. The mount name rule is one function in `storage.rs`, called by mount and by `GET` (a move, not a new abstraction) | Pi: the same Rust code and formatter behind GPIO, with a clock that reports "not set" (83) unless the kernel is NTP-synchronized (section 8, TIME clock; `PI_DAEMON.md` 8). `ASM` and `DIS` are the same code. `GET` is the same code; the worker's cores and lifetime: `PI_DAEMON.md` 1 |
 | System control FE-FF | `src/cpu.rs` | 74HCT74 and decode (`ARCHITECTURE.md`, Overlay Glue) |

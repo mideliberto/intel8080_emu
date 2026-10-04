@@ -3,6 +3,8 @@
 ## Open Decisions (Mike decides before anyone codes against them)
 - The 2026-10-02 set closed 2026-10-02 and the 2026-10-03 sets closed 2026-10-03; see COLLABORATION_LOG Key Decisions. The specs are docs/ARCHITECTURE.md, docs/DEVICE_SPECS.md, docs/MONITOR_SPEC.md, docs/PI_DAEMON.md.
 - [x] Pi daemon spec, 9 questions (build-bus-clock, gpio-seam, reset-check-cost, cdev-interface, listen-default, cross-build, measure-mode, fourth-normative-doc, console-input-arrival, device-send-wording): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Pi Daemon Specified"). Written into docs/PI_DAEMON.md, ARCHITECTURE 6.4/6.6/7.4, DEVICE_SPECS 3/4/8/10, HARDWARE_BUILD 3/5.
+- [x] Phase 8 spec, 7 questions (Q-CLIENT, Q-HUNG, Q-LF, Q-FILE, Q-STATUS, Q-SCOPE, Q-N-82): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Phase 8 Specified"), with the cross-check fixes for Phase 8 (curl `-N` in the stream form, the shared test server `tests/support/http.rs`, the `CN_SEND` label, N in README's command block). Written into DEVICE_SPECS 2/3/8/10, MONITOR_SPEC 2/3/5/6.14/6.15/6.18/9/10/11, PI_DAEMON 1/2/11/12.1/14/15, ARCHITECTURE 6.4/8, HARDWARE_BUILD 5.
+- [ ] **Mike:** CLAUDE.md Build gains "`/usr/bin/curl` 8.4.0+ (mailbox `GET`; the GET tests run it against a local server; `cargo test -- --ignored` runs the time-limit tests)". Left to Mike (his file), as the musl gate was.
 - [x] Phase 7 spec, 10 questions (Q-ALIAS, Q-HSUFFIX, Q-REGNUM, Q-ADDR-DEFAULT, Q-U-ARGS, Q-U-BADCOUNT, Q-A-LOOP, Q-DIS-SHAPE, Q-READY, Q-LINE-FN): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Phase 7 Specified"). Written into DEVICE_SPECS 8, MONITOR_SPEC 6.16-6.17, and the cross-doc edits.
 - [x] Idle wait slowed compute-bound programs 15x (2026-10-03): closed 2026-10-03, the wait now also requires an `IN 02` read in the last pump interval (ARCHITECTURE 7.2); the 26M-step loop is back to no-wait speed.
 - [x] Debugger NAME+n only within one memory-map region (2026-10-03): accepted by Mike 2026-10-03 (ARCHITECTURE 7.4 Location).
@@ -43,6 +45,19 @@
 - [x] Verify the cross build on the Mac (PI_DAEMON 2; not a decision): done 2026-10-03. `rustup target add aarch64-unknown-linux-musl`, `.cargo/config.toml` linker = `rust-lld`, `cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d` links a static aarch64 ELF (about 760 KiB, rustc 1.89). The musl `cargo check` and `cargo clippy --bins` gate is clean
 - [ ] On the Pi (bench, PI_DAEMON 14, bring-up step 5): the cross-built binary runs, and local time under musl reads `/etc/localtime`. Fallback if it does not: build natively on the Pi (`cargo build --release --bin pi8080d`)
 - [x] Loose ends (2026-10-03): `cargo clippy --all-targets` clean (Default for Intel8080, Debugger, IoBus, Console; a `MountCase` alias in `device_tests.rs`). Real-terminal tests `tests/terminal_tests.rs` (8): the binary under a pty via `rexpect` (Unix-only dev-dependency), wrapped in `sh` so each test checks the exit status and `stty -g` before = after; raw mode boot, echo and run, Ctrl-C mid `JMP $`, Ctrl-E / bad line / `c`, interactive HLT / `q`, Backspace 7F -> 08 at `IN 01` and in a line edit, a piped `--script c` run leaving the terminal mode alone. No pty: prints `skipped: no pty` and passes; libtest captures that line, so the 266 count looks the same either way (`cargo test --test terminal_tests -- --nocapture` shows it). cargo-mutants `src/main.rs`: 8 missed -> 0 (65 caught, 5 timeouts = arg-loop hangs and a quit/resume swap that hangs the piped tests, 6 unviable)
+
+## Done: Phase 8 - Internet Services (2026-10-03)
+Built to the spec (Key Decisions, "Phase 8 Specified"). +67 bytes (2893 -> 2960), as the sketch measured.
+1. [x] `storage::file_name`: the mount name rule, one function for mount and `GET > FILE`
+2. [x] `mailbox.rs`: `GET` (grammar, stream and file forms, BUSY, abort on execute/clear/Drop) with a `/usr/bin/curl` worker: `env_clear`, the argument list in the module header and pinned by `curl_argument_list`, `-N` in the stream form, non-blocking pipe checked at `IN 12` only; file form `~FILE` -> fsync -> rename -> directory fsync -> `%06X`; Linux `pre_exec` (affinity outside the bus thread's mask, `PR_SET_PDEATHSIG`). `Mailbox::new(clock, storage_dir)`
+3. [x] `main.rs`: `drop(cpu)` before the bad-script `exit(2)`
+4. [x] ROM v0.7: N (`CMD_NET`, `CN_SEND`, `STR_GET`), T/N loop prints LF as CR LF (`CT_EXEC`, `CT_OUT`), help line
+5. [x] Tests: `tests/support/http.rs` (H: routes, chunked writer, /hang and /drip report request and close); 15 GET tests + 3 `#[ignore]` time limits in `mailbox_tests.rs` (every DEVICE_SPECS 8 GET row), 5 N tests in `monitor_tests.rs` (every 6.18.1 row), `help.txt`. Ignored rows measured: connect 10.0 s, stall 30 s
+6. [x] Fixed in the spec while building: MONITOR_SPEC 6.18.1's first row said body `Hello` and output `Hello`, but every other row (and the `000007` file row) uses the DEVICE_SPECS `/hello` body `Hello` CR LF. The row now gives the bytes 6.18 steps 2-3 print for that body (`Hello` CR CR LF CR LF). The same row's Effect said "an IN 12 that may read 01 before any of them"; it now says "IN 12 reads of 01 anywhere among them", because after the last buffered byte is popped the status is BUSY and the next check can read 01 before EOF. PI_DAEMON 1 Affinity now says the device reads the bus thread's mask (`sched_getaffinity`) before the fork, not in the `pre_exec`, which is what the code does. No behavior change
+6a. [x] Spec note imprecision (PHASE8_SPEC 7.1, the `-o` flag note): "curl creates no file for an empty body" holds only when there is no body at all (304). For a 200 with `Content-Length: 0`, curl 8.7.1 creates an empty file. The stale-`~FILE` removal is still needed; the module header and `get_to_a_file` (now on `/304`) say so. Normative docs never carried the claim
+7. [x] MONITOR_SPEC 6.18 N print speed measured: 155 cycles a byte, 206 for an LF (was est. 175)
+8. [ ] By hand (needs the internet, so not in `cargo test`): `N https://www.gutenberg.org/cache/epub/1342/pg1342.txt > PRIDE.TXT` in the emulator, then `X PRIDE.TXT` and `L`
+9. [ ] Bench (PI_DAEMON 14, step 6): the four GET rows (curl version on the Pi OS image, which must be Trixie-based; worker cores; no curl left behind)
 
 ## Done: `pi8080d --sim`, RAM Test Build, Board Debug Aids (2026-10-03)
 Mike decided all four 2026-10-03 (Key Decisions). The choices flagged for him are in Open Decisions.
@@ -216,7 +231,6 @@ All done 2026-10-03 (step E): the WARM/error-tail/one-parser/RANGE refactor from
 - [ ] R command - needs register capture on return (Phase 10)
 
 ## Someday
-- [ ] Phase 8: HTTP GET (mailbox `GET`). Its background worker must not move the IoBus off the Pi daemon's bus thread (devices are not `Send`, PI_DAEMON 1)
 - [ ] Phase 9: Claude (mailbox `ASK`, Q command)
 - [ ] Phase 10: R command (the debugger shipped early, ARCHITECTURE 7.4)
 - [ ] 8253 timer, TIMER_ISR, RST 7 vector: when something needs a periodic interrupt
