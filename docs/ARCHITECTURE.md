@@ -16,7 +16,7 @@ The rule behind every section: **the ROM sees only what real parts provide.** If
 ## 1. Memory Map
 
 ```
-0x0000-0x007F   Unused (128 bytes)
+0x0000-0x007F   Unused (128 bytes), except 0030-0032: RST 6 break vector (written by G)
 0x0080-0x00FF   Monitor workspace (128 bytes)
 0x0100-0xEEFF   User area (60,928 bytes)
 0xEF00-0xEFFF   Monitor stack page (256 bytes, SP starts at 0xF000)
@@ -25,7 +25,7 @@ The rule behind every section: **the ROM sees only what real parts provide.** If
 
 | Range | Rule |
 |-------|------|
-| 0000-007F | Not used by the monitor and not initialized at boot, so its contents are undefined. There are no RST vectors and no API jump table. (What this means for programs started with `G`: `MONITOR_SPEC.md`, G Return Contract.) |
+| 0000-007F | Not initialized at boot. `G` writes `JMP BRK_ENTRY` at 0030-0032 before it starts a program, for breakpoints the user plants (`MONITOR_SPEC.md` 8.1); the rest is undefined and unused by the monitor. There is no other RST vector (RST 7 is reserved for an interrupt source, 6.7) and no API jump table. (What this means for programs started with `G`: `MONITOR_SPEC.md`, G Return Contract.) |
 | 0080-00FF | Monitor workspace. Layout in 1.1. Initialized at cold boot only. A program that writes here can break monitor commands until the next reset. |
 | 0100-EEFF | User programs and data. The monitor reads and writes this range only when a command tells it to. |
 | EF00-EFFF | Monitor stack. Cold boot and WARM (3.2) both set SP to 0xF000, so the first push writes 0xEFFF and 0xEFFE. |
@@ -49,7 +49,7 @@ This table and the workspace labels in `rom/monitor.asm` (`ORG 0080H` and one `D
 | 00E4 | 1 | SEARCH_LENGTH | no |
 | 00E5-00E6 | 2 | SEARCH_END | no |
 | 00E7-00E9 | 3 | STOR_ADDR (24-bit: lo, mid, hi) | no |
-| 00EA-00F1 | 8 | REGS (A, F, BC, DE, HL at the last `G` return: L H E D C B F A, `MONITOR_SPEC.md` 6.20) | no |
+| 00EA-00F1 | 8 | REGS (A, F, BC, DE, HL at the last `G` return or RST 6 break: L H E D C B F A, `MONITOR_SPEC.md` 6.20, 8.1) | no |
 | 00F2-00FF | 14 | free | - |
 
 16 bytes are free in total. New workspace goes into 00F2-00FF first.
@@ -62,7 +62,7 @@ The I/O stubs run from RAM as self-modifying code. Real hardware runs it the sam
 
 - **Source:** `rom/monitor.asm`. **Image:** `rom/monitor.bin`, exactly 4096 bytes, assembled at `ORG 0F000H`, unused bytes 0xFF.
 - **Fixed address:** only one. COLD_START is the first byte of the image (0xF000, which is also 0x0000 through the overlay). Every other routine address can move from build to build.
-- **No WARM vector.** WARM (3.2) has no fixed address. A program reaches it only through the `G` return contract (`MONITOR_SPEC.md`); anything else that wants the monitor back jumps to F000, a cold start (banner, workspace reset). The CP/M exerciser shim (`tests/exerciser.rs`) does that at 0000. (Decided 2026-10-03.)
+- **No WARM vector.** WARM (3.2) has no fixed address. A program reaches it only through the `G` return contract (`MONITOR_SPEC.md`), or by stopping at a planted `RST 6` breakpoint (`MONITOR_SPEC.md` 8.1, a debugging aid, not an exit); anything else that wants the monitor back jumps to F000, a cold start (banner, workspace reset). The CP/M exerciser shim (`tests/exerciser.rs`) does that at 0000. (Decided 2026-10-03.)
 - **No public entry points.** User programs MUST NOT call ROM routines by address. Programs do their own I/O through the ports in `DEVICE_SPECS.md`. ROM routine contracts are in `MONITOR_SPEC.md` (ROM Routine Contracts); they describe the code, not an ABI.
 - **Budget:** 4096 bytes. Used bytes = `ROM_END - 0F000H`, where `ROM_END` is a label after the last assembled byte. `make size` prints that number. The padded image size is not a measurement.
 - **RAM test build:** the same source assembled at D000 as `rom/monitor_ram.hex`, so a ROM change can run on the board without burning an EEPROM (2.1).
@@ -599,7 +599,7 @@ On hardware the Pi passes every byte the terminal sends; the key map does not ex
 | Convenience | Contract |
 |-------------|----------|
 | **Host input pump** | The host run loop reads pending host keyboard input at least once every 10,000 executed steps and puts the mapped bytes (7.1) into the console input FIFO in arrival order. The key source is injectable, so tests can script it. Console output is drained to host stdout as often. When stdin is not a terminal, its bytes go to the FIFO unmapped and Ctrl-C is the shell's. Code: `run_loop` in `src/main.rs`. |
-| **Idle wait** | A pump first takes what is pending without waiting. It then blocks for host input for up to 1 ms (a terminal poll, or a wait on the stdin reader) and takes what arrived only when all three hold: the first take brought nothing, the console input FIFO is empty, and the 8080 read `IN 02` since the previous pump (it is polling for input, as the monitor's CONIN does at the prompt). A compute-bound program does not read `IN 02`, so it never waits; a program that polls `IN 02` inside a compute loop does, about 1 ms per 10,000 steps. Measured 2026-10-03, release: idle at the monitor prompt (piped stdin at EOF) about 27% of a core (about 100% with no wait); a 26M-step `DCX B` loop run with `G` takes 0.20 s, the same as with no wait (the first trigger, without the `IN 02` condition, took 15x longer). The 8080 cannot see it: it adds no cycles. Code: `idle_waits` in `src/main.rs`, `Console::take_polled`. Tests: `idle_waits_only_when_nothing_came_the_fifo_is_empty_and_the_8080_polled`, `a_pump_waits_only_while_the_8080_polls_an_empty_fifo`, `a_compute_bound_program_never_waits` in `src/main.rs`; `console_host_side_sees_status_polls` in `tests/device_tests.rs`. |
+| **Idle wait** | A pump first takes what is pending without waiting. It then blocks for host input for up to 1 ms (a terminal poll, or a wait on the stdin reader) and takes what arrived only when all three hold: the first take brought nothing, the console input FIFO is empty, and the 8080 read `IN 02` since the previous pump (it is polling for input, as the monitor's CONIN does at the prompt). A compute-bound program does not read `IN 02`, so it never waits; a program that polls `IN 02` inside a compute loop does, about 1 ms per 10,000 steps. Measured 2026-10-03, release: idle at the monitor prompt (piped stdin at EOF) about 27% of a core (about 100% with no wait); a 26M-step `DCX B` loop run with `G` takes 0.20 s, the same as with no wait (the first trigger, without the `IN 02` condition, took 15x longer). The 8080 cannot see it: it adds no cycles. `N` and `Q` trigger it too: their BUSY wait and each LF's Esc check read `IN 02` with the FIFO empty (`MONITOR_SPEC.md` 6.18), so a long wait no longer burns a host core, and a fast stream in `cargo run` is paced by up to 1 ms per 10,000 steps. Code: `idle_waits` in `src/main.rs`, `Console::take_polled`. Tests: `idle_waits_only_when_nothing_came_the_fifo_is_empty_and_the_8080_polled`, `a_pump_waits_only_while_the_8080_polls_an_empty_fifo`, `a_compute_bound_program_never_waits` in `src/main.rs`; `console_host_side_sees_status_polls` in `tests/device_tests.rs`. |
 | **End of piped input** | When stdin is not a terminal, end of input changes nothing: the FIFO just stays empty. The run ends on a halt or Ctrl-C (the shell's), never at EOF, so output the 8080 has not printed yet is never cut off. |
 | **Ctrl-C quits** | When the pump reads Ctrl-C, nothing goes into the FIFO. The run loop returns a quit status, and `main.rs` restores the terminal mode and exits. This works whatever the 8080 is doing, including `JMP $`. Test: script Ctrl-C while the CPU runs `JMP $`; the run loop returns quit within 10,000 steps, and `IN 01` never returns 03. |
 | **Halt** | v1 has no interrupt source that could wake a halted CPU (5.8). In an interactive run (stdin is a terminal and there is no `--script`), a halt opens the debugger prompt with the reason `halt` (7.4): the user can inspect, and `q` quits. Otherwise (piped stdin, or `--script`) the run loop returns a halted status, and `main.rs` prints `HLT at PC=xxxx` to host stdout, where xxxx is PC (the address after the HLT), restores the terminal, and exits. Code: `halt_prompts` in `src/main.rs`. |
@@ -674,7 +674,7 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 - **Ring line:** the instruction line padded with spaces to 34 characters, one space, then the registers before it ran: `A=44 F=56 BC=0B0D DE=0000 HL=0081 SP=F000`.
 - **Stop report:** a reason line, then the last 8 ring lines (the last one is the instruction that caused a watchpoint or I/O stop), then the registers line, then the next instruction. The reason line always begins a line: when the console output before a stop does not end with LF, the host writes CR LF first. Reasons: `* break LOCATION`, `* watch read AAAA VV`, `* watch write AAAA VV`, `* io IN PP VV`, `* io OUT PP VV`, `* ctrl-e`, `* start`, `* halt`.
 
-**Port trace.** One 7.3 line per `IN` or `OUT` transfer, ports FE and FF included. Repeats are collapsed by the 7.3 rule (`IN 02 02 ; x12`). Pending lines are written at every stop and at `t off` and quit, so a run split by a stop is written as two lines. The debugger writes no `RESET` line: it has no reset. Diffing against a Pi daemon trace (7.3): the Pi never sees ports 70-FF (`DEVICE_SPECS.md`), so drop the FE and FF lines; drop `RESET` lines, which only the daemon writes; strip the ` ; xN` annotation, since poll counts depend on timing; then merge adjacent identical lines, since a stop splits a run (`grep -Ev '^(IN|OUT) F[EF] |^RESET$' | sed 's/ ; x[0-9]*$//' | uniq`).
+**Port trace.** One 7.3 line per `IN` or `OUT` transfer, ports FE and FF included. Repeats are collapsed by the 7.3 rule (`IN 02 02 ; x12`). Pending lines are written at every stop and at `t off` and quit, so a run split by a stop is written as two lines. The debugger writes no `RESET` line: it has no reset. Diffing against a Pi daemon trace (7.3): the Pi never sees ports 70-FF (`DEVICE_SPECS.md`), so drop the FE and FF lines; drop `RESET` lines, which only the daemon writes; drop the `IN 02 02` lines (empty-FIFO console polls carry no data; `N` and `Q` interleave one with every BUSY status read, `MONITOR_SPEC.md` 6.18, so without this their `IN 12 01` lines never merge); strip the ` ; xN` annotation, since poll counts depend on timing; then merge adjacent identical lines, since a stop splits a run (`grep -Ev '^(IN|OUT) F[EF] |^RESET$|^IN 02 02' | sed 's/ ; x[0-9]*$//' | uniq`).
 
 **Symbols.** `rom/monitor.sym` is built with `monitor.bin` by `cd rom && make` and committed with it: one `AAAA NAME` line per label in `monitor.asm`, from asl's NoICE output: the code labels and the workspace labels (1.1), so `w STOR_ADDR` works. EQU constants are left out: they are ports, characters and sizes. The emulator loads it from next to `monitor.bin` when present; without it a `NAME` argument is an error and output has no names.
 
@@ -691,4 +691,5 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 - **Phase 10 (done 2026-10-03):** the monitor's `R` command and the G_RETURN capture (`MONITOR_SPEC.md` 6.20, 8) and the REGS workspace row (1.1). No circuit change.
 - **Phase 11 (done 2026-10-03):** example programs, the user guide and a consistency pass. No memory-map, circuit or
   ROM change.
+- **Phase 12 (Track B):** RST 6 breakpoints (`MONITOR_SPEC.md` 8.1): a 0030-0032 vector written by G. No circuit change.
 - **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6); a monitor routine that reprograms the ROM through JP-WE (6.10 rules), with its emulator model.

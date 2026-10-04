@@ -325,6 +325,8 @@ fn boot_assumes_nothing() {
     assert!(m.mem(0x0100, 0xEE00).iter().all(|&b| b == JUNK));
     // The overlay is off and 0000-007F was left alone: D shows RAM junk, not ROM.
     assert!(!m.cpu.rom_overlay_enabled);
+    // Not even the RST 6 vector: only G writes 0030-0032 (MONITOR_SPEC 8.1).
+    assert!(m.mem(0x0000, 0x80).iter().all(|&b| b == JUNK));
     assert_eq!(m.run("D 0000 000F"),
         "0000: 76 76 76 76 76 76 76 76  76 76 76 76 76 76 76 76  vvvvvvvvvvvvvvvv\\r\\n");
     // Bare D and bare E start at 0000 after cold start (LAST_DUMP_ADDR, LAST_EXAM_ADDR).
@@ -613,6 +615,11 @@ fn help() {
 #[test]
 fn registers() {
     boot().play("registers");
+}
+
+#[test]
+fn breakpoint() {
+    boot().play("breakpoint");
 }
 
 #[test]
@@ -1139,6 +1146,83 @@ fn q_without_a_question() {
     boot().play("ask");
 }
 
+// ---------- Esc (MONITOR_SPEC 6.18, 6.19) ----------
+//
+// ScriptedMailbox ignores the clear, so scripted rows assert the OUT 11 02 port event;
+// the real-mailbox row reads the IDLE state after it.
+
+/// One step of `input` on a scripted mailbox: the output, the monitor, and where the
+/// step's ports start.
+fn esc_step(statuses: &[u8], bytes: &[u8], input: &[u8]) -> (String, Mon, usize) {
+    let mut m = scripted(statuses, bytes);
+    let n = m.ports.len();
+    let out = show(&m.step(input).unwrap_or_else(|e| panic!("{}", e)));
+    (out, m, n)
+}
+
+#[test]
+fn esc_aborts_n_and_q_scripted() {
+    use Transfer::{In, Out};
+    // 6.18 Esc: checked on each busy pass; OUT 11h <- 02h (clear), then Aborted.
+    let (out, m, n) = esc_step(&[0x01], b"", b"N x\r\x1B");
+    assert_eq!(out, "N x\\r\\nAborted\\r\\n");
+    let mb = m.mailbox_ports(n);
+    let exec = mb.iter().position(|&t| t == Out(0x11, 0x01)).unwrap();
+    let after = &mb[exec + 1..];
+    assert_eq!(after.last(), Some(&Out(0x11, 0x02)), "{:?}", after);
+    assert!(after[..after.len() - 1].iter().all(|&t| t == In(0x12, 0x01)), "{:?}", after);
+    // An Esc anywhere among the waiting bytes aborts, and every byte waiting with it is
+    // discarded: behind a CR LF terminal's LF or type-ahead, and ahead of an arrow key's
+    // rest or a typed command. One prompt, nothing runs, the FIFO empty.
+    for input in [&b"N x\r\n\x1B"[..], b"N x\rq\x1B", b"N x\r\x1B[A", b"N x\r\x1BH 1 1\r"] {
+        let (out, m, _) = esc_step(&[0x01], b"", input);
+        assert_eq!(out, "N x\\r\\nAborted\\r\\n", "{:?}", show(input));
+        assert!(!m.con().borrow().has_input(), "{:?}", show(input));
+    }
+    // Nothing typed: a check reads status first and pops no byte (4 IN 01: the line).
+    let (out, m, n) = esc_step(&[0x01, 0x01, 0x01, 0x02, 0x03], b"A", b"N x\r");
+    assert_eq!(out, "N x\\r\\nA\\r\\n");
+    assert_eq!(m.ports[n..].iter().filter(|t| matches!(t, In(0x01, _))).count(), 4);
+    // Checked at each LF, before it prints: the LF that saw the Esc does not print, and the
+    // message follows on the same line. The endless 00 after the body has no LF.
+    let (out, _, _) = esc_step(&[0x02], b"ab\ncd\n", b"N x\r\x1B");
+    assert_eq!(out, "N x\\r\\nabAborted\\r\\n");
+    // Every other waiting byte is discarded, all of it (the drain): nothing runs after N,
+    // one prompt, the FIFO empty.
+    let body = b"a\nb\nc\n";
+    let st = [0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03];
+    for input in [&b"N x\rq"[..], b"N x\rH 1 1\r"] {
+        let (out, m, _) = esc_step(&st, body, input);
+        assert_eq!(out, "N x\\r\\na\\r\\nb\\r\\nc\\r\\n\\r\\n", "{:?}", show(input));
+        assert!(!m.con().borrow().has_input(), "{:?}", show(input));
+    }
+    // A CR LF terminal: the busy check eats the LF, so no second prompt.
+    let (out, _, _) = esc_step(&[0x01, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03], b"HELLO", b"N x\r\n");
+    assert_eq!(out, "N x\\r\\nHELLO\\r\\n");
+    // 6.15: T never checks (TIME is never busy and has no LF). The Esc reaches the prompt,
+    // which ignores it.
+    let (out, _, _) = esc_step(&[0x02, 0x02, 0x02, 0x03], b"12:", b"T\r\x1B");
+    assert_eq!(out, "T\\r\\n12:\\r\\n");
+}
+
+#[test]
+fn esc_with_the_real_mailbox() {
+    // Bulk replay (PI_DAEMON 7.1): T and a Q that fails at execute read no keyboard, so
+    // all four lines of one step run.
+    let mut m = boot();
+    let out = show(&m.step(b"T\rI 12\rQ\rI 12\r").unwrap());
+    let rest = out.strip_prefix("T\\r\\n").unwrap_or_else(|| panic!("{}", out));
+    assert!(is_time_shape(&rest.as_bytes()[..19]), "{}", out);
+    assert_eq!(&rest[19..], "\\r\\n> I 12\\r\\n03\\r\\n> Q\\r\\nService error\\r\\n> I 12\\r\\n82\\r\\n");
+    // Esc while /hang is busy: Aborted, and the clear left the mailbox IDLE (DEVICE_SPECS 8).
+    let h = http::start();
+    let mut m = net();
+    let url = h.url("/hang");
+    let out = show(&m.step(format!("N {}\r\x1B", url).as_bytes()).unwrap());
+    assert_eq!(out, format!("N {}\\r\\nAborted\\r\\n", url));
+    assert_eq!(m.run("I 12"), "00\\r\\n");
+}
+
 // ---------- A and U (MONITOR_SPEC 6.16, 6.17, 6.17.1) ----------
 
 #[test]
@@ -1317,7 +1401,9 @@ fn u_text_typed_into_a_gives_the_bytes_back() {
 fn go_entry_contract() {
     // MONITOR_SPEC 8: on entry SP = EFFE, the word there is G_RETURN, interrupts are off and
     // the overlay is off. The return through it is in go.txt. The error before G leaves
-    // two pushes and a return address behind: WARM must reset SP.
+    // two pushes and a return address behind: WARM must reset SP. 8.1: every G, bare G
+    // too, has written JMP BRK_ENTRY at 0030 by then.
+    let brk = sym("BRK_ENTRY");
     for (line, at) in [("G 0300", 0x0300u16), ("G", 0x0100)] {
         let mut m = boot();
         m.run(&format!("F {:04X} {:04X} 76", at, at));
@@ -1330,6 +1416,19 @@ fn go_entry_contract() {
         assert_eq!(m.cpu.pc, at + 1, "{}: halted at the wrong place", line);
         assert_eq!((m.cpu.sp, m.cpu.read_word(0xEFFE)), (0xEFFE, sym("G_RETURN")), "{}", line);
         assert!(!m.cpu.interrupts_enabled && !m.cpu.rom_overlay_enabled);
+        assert_eq!(m.mem(0x0030, 3), [0xC3, brk as u8, (brk >> 8) as u8], "{}", line);
+    }
+}
+
+#[test]
+fn ret_and_break_leave_interrupts_enabled() {
+    // MONITOR_SPEC 8 and 8.1: neither G_RETURN nor BRK_ENTRY executes DI, and RST 6 does not
+    // clear INTE, so a program that ran EI is back at the prompt with INTE still set.
+    for (prog, out) in [([0xFBu8, 0xC9], "G 0300\\r\\n"), ([0xFB, 0xF7], "G 0300\\r\\nBRK 0301\\r\\n")] {
+        let mut m = boot();
+        m.poke(0x0300, &prog);
+        assert_eq!(show(&m.step(b"G 0300\r").unwrap()), out);
+        assert!(m.cpu.interrupts_enabled, "{}", out);
     }
 }
 

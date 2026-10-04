@@ -34,6 +34,8 @@ cargo run -- --script FILE      # run debugger commands from FILE first
   either key. Other keys: ARCHITECTURE 7.1.
 - **Piped input** goes to the console byte for byte: `printf 'H 1234 0001\r' | cargo run`. At the end
   of the input the monitor waits at its prompt; the run ends on HLT or Ctrl-C (ARCHITECTURE 7.2).
+  Input queued behind an `N` or `Q` that reaches the network is discarded while its request runs
+  (MONITOR_SPEC 2), so pipe nothing after one.
 - The emulator runs at host speed, not 2 MHz. Cycle counts in the specs are for the board.
 
 ---
@@ -49,7 +51,8 @@ At power-on the monitor prints its banner, `8080 Monitor v<version>` and the bui
 - What every message means: MONITOR_SPEC 5.
 - Which memory is yours: ARCHITECTURE 1 (the user area).
 - To stop a command or program that does not return: RESET on the board, Ctrl-C in the emulator,
-  restart the daemon under `--sim`. No monitor command stops for a key (MONITOR_SPEC 2).
+  restart the daemon under `--sim`. Esc stops a running `N` or `Q` (section 7.2); no other monitor
+  command stops for a key (MONITOR_SPEC 2).
 
 ---
 
@@ -83,6 +86,8 @@ both steps for every `.asm` in `examples/`.
   the paste; nothing is lost (PI_DAEMON 7.2).
 - **From a script:** `{ cat prog.hex; printf 'G 0100\r'; } | nc localhost 8080`. Leave `nc` running
   until the output you expect has arrived (`Loaded`, then the program's output), then Ctrl-C it.
+  After an `N` or `Q`, wait for the prompt before sending more: input that arrives while their
+  request runs is discarded (MONITOR_SPEC 2).
   Connect another client only after that: a new client closes the old one, and the old one's unread
   input and unsent output go with it (PI_DAEMON 7.1, 7.2).
 
@@ -218,6 +223,12 @@ yet (DEVICE_SPECS 8, TIME).
 - **`Q text`** asks Claude one question and prints the answer. Each `Q` stands alone: Claude does not
   see earlier questions. The API key lives on the Pi, never in the ROM (PI_DAEMON 11). Rules:
   MONITOR_SPEC 6.19.
+- **Esc** stops a running `N` or `Q`: the request is cancelled and `Aborted` prints after whatever
+  was already printed. In the stream form `N` checks for Esc at each line end, so a long body without
+  line ends (a binary, minified HTML or JSON) cannot be stopped: fetch those with `> FILE`, which
+  Esc always stops, leaving `FILE` untouched. Keys typed while the request runs are thrown away.
+  Arrow and function keys start with Esc too: over TCP or piped stdin they abort, and their tail
+  (`[A`) may reach the next prompt. Rules: MONITOR_SPEC 6.18.
 
 ---
 
@@ -242,14 +253,36 @@ After a program started with `G` returns with `RET`, `R` prints the registers it
 A=44 F=56 BC=0B0D DE=1234 HL=0081
 ```
 
-When `R`'s line is captured, and what else changes it: MONITOR_SPEC 6.20. To see a value
-mid-program, end the program there with `RET` (SP as `G` left it) and type `R`.
+When `R`'s line is captured, and what else changes it: MONITOR_SPEC 6.20.
+
+To stop mid-program, at any call depth, plant a breakpoint (MONITOR_SPEC 8.1):
+
+1. `E aaaa`, note the byte it shows, type `F7` (`RST 6`), Enter, then `.` (`.` alone discards the
+   digits: only Enter stores). `A aaaa` / `RST 6` / `.` does the same.
+2. `G` the program as usual. When it reaches aaaa the monitor prints `BRK aaaa` and the prompt.
+3. `R` shows the registers at the break. SP is not saved, and the program cannot be continued.
+4. `E aaaa`, type the noted byte back, Enter, `.`.
+
+Copied from `tests/transcripts/breakpoint.txt` (F7 over the `RET` of the program above):
+
+```
+> :0F030000215644E5F1010D0B113412218100C982
+> :01030E00F7F7
+> G 0300
+BRK 030E
+> R
+A=44 F=56 BC=0B0D DE=1234 HL=0081
+```
+
+A breakpoint is for debugging only: a program still ends with `RET` (4.1). In the emulator the
+debugger (8.1) does more.
 
 ### 8.3 Port traces: emulator against board
 
 Both write the ARCHITECTURE 7.3 format: `t FILE` in the debugger, `pi8080d --trace FILE` on the Pi.
 Run the same ROM and input on both and diff them. The filter that makes them comparable is in
-ARCHITECTURE 7.4 (Port trace).
+ARCHITECTURE 7.4 (Port trace); it drops the empty console polls (`IN 02 02`) that `N` and `Q`
+interleave with their BUSY status reads, so a long `N` or `Q` makes a long trace.
 
 ---
 
@@ -325,6 +358,8 @@ What each message means: MONITOR_SPEC 5. What to do:
 | `No storage mounted` | `X NAME` |
 | `Storage error` | Check the Pi's disk, then `X NAME` again |
 | `Service error` | `T`: wait for NTP. `Q`: check the key (PI_DAEMON 11). Otherwise `journalctl -u pi8080d` |
+| `Aborted` | Esc (or an arrow key) during `N` or `Q`. Run it again; fetch a long or binary body with `> FILE` |
+| `BRK aaaa` | The program reached an F7 you planted at aaaa (8.2). `R`, then put the byte back: `E aaaa`, the byte, Enter, `.` |
 | `Address out of range` on a HEX line | Move the program into the user area; on the RAM test build, `G F000` first |
 | `Checksum error`, `Bad record` | Paste that line again |
 

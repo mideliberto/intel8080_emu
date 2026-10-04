@@ -4,7 +4,7 @@
 ; docs/DEVICE_SPECS.md (ports).
 ;
 ; Memory map (ARCHITECTURE 1):
-;   0000-007F  unused, not initialized
+;   0000-007F  unused, not initialized; G writes the RST 6 vector at 0030
 ;   0080-00FF  monitor workspace (labels below)
 ;   0100-EEFF  user area
 ;   EF00-EFFF  monitor stack (SP starts at F000)
@@ -70,6 +70,9 @@ LF              EQU     0AH
 BS              EQU     08H
 SPACE           EQU     20H
 DEL             EQU     7FH
+ESC             EQU     1BH
+
+BRK_VEC         EQU     0030H       ; RST 6 vector, written by G (MONITOR_SPEC 8.1)
 
 ; ============================================
 ; WORKSPACE (RAM at 0x0080-0x00FF, ARCHITECTURE 1.1)
@@ -87,7 +90,7 @@ SEARCH_PATTERN: DS      8           ; search pattern
 SEARCH_LENGTH:  DS      1           ; search pattern length
 SEARCH_END:     DS      2           ; search end address
 STOR_ADDR:      DS      3           ; storage address (lo, mid, hi)
-REGS:           DS      8           ; saved at a G return: L H E D C B F A
+REGS:           DS      8           ; saved at a G return or RST 6 break: L H E D C B F A
                 DS      14          ; free
 
 LINE_LENGTH     EQU     80          ; LINE_BUFFER size
@@ -426,7 +429,8 @@ SKIP_SPACES:
 ;            character other than a hex digit before the space or NUL that
 ;            must end it. HL is somewhere in the token.
 ; Callers of a required argument test only CY. Callers of an optional one
-; test Z (absent) first, then CY (invalid): present-invalid is never absent.
+; test Z (absent) first, then CY (invalid), or CY first, then Z (CMD_GO):
+; valid is CY=0 Z=0, and present-invalid is never absent.
 ; Trashes: A, B, C, flags; READ_HEX_ADDR24 also DE
 READ_HEX_ADDR24:
         MVI     B,7                 ; 6 digits allowed
@@ -570,6 +574,8 @@ RANGE:
 ; MAILBOX CLIENT (DEVICE_SPECS 8 reference client, MONITOR_SPEC 9)
 ; Used by T, A, U, N and Q. The caller sends with MB_SEND (and MB_PUT, MB_HEX),
 ; executes (OUT 11 <- 01), then calls MB_GET until it returns done or failed.
+; T, N and Q wait out busy themselves (CT_GET) and enter at MB_GOT, so the
+; Esc check (MB_KEY) runs only for them.
 ; ============================================
 
 ; MB_SEND - Clear the mailbox (the resync), then append a NUL-terminated string
@@ -609,17 +615,43 @@ MBN_DIGIT:
         OUT     MAILBOX_DATA
         RET
 
+; MB_KEY - Esc check for a running N or Q request (MONITOR_SPEC 6.18, 6.19).
+; Reads every console byte waiting. Esc: reads the rest that waits, clears the
+; mailbox (aborts the request), prints Aborted and enters WARM; does not return.
+; Every other byte is discarded. Returns when no byte waits.
+; Trashes: A, flags
+MB_KEY:
+        IN      CONSOLE_STATUS
+        RRC                         ; bit 0 (a byte waits) -> CY
+        RNC                         ; nothing waiting
+        IN      CONSOLE_DATA_IN
+        CPI     ESC
+        JNZ     MB_KEY              ; any other byte: discarded, look again
+MK_ESC:
+        IN      CONSOLE_STATUS      ; Esc: discard the rest that waits
+        RRC
+        JNC     MK_ABORT
+        IN      CONSOLE_DATA_IN
+        JMP     MK_ESC
+MK_ABORT:
+        MVI     A,02H
+        OUT     MAILBOX_CTRL        ; clear: aborts the request
+        LXI     H,MSG_ABORTED
+        JMP     PRINT_WARM
+
 ; MB_GET - Wait for the next result after execute. Polls status: 01 (busy)
 ; polls again. Three outcomes; callers test CY before Z:
 ;   byte:   CY=0, A = the next response byte (Z undefined). Status was 02.
 ;   done:   CY=1 Z=1. Status 03.
 ;   failed: CY=1 Z=0, A = the status: 00 (after execute: the Pi service
 ;           restarted) or 80-FF. 04-7F is never returned.
+; MB_GOT - The same, entered with A = a status already read and not 01.
 ; Trashes: A, flags
 MB_GET:
         IN      MAILBOX_STATUS
         CPI     01H
         JZ      MB_GET              ; 01 busy
+MB_GOT:
         CPI     02H
         JNZ     MB_END
         IN      MAILBOX_RESPONSE    ; 02 avail (CY=0 from the CPI)
@@ -934,19 +966,21 @@ CF_LOOP:
         JNZ     CF_LOOP
         JMP     WARM
 
-; CMD_GO - G [addr]. Bare G runs 0100. Pushes G_RETURN, so the program can
-; return to the prompt with RET (MONITOR_SPEC 8).
+; CMD_GO - G [addr]. Bare G runs 0100. Writes JMP BRK_ENTRY at 0030 (MONITOR_SPEC 8.1)
+; and pushes G_RETURN, so the program can return to the prompt with RET (MONITOR_SPEC 8).
 CMD_GO:
         CALL    READ_HEX_WORD       ; DE = address
-        JZ      CG_DEFAULT
-        JC      ERR_ADDR
-        XCHG                        ; HL = address
-        JMP     CG_RUN
-CG_DEFAULT:
-        LXI     H,0100H
+        JNC     CG_RUN
+        JNZ     ERR_ADDR
+        LXI     D,0100H             ; bare G
 CG_RUN:
-        LXI     D,G_RETURN
-        PUSH    D                   ; SP = EFFE, (EFFE) = G_RETURN
+        MVI     A,0C3H              ; JMP BRK_ENTRY at 0030 (MONITOR_SPEC 8.1)
+        STA     BRK_VEC
+        LXI     H,BRK_ENTRY
+        SHLD    BRK_VEC+1
+        LXI     H,G_RETURN
+        PUSH    H                   ; SP = EFFE, (EFFE) = G_RETURN
+        XCHG
         PCHL
 
 ; G_RETURN - A program started by G returns here with RET (MONITOR_SPEC 8).
@@ -959,6 +993,28 @@ G_RETURN:
         PUSH    B                   ; REGS+5 = B, REGS+4 = C
         PUSH    D                   ; REGS+3 = D, REGS+2 = E
         PUSH    H                   ; REGS+1 = H, REGS+0 = L
+        JMP     WARM
+
+; BRK_ENTRY - RST 6 lands here through the JMP that G writes at 0030 (MONITOR_SPEC 8.1).
+; Saves A, F, BC, DE, HL in REGS as G_RETURN does, prints BRK and the address of the
+; RST 6, then enters WARM. Nothing before PUSH PSW touches the flags. SP points into
+; REGS between the LXI SPs: an interrupt source needs a DI first (MONITOR_SPEC 8).
+; The program's stack loses the two bytes RST pushed.
+BRK_ENTRY:
+        SHLD    REGS                ; REGS+0 = L, REGS+1 = H
+        POP     H                   ; HL = break address + 1
+        LXI     SP,REGS+8
+        PUSH    PSW                 ; REGS+7 = A, REGS+6 = F
+        PUSH    B                   ; REGS+5 = B, REGS+4 = C
+        PUSH    D                   ; REGS+3 = D, REGS+2 = E
+        LXI     SP,STACK_TOP        ; a CALL here would overwrite REGS+0/1
+        XCHG
+        DCX     D                   ; DE = address of the RST 6
+        LXI     H,MSG_BRK
+        CALL    PRINT_STRING        ; preserves DE
+        XCHG
+        CALL    PRINT_HEX_WORD
+        CALL    PRINT_CRLF
         JMP     WARM
 
 ; CMD_REGS - R. Prints MSG_REGS, each '@' replaced by the next saved byte,
@@ -1171,7 +1227,8 @@ CS_NEXT:
 ; CMD_TIME - T (arguments ignored, MONITOR_SPEC 6.15). Mailbox TIME: each
 ; response byte is printed as it arrives, an LF as CR LF; done prints CR LF; a
 ; failure prints Service error, after any bytes already printed. N and Q share
-; the loop from CT_EXEC.
+; the loop from CT_EXEC. Esc (MB_KEY) is checked on each busy pass and at each
+; LF, before it prints; TIME is never busy and has no LF, so T never checks.
 CMD_TIME:
         LXI     H,STR_TIME
         CALL    MB_SEND             ; clear, "TIME"
@@ -1179,16 +1236,23 @@ CT_EXEC:
         MVI     A,01H
         OUT     MAILBOX_CTRL        ; execute
 CT_GET:
-        CALL    MB_GET
+        IN      MAILBOX_STATUS      ; the busy wait is CT_GET's own:
+        CPI     01H                 ; A and U never reach MB_KEY
+        JZ      CT_BUSY
+        CALL    MB_GOT
         JC      CT_END
         CPI     LF                  ; LF prints as CR LF
         JNZ     CT_OUT
+        CALL    MB_KEY              ; once per line: Esc stops a fast stream
         MVI     A,CR
         CALL    CONOUT
         MVI     A,LF
 CT_OUT:
         CALL    CONOUT
         JMP     CT_GET
+CT_BUSY:
+        CALL    MB_KEY              ; 01 busy: Esc aborts (not on the
+        JMP     CT_GET              ; path from CT_EXEC: T never checks)
 CT_END:
         JNZ     ERR_SERVICE
         CALL    PRINT_CRLF
@@ -1608,6 +1672,8 @@ MSG_HELP:
 
 MSG_REGS:
         DB      "A=@ F=@ BC=@@ DE=@@ HL=@@",CR,LF,0
+MSG_BRK:
+        DB      "BRK ",0
 MSG_UNKNOWN:
         DB      "Unknown command. Type ? for help.",CR,LF,0
 MSG_BAD_ADDR:
@@ -1648,6 +1714,8 @@ MSG_SERVICE:
         DB      "Service error",CR,LF,0
 MSG_BAD_INSN:
         DB      "Invalid instruction",CR,LF,0
+MSG_ABORTED:
+        DB      "Aborted",CR,LF,0
 
 ; Mailbox command words (MB_SEND)
 STR_TIME:

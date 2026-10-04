@@ -1260,7 +1260,7 @@ fn the_worker_gets_an_empty_environment() {
     // GET client: "run ... with an empty environment". The emulator binary runs with proxy
     // variables pointing at a closed port; N still reaches H, so curl never saw them.
     // A subprocess, so this test process's environment is untouched.
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::process::{Command, Stdio};
     let h = http::start();
     let proxy = format!("http://127.0.0.1:{}", closed_port());
@@ -1278,12 +1278,25 @@ fn the_worker_gets_an_empty_environment() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    // N, then a HLT at 0100 to end the piped run.
-    let input = format!("N {}\rF 0100 0100 76\rG 0100\r", h.url("/hello"));
-    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
-    let out = child.wait_with_output().unwrap();
-    let out = String::from_utf8_lossy(&out.stdout);
-    assert!(out.contains(&format!("N {}\r\nHello\r\r\n\r\n> ", h.url("/hello"))), "{:?}", out);
+    // N, then a HLT at 0100 to end the piped run. Typed only after N's prompt: input that
+    // arrives while N's request runs is discarded (MONITOR_SPEC 2).
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let echo = format!("N {}\r\n", h.url("/hello"));
+    stdin.write_all(&echo.as_bytes()[..echo.len() - 1]).unwrap();
+    let mut out = Vec::new();
+    let mut buf = [0; 256];
+    while !String::from_utf8_lossy(&out).split_once(&echo).is_some_and(|(_, rest)| rest.contains("> ")) {
+        let n = stdout.read(&mut buf).unwrap();
+        assert!(n > 0, "{:?}", String::from_utf8_lossy(&out));
+        out.extend_from_slice(&buf[..n]);
+    }
+    stdin.write_all(b"F 0100 0100 76\rG 0100\r").unwrap();
+    drop(stdin);
+    stdout.read_to_end(&mut out).unwrap();
+    child.wait().unwrap();
+    let out = String::from_utf8_lossy(&out);
+    assert!(out.contains(&format!("{}Hello\r\r\n\r\n> ", echo)), "{:?}", out);
 }
 
 #[test]
