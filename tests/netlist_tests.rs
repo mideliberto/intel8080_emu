@@ -966,8 +966,8 @@ fn circuits(ck: &mut Ck) {
     ck.nc("J4.CH15");
     for clk in ["U2.PHI1", "U2.PHI2", "U3.INTA_N"] {
         let Some(n) = ck.net(clk) else { continue };
-        if ck.nets.get(&n).is_some_and(|v| v.iter().any(|p| p.0.starts_with('J'))) {
-            ck.err(format!("the net of {clk} ({n}) is on a header"));
+        if ck.nets.get(&n).is_some_and(|v| v.iter().any(|p| p.0.starts_with('J') || p.0.starts_with("TP"))) {
+            ck.err(format!("the net of {clk} ({n}) is on a header or test point"));
         }
     }
 
@@ -1022,14 +1022,13 @@ fn circuits(ck: &mut Ck) {
         }
     }
 
-    // CTP: test points on their rails and probe nets (HARDWARE_BUILD 2, 2.3, 3 steps 0, 1, 4).
+    // CTP: test points on their rails and probe nets (HARDWARE_BUILD 2, 2.3, 3 steps 0, 4).
+    // None on phi1/phi2: C612.
     ck.id = "CTP";
     for (tp, rail) in [("TP1.1", "GND"), ("TP2.1", "GND"), ("TP3.1", "+5V"), ("TP4.1", "+12V"), ("TP5.1", "-5V"), ("TP6.1", "+3V3_PI")] {
         ck.on(tp, rail);
     }
-    ck.same(&["TP7.1", "U2.PHI1"]);
-    ck.same(&["TP8.1", "U2.PHI2"]);
-    ck.same(&["TP9.1", "U8.2PRE_N"]);
+    ck.same(&["TP7.1", "U8.2PRE_N"]);
 }
 
 // ---------------------------------------------------------------- KiCad files
@@ -1472,9 +1471,10 @@ fn checker_catches_mutations() {
         ("C612", &[("15 CH14 PHI2_TTL", "15 CH14 PHI2")]),
         ("C612", &[("1 CH0 LAD0", "1 CH0 D0")]),
         ("C612", &[("9 CH8 ACK\n10 CH9 LATCH", "9 CH8 LATCH\n10 CH9 ACK")]),
+        ("C612", &[("part H4 HOLE M3", "part H4 HOLE M3\npart TP99 TP PHI1\n1 ~ PHI1")]),
         ("C613", &[("part H4 HOLE M3", "part H4 HOLE M3\npart R99 R 10k\n1 ~ D3\n2 ~ +5V")]),
         ("CVAL", &[("part RN6 RN_DIP16 330R", "part RN6 RN_DIP16 33k")]),
-        ("CTP", &[("part TP7 TP PHI1\n1 ~ PHI1", "part TP7 TP PHI1\n1 ~ PHI2"), ("part TP8 TP PHI2\n1 ~ PHI2", "part TP8 TP PHI2\n1 ~ PHI1")]),
+        ("CTP", &[("part TP7 TP WSET\n1 ~ WSET_N", "part TP7 TP WSET\n1 ~ RDYIN")]),
     ];
     assert!(check(NETLIST).is_empty(), "the unmutated board must be clean first");
     let norm = |l: &str| l.split('#').next().unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
