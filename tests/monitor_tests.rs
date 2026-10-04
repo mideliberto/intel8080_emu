@@ -1726,6 +1726,11 @@ fn tictac_never_loses_and_plays_optimal_moves() {
     assert!(games > 9 * 7 && won > 0, "{} games, {} won", games, won);
 }
 
+#[test]
+fn example_ed() {
+    boot().play("example_ed");
+}
+
 /// A booted monitor with examples/burn.hex pasted and `image` at 1000, its default source.
 fn burner(image: &[u8]) -> Mon {
     let mut m = boot();
@@ -2025,4 +2030,258 @@ fn examples_match_their_hex() {
         n += 1;
     }
     assert!(n >= 2, "{} examples", n);
+}
+
+
+// ---------- examples/ed.asm against a model ----------
+
+/// examples/ed.asm's buffer, BUF (0500) to LIMIT (D000), from its header.
+const ED_CAP: usize = 0xD000 - 0x0500;
+
+/// A model of examples/ed.asm, written from its header comment and DEVICE_SPECS 6 and 7,
+/// not from the program's output: what one session prints from the first "*" to the
+/// echo of q, and the storage directory as the device leaves it.
+#[derive(Default)]
+struct EdModel {
+    text: Vec<u8>,
+    prev: u8,
+    files: std::collections::BTreeMap<String, Vec<u8>>,
+    out: Vec<u8>,
+}
+
+impl EdModel {
+    /// A line as the program reads it (MONITOR_SPEC 2, but the LF right after a CR is skipped).
+    fn line(&mut self, input: &mut impl Iterator<Item = u8>) -> Vec<u8> {
+        let mut line = Vec::new();
+        loop {
+            let b = input.next().expect("the input ends before q");
+            let prev = std::mem::replace(&mut self.prev, b);
+            match b {
+                b'\n' if prev == b'\r' => {}
+                b'\r' | b'\n' => {
+                    self.out.extend(b"\r\n");
+                    return line;
+                }
+                0x08 | 0x7F => {
+                    if line.pop().is_some() {
+                        self.out.extend(b"\x08 \x08");
+                    }
+                }
+                0x00..=0x1F => {}
+                _ if line.len() < 79 => {
+                    line.push(b);
+                    self.out.push(b);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// DEVICE_SPECS 7 mount: fold, validate, create a missing file empty.
+    fn mount(&mut self, name: &[u8]) -> Option<String> {
+        let name = String::from_utf8(name.to_ascii_uppercase()).ok()?;
+        let valid = (1..=12).contains(&name.len()) && name != "." && name != ".."
+            && name.bytes().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || b".-_".contains(&c));
+        if valid {
+            self.files.entry(name.clone()).or_default();
+        }
+        valid.then_some(name)
+    }
+
+    /// Where line n starts; the end of the text for the last line + 1.
+    fn start_of(&self, n: usize) -> Option<usize> {
+        let mut at = 0;
+        for _ in 1..n {
+            if at == self.text.len() {
+                return None;
+            }
+            at += self.text[at..].iter().position(|&b| b == b'\n').unwrap() + 1;
+        }
+        (n > 0).then_some(at)
+    }
+
+    fn run(&mut self, input: &[u8]) {
+        let mut input = input.iter().copied();
+        self.text.clear();
+        self.prev = b'\r';
+        loop {
+            self.out.push(b'*');
+            let line = self.line(&mut input);
+            let skip = |s: &[u8]| s.iter().position(|&c| c != b' ').unwrap_or(s.len());
+            let s = &line[skip(&line)..];
+            let Some(&c) = s.first() else { continue };
+            let arg = &s[1 + skip(&s[1..])..];
+            let num = || -> Option<usize> {
+                let digits = arg.iter().take_while(|c| c.is_ascii_digit()).count();
+                let n: usize = std::str::from_utf8(&arg[..digits]).unwrap().parse().ok()?;
+                (digits > 0 && n <= 0xFFFF && skip(&arg[digits..]) == arg.len() - digits).then_some(n)
+            };
+            let done = match c | 0x20 {
+                b'q' if arg.is_empty() => return,
+                b'a' if arg.is_empty() => {
+                    self.input_mode(self.text.len(), &mut input);
+                    Some(())
+                }
+                b'i' => num().and_then(|n| self.start_of(n)).map(|at| self.input_mode(at, &mut input)),
+                b'd' => num().and_then(|n| self.start_of(n)).filter(|&at| at < self.text.len()).map(|at| {
+                    let end = at + self.text[at..].iter().position(|&b| b == b'\n').unwrap() + 1;
+                    self.text.drain(at..end);
+                }),
+                b'p' if arg.is_empty() => {
+                    for (i, l) in self.text.split_inclusive(|&b| b == b'\n').enumerate() {
+                        self.out.extend(format!("{} ", i + 1).bytes());
+                        self.out.extend(&l[..l.len() - 1]);
+                        self.out.extend(b"\r\n");
+                    }
+                    Some(())
+                }
+                b'c' if arg.is_empty() => {
+                    self.text.clear();
+                    Some(())
+                }
+                b'w' => self.mount(arg).map(|name| {
+                    // From address 0, the text and the 1A marker; a file is never shortened.
+                    let bytes = [&self.text[..], &[0x1A]].concat();
+                    let file = self.files.get_mut(&name).unwrap();
+                    if file.len() < bytes.len() {
+                        file.resize(bytes.len(), 0);
+                    }
+                    file[..bytes.len()].copy_from_slice(&bytes);
+                    self.out.extend(format!("{}\r\n", self.text.len()).bytes());
+                }),
+                b'r' => self.mount(arg).and_then(|name| {
+                    let start = self.text.len();
+                    let mut kept = start;
+                    for &b in &self.files[&name] {
+                        if self.text.len() + 1 >= ED_CAP {
+                            self.text.truncate(kept);
+                            return None;
+                        }
+                        if b == 0x1A {
+                            break;
+                        }
+                        self.text.push(b);
+                        if b == b'\n' {
+                            kept = self.text.len();
+                        }
+                    }
+                    if self.text.len() != kept {
+                        self.text.push(b'\n');
+                    }
+                    let added = self.text.len() - start;
+                    self.out.extend(format!("{}\r\n", added).bytes());
+                    (added > 0).then_some(())
+                }),
+                _ => None,
+            };
+            if done.is_none() {
+                // r of nothing printed its 0: take it back, the program prints only "?".
+                if self.out.ends_with(b"\n0\r\n") {
+                    self.out.truncate(self.out.len() - 3);
+                }
+                self.out.extend(b"?\r\n");
+            }
+        }
+    }
+
+    fn input_mode(&mut self, mut at: usize, input: &mut impl Iterator<Item = u8>) {
+        loop {
+            let mut line = self.line(input);
+            if line == b"." {
+                return;
+            }
+            if self.text.len() + line.len() + 1 > ED_CAP {
+                self.out.extend(b"?\r\n");
+                continue;
+            }
+            line.push(b'\n');
+            self.text.splice(at..at, line.iter().copied());
+            at += line.len();
+        }
+    }
+}
+
+/// A booted monitor with examples/ed.hex pasted.
+fn ed() -> Mon {
+    let mut m = boot();
+    for record in std::fs::read_to_string("examples/ed.hex").unwrap().lines() {
+        m.run(record);
+    }
+    m
+}
+
+impl Mon {
+    /// One editor session, G 0100 to q: it must print what the model prints, and leave the
+    /// storage directory as the model does.
+    fn ed_session(&mut self, model: &mut EdModel, input: &[u8]) {
+        model.out.clear();
+        model.run(input);
+        let got = self.step(&[b"G 0100\r", input].concat()).unwrap_or_else(|e| panic!("{}", e));
+        assert_eq!(show(&got), show(&[&b"G 0100\r\n"[..], &model.out].concat()));
+        let disk: std::collections::BTreeMap<String, Vec<u8>> = std::fs::read_dir(self.dir.path()).unwrap()
+            .map(|e| e.unwrap())
+            .map(|e| (e.file_name().into_string().unwrap(), std::fs::read(e.path()).unwrap()))
+            .collect();
+        assert_eq!(disk, model.files);
+    }
+}
+
+#[test]
+fn ed_matches_its_model() {
+    // Line input, every command, every error (65537 wraps to line 1 without the overflow
+    // check), names the device folds or refuses, a write over a longer file, and a host file
+    // with CR LF, a blank line, a NUL and no final LF.
+    let mut m = ed();
+    let mut model = EdModel::default();
+    let long = "x".repeat(100);
+    let session = format!(concat!(
+        "a\rone\rtwo\x08\x08o\rthree\r{}\r\ttab\x1Aignored\rfour\r\nfive\nsix\r\r\nét\u{FF}\r.\r\n",
+        "P\r  p  \ri 1\rzero\r.\ri 007\rseven\r.\ri 12\rlast\r.\ri 15\r",
+        "d 0\rd 65535\rd 65536\rd 65537\rd 99999\rd 1x\rd\rd 1 2\rd 2\rd 13\rd 12\rp junk\r\r   \rz\r\x08\rp\r",
+        "w lower.txt\rw\rw A.B.C \rw ABCDEFGHIJKLM\rw ..\rw GOOD-1_x.Y\r",
+        "c\rr LOWER.TXT\rr lower.txt\rp\rr EMPTY\rd 3\rw LOWER.TXT\rc\rr LOWER.TXT\rp\rq x\rq\r"), long);
+    m.ed_session(&mut model, session.as_bytes());
+    std::fs::write(m.dir.path().join("HOST.TXT"), b"alpha\r\nbeta\n\n\x00gamma").unwrap();
+    model.files.insert("HOST.TXT".into(), b"alpha\r\nbeta\n\n\x00gamma".to_vec());
+    // A stale name character (O 0D) must not reach the mount: the resync query clears it.
+    m.run("O 0D 41");
+    m.ed_session(&mut model, b"r host.txt\rp\ra\rmore\r.\rw HOST.TXT\rq\r");
+}
+
+#[test]
+fn ed_fills_its_buffer() {
+    // Typed lines until the buffer is full (each further line prints "?"), block moves of
+    // the whole buffer (d 1, i 1), then r of a file larger than the buffer: the lines that
+    // fit, then "?". Nothing at or above LIMIT (D000) is written.
+    let mut m = ed();
+    let mut model = EdModel::default();
+    let mut s = b"a\r".to_vec();
+    for i in 0..700 {
+        s.extend(format!("{:03} {}", i, "abcdefghij".repeat(8))[..79].bytes().chain(*b"\r"));
+    }
+    s.extend(b".\rw BIG\rq\r");
+    let above = m.mem(0xD000, 0x1F00);
+    m.ed_session(&mut model, &s);
+    // 80-byte lines: 649 fit in 0500-CFFF (51968 bytes), the other 51 print "?".
+    assert_eq!(model.out.windows(4).filter(|w| w == b"\n?\r\n").count(), 51);
+    assert!(model.out.ends_with(format!("*w BIG\r\n{}\r\n*q\r\n", 649 * 80).as_bytes()));
+    // One step has BUDGET cycles: the moves of the whole buffer get a session of their own.
+    // One line of 80 out, one of 4 in, one of 80 out.
+    m.ed_session(&mut model, b"r BIG\rd 1\ri 1\rnew\r.\rd 649\rw BIG\rq\r");
+    assert!(model.out.ends_with(format!("*w BIG\r\n{}\r\n*q\r\n", 649 * 80 - 80 + 4 - 80).as_bytes()));
+    let big: Vec<u8> = (0..9000).flat_map(|i| format!("line {}\n", i).into_bytes()).collect();
+    std::fs::write(m.dir.path().join("BIGR"), &big).unwrap();
+    model.files.insert("BIGR".into(), big);
+    m.ed_session(&mut model, b"r BIGR\rr BIG\rw OUT\rq\r");
+    // The edges: ED_CAP bytes ending in LF do not fit (r keeps room for a closing LF), and
+    // ED_CAP - 1 bytes with no final LF fill the buffer exactly, the LF r adds at CFFF.
+    let exact: Vec<u8> = (0..ED_CAP).map(|i| if i % 80 == 79 || i == ED_CAP - 1 { b'\n' } else { b'e' }).collect();
+    let edge: Vec<u8> = (0..ED_CAP - 1).map(|i| if i % 80 == 79 { b'\n' } else { b'g' }).collect();
+    for (name, file) in [("EXACT", exact), ("EDGE", edge)] {
+        std::fs::write(m.dir.path().join(name), &file).unwrap();
+        model.files.insert(name.into(), file);
+    }
+    m.ed_session(&mut model, b"r EXACT\rc\rr EDGE\rw OUT\rq\r");
+    assert!(model.out.ends_with(format!("*r EXACT\r\n?\r\n*c\r\n*r EDGE\r\n{}\r\n*w OUT\r\n{0}\r\n*q\r\n", ED_CAP).as_bytes()));
+    assert!(m.mem(0xD000, 0x1F00) == above, "ed wrote at or above D000");
 }
