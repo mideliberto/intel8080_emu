@@ -27,9 +27,9 @@ Monitor commands. Numbers are hex with no suffix or prefix.
   I port            read a port
   L stor mem [cnt]  load from storage
   M src dst cnt     move memory
-  N url [> file]    fetch a URL to the screen, or to a storage file
+  N url [> file]    fetch a URL to screen or storage file; Esc stops it
   O port value      write a port
-  Q text            ask Claude (this)
+  Q text            ask Claude (this); Esc stops it
   R                 registers at the last G return
   S start end pat   search memory
   T                 show the time

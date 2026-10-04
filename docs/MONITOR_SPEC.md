@@ -68,9 +68,9 @@ Requirements:
 - `<DEL>` MUST behave exactly like `<BS>`.
 - Characters after the 79th are discarded silently. There is no bell and no overflow message, and the truncated line is processed as it stands.
 - READ_LINE does not fold case. Case folding happens per field (Command Dispatch, Argument Grammar).
-- **CR and LF.** `<CR>` and `<LF>` each end a line. READ_LINE keeps no state between lines, so a `<CR><LF>` pair produces the line plus one empty line, and the empty line re-prompts (Command Dispatch). A pasted file with CRLF line ends therefore shows an extra `> ` after each line.
-- **Host-reserved keys.** In the emulator the host consumes Ctrl-C (quit) and Ctrl-E (debugger hotkey), maps Enter to `<CR>`, and maps the other keys per the key map in `ARCHITECTURE.md` (Host-Side Conveniences). On hardware the Pi delivers every byte, and READ_LINE and E ignore 03h and 05h like any other control byte. No monitor command can be aborted from the keyboard, `N` and `Q` included: a hung `GET` or `ASK` ends by the device's time limits (`DEVICE_SPECS.md` 8, GET and ASK). Reset is the only way out of a running command or a `G` program.
-- READ_LINE MUST NOT depend on input timing. Nothing paces the sender: the console is a Pi FIFO behind READY (`DEVICE_SPECS.md`, Console), so a paste of any length arrives intact.
+- **CR and LF.** `<CR>` and `<LF>` each end a line. READ_LINE keeps no state between lines, so a `<CR><LF>` pair produces the line plus one empty line, and the empty line re-prompts (Command Dispatch). A pasted file with CRLF line ends therefore shows an extra `> ` after each line. After `N` or `Q`, the Esc check (6.18) can eat the `<LF>` of a `<CR><LF>` terminal, so that extra `> ` may not appear; whether it does depends on timing.
+- **Host-reserved keys.** In the emulator the host consumes Ctrl-C (quit) and Ctrl-E (debugger hotkey), maps Enter to `<CR>`, and maps the other keys per the key map in `ARCHITECTURE.md` (Host-Side Conveniences). On hardware the Pi delivers every byte, and READ_LINE and E ignore 03h and 05h like any other control byte. Esc (1Bh) aborts `N` and `Q` while their request runs (6.18, 6.19). Nothing else is aborted from the keyboard: reset is the only way out of any other running command or a `G` program.
+- READ_LINE MUST NOT depend on input timing. Nothing paces the sender: the console is a Pi FIFO behind READY (`DEVICE_SPECS.md`, Console), so a paste of any length arrives intact. **Exception:** type-ahead that arrives while `N` or `Q` has a request running is discarded (6.18, Esc), so a paste or script MUST wait for the prompt after an `N` or `Q` before sending more.
 
 ---
 
@@ -152,9 +152,10 @@ These are the exact strings. Each is printed with a trailing `<CR><LF>`.
 | `Address out of range` | HEX: a type 00 record would write outside 0100-EEFF |
 | `Service error` | T, U, N, Q: mailbox status 00 after execute, or 80-FF (for N and Q, 82 too: a bad URL or file name, or an empty or invalid question). U: also DONE before the length byte. A: status 00 after execute, or 80-FF except 82; A then prompts the same address again |
 | `Invalid instruction` | A (Phase 7): mailbox status 82, so the line does not assemble; A prompts the same address again |
+| `Aborted` | N, Q: Esc while the request runs (6.18). Bytes already printed stay on their line, with no `<CR><LF>` before the message, as `Service error` |
 
 - The ROM MUST NOT contain `File not found`. Mount creates missing files, so that message can never be true.
-- Strings new since v0.3: `Invalid range`, `Mount failed`, `Storage error`, the five HEX errors, `Service error` (Phase 6) and `Invalid instruction` (Phase 7). The HEX EOF record reuses `Loaded`.
+- Strings new since v0.3: `Invalid range`, `Mount failed`, `Storage error`, the five HEX errors, `Service error` (Phase 6), `Invalid instruction` (Phase 7) and `Aborted` (Phase 12). The HEX EOF record reuses `Loaded`.
 
 ---
 
@@ -370,6 +371,7 @@ Commands:
 - Arguments are ignored (4.1). T sends exactly `TIME`.
 - The successful output is one line, `YYYY-MM-DD HH:MM:SS` (the Pi's local time), followed by `<CR><LF>`.
 - T uses ports 10h-13h.
+- T makes no Esc check (6.18): TIME's response is never BUSY and has no LF, so the shared loop never checks for T, and type-ahead after T is kept.
 - T transcripts match the shape `NNNN-NN-NN NN:NN:NN` (N = decimal digit), never a value, so they run unchanged on hardware against the Pi's clock. Device-level and emulator tests may inject a clock (`DEVICE_SPECS.md`, TIME clock) to check exact values, padding and the clock-not-set error.
 
 ### 6.16 A: Assemble
@@ -497,7 +499,12 @@ Fetches `url` through the mailbox `GET` (`DEVICE_SPECS.md` 8, GET) and prints th
 - **Stream form** `N url`: the body, then `<CR><LF>`. Bytes 80h-FFh and control bytes go to the terminal unchanged. A UTF-8 page shows correctly on a UTF-8 terminal; a binary file shows as garbage, so fetch binaries with `> file`.
 - **File form** `N url > file`: prints the 6-digit length (`0012AB`) and `<CR><LF>`. Then `X file` mounts it and `L` loads it. If `file` is already mounted, mount it again to see the new contents (`DEVICE_SPECS.md` 8, GET).
 - **Length:** READ_LINE stores 79 characters, so `url`, ` > ` and `file` share the 77 after `N `. A program that drives the mailbox itself has 124 bytes.
-- **No keyboard abort.** A request that cannot connect or stalls ends by the device's time limits (`DEVICE_SPECS.md` 8, GET, Time limits) and prints `Service error`. A long body that keeps arriving prints until its end; reset stops it (in the emulator, quit). At 155 cycles a byte (206 for an LF; measured in the emulator, before READY wait states) the monitor prints about 13 KB/s at 2.048 MHz, so a 700 KB book takes about a minute: fetch it to a file.
+- **Time limits.** A request that cannot connect or stalls ends by the device's time limits (`DEVICE_SPECS.md` 8, GET, Time limits) and prints `Service error`. At 155 cycles a byte (248 for an LF, which includes the Esc check; counted in the emulator, before READY wait states) the monitor prints about 13 KB/s at 2.048 MHz, so a 700 KB book takes about a minute: fetch it to a file.
+- **Esc aborts.** The shared loop (6.15) checks the keyboard in two places only: on every pass of its own BUSY wait, and at each response LF, before that LF prints. A check reads every byte waiting in the console FIFO (status first: an empty FIFO pops nothing). If any of them is Esc (1Bh), the ROM clears the mailbox (OUT 11h <- 02h), which aborts the request (`DEVICE_SPECS.md` 8, Abort), prints `Aborted` then `<CR><LF>`, and prompts. Every other byte is discarded. Bytes already printed stay on their line, with no `<CR><LF>` before the message (`abAborted`); the LF that saw the Esc does not print.
+  - **Stream form:** stopped while BUSY and at each LF. On the board a fast server keeps every status read at 02 (AVAIL), so only the LF check stops it; a body with no LF (binary, minified HTML or JSON) cannot be stopped in stream form: fetch it with `> file`. `Aborted` means the ROM stopped before it saw the request end; the body may already have been complete.
+  - **File form:** nothing prints while the request runs, so it is BUSY until its end, and every Esc in that time aborts. Whenever `Aborted` prints, `file` is untouched (the device removes its temporary file). An Esc typed after the request ends (during the length digits, which have no LF) is not seen; it is ignored at the next prompt (section 2) and `file` holds the new body.
+  - **Type-ahead is discarded** while the request runs (section 2, the exception). A key that sends an Esc-prefixed sequence (an arrow or function key, Alt-x) also aborts; any rest of the sequence that is not yet waiting reaches the next prompt.
+  - A, U and T never check: A and U do not use the shared loop, and T's response is never BUSY and has no LF.
 - The space after `N` is optional (section 3). `n` works. Tokens are not checked in the ROM, so section 4's rules do not apply. N has no argument errors and writes ports for every line.
 - N uses ports 10h-13h.
 
@@ -537,6 +544,14 @@ Phase 8 tests MUST cover every row. *ports* and *scripted* as in 6.17.1. *server
 | *scripted* [00]: `N x` | `Service error` | — |
 | *scripted* statuses [02 02 01 83], bytes [61 62]: `N x` | `abService error` | — |
 | *scripted* statuses [02 03], bytes [0A]: `N x` | an empty line, then an empty line (bytes 0D 0A 0D 0A) | — |
+| *scripted* statuses [01]: `N x` CR, then Esc, in one step | `Aborted` | after the execute only IN 12 01 reads, then OUT 11 02; no IN 13 |
+| *scripted* statuses [01 01 01 02 03], bytes [41]: `N x` CR, nothing more | `A` | 4 IN 01 in the step (the line's bytes): a check pops no byte when none waits |
+| *scripted* statuses [02], bytes `ab` 0A `cd` 0A then 00 forever: `N x` CR, then Esc | `abAborted` | — |
+| *scripted* statuses [02 02 02 02 02 02 03], bytes `a` 0A `b` 0A `c` 0A: `N x` CR `q`, and `N x` CR `H 1 1` CR | `a`, `b`, `c`, an empty line; one prompt, nothing else runs | console FIFO empty |
+| *scripted* statuses [01 02 02 02 02 02 03], bytes `HELLO`: `N x` CR LF | `HELLO`, one prompt (the BUSY check ate the LF) | — |
+| *scripted* statuses [02 02 02 03], bytes `12:`: `T` CR, then Esc | `12:`; the Esc is ignored at the prompt | — |
+| `T` CR `I 12` CR `Q` CR `I 12` CR in one step | the time, `03`, `Service error`, `82`: all four run | — |
+| *server:* `N http://H/hang` CR, then Esc, in one step; then `I 12` | `Aborted`, then `00` | the clear left the mailbox IDLE |
 | `T` (6.15 rows) | unchanged; `t_runs_the_reference_client` passes unchanged | — |
 | `?` | the help text with the `N` line | — |
 
@@ -553,7 +568,7 @@ Asks Claude one question through the mailbox `ASK` (`DEVICE_SPECS.md` 8, ASK) an
 
 - **Text:** READ_LINE stores 79 characters, so the question has 77 after `Q `. A program that drives the mailbox itself has 124. Case is kept. The space after `Q` is optional (section 3): `Qhello` asks `hello`, and `quit` asks `uit`.
 - **The answer** is plain ASCII in lines of at most 79 characters, wrapped by the Pi. Claude is told about this machine and these commands, and to write code as lines the `A` command accepts.
-- **No keyboard abort.** Q ends within 120 s, and within about 10 s when the Pi cannot connect.
+- **Time limits and Esc.** Q ends within 120 s, and within about 10 s when the Pi cannot connect. Esc aborts it, as N (6.18, Esc): while BUSY (connecting, the model thinking) and at each LF of the reply. `HelAborted`, or `Aborted` before the first byte. The clear closes the connection.
 - Each Q is independent: Claude does not see earlier questions.
 - Q keeps no state, writes no memory, and uses ports 10h-13h.
 
@@ -581,6 +596,8 @@ Phase 9 tests MUST cover every row. *ports* and *server* as in 6.18.1; *server* 
 | *server:* `Q hi`, reply `Hel`, then the connection closes | `HelService error` | — |
 | `Q`, `Q   `, `q` (`ask.txt`) | `Service error` (each) | mailbox ports written; no request |
 | `?` | the help text with the `Q` line | — |
+
+Q shares N's loop and Esc check from the execute on (it enters CMD_NET at `CN_SEND`), so the Esc rows of 6.18.1 cover Q.
 
 ### 6.20 R: Registers
 
@@ -752,7 +769,7 @@ The header comment above each routine in `rom/monitor.asm` is that routine's con
 - There is no public API and no jump table. User programs MUST NOT call ROM addresses, because they move between builds.
 - READ_HEX_WORD and READ_HEX_ADDR24 implement section 4, and READ_HEX_BYTE (a word whose value is at most FF) builds on READ_HEX_WORD. Their headers MUST state the error cases (no digits, too many digits, a token not ended by a space or NUL) and that they skip leading spaces on entry.
 - CMD_COMPARE relies on B surviving PRINT_ADDR, PRINT_HEX_BYTE, PRINT_SPACE, CONOUT and PRINT_CRLF.
-- MB_SEND, MB_PUT and MB_GET implement the `DEVICE_SPECS.md` reference client (Service Mailbox), which T, A, U, N and Q use. MB_GET's header MUST state its three outcomes (a byte, done, failed with the status in A) and that callers test CY before Z. CMD_NET's header MUST say that Q (CMD_ASK) enters it at `CN_SEND` with HL = its verb string and DE = the text.
+- MB_SEND, MB_PUT and MB_GET implement the `DEVICE_SPECS.md` reference client (Service Mailbox), which T, A, U, N and Q use. MB_GET's header MUST state its three outcomes (a byte, done, failed with the status in A) and that callers test CY before Z, and its second entry `MB_GOT` (A = a status already read and not 01), where the shared T/N/Q loop enters after its own BUSY wait. MB_KEY's header MUST state that it reads every waiting console byte, discards each that is not Esc, and on Esc clears the mailbox, prints `Aborted` and enters WARM without returning. CMD_NET's header MUST say that Q (CMD_ASK) enters it at `CN_SEND` with HL = its verb string and DE = the text.
 
 ---
 
@@ -769,7 +786,7 @@ Quitting the emulator (Ctrl-C) and the debugger (Ctrl-E) are host-side, not moni
 - Ports the monitor uses on its own: 00h-02h (console), 08h-0Ch (storage), 0Dh-0Fh (mount), 10h-13h (Service Mailbox: `T`, `A`, `U`, `N`, `Q`), and FEh (overlay off at boot). I and O can reach any port. The protocols are in `DEVICE_SPECS.md`.
 - The ROM does no console chip initialization. The console is a Pi FIFO device behind READY.
 - **CONOUT is `OUT 00h` followed by `RET`.** It MUST NOT poll TX-ready: status bit 1 always reads 1, and OUT 00 never waits on the terminal (`DEVICE_SPECS.md`, Console).
-- The only polling loops in the ROM wait for a person or a background service, never for a byte transfer: CONIN and E poll RX-ready (port 02h, bit 0), and MB_GET (T, A, U, N, Q) polls mailbox status (port 12h). Every other device access assumes an instant answer, which READY provides on hardware.
+- The only polling loops in the ROM wait for a person or a background service, never for a byte transfer: CONIN and E poll RX-ready (port 02h, bit 0); MB_GET (A, U) polls mailbox status (port 12h); and the shared T/N/Q loop (CT_GET) polls mailbox status itself, with an Esc check (port 02h, then 01h while bytes wait) on each BUSY pass. Every other device access assumes an instant answer, which READY provides on hardware.
 - The boot's first Pi-window access is the banner's first `OUT 00h`. If the Pi's device service is not running yet, that access waits under READY with no timeout (`DEVICE_SPECS.md`, READY Contract). No ROM code handles the stall.
 - The I and O commands run self-modified `IN` and `OUT` stubs in workspace RAM. That works on any 8080 and needs no special hardware.
 - `rom/monitor.bin` MUST be at most 4096 bytes and run at F000h.

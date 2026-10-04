@@ -1139,6 +1139,75 @@ fn q_without_a_question() {
     boot().play("ask");
 }
 
+// ---------- Esc (MONITOR_SPEC 6.18, 6.19) ----------
+//
+// ScriptedMailbox ignores the clear, so scripted rows assert the OUT 11 02 port event;
+// the real-mailbox row reads the IDLE state after it.
+
+/// One step of `input` on a scripted mailbox: the output, the monitor, and where the
+/// step's ports start.
+fn esc_step(statuses: &[u8], bytes: &[u8], input: &[u8]) -> (String, Mon, usize) {
+    let mut m = scripted(statuses, bytes);
+    let n = m.ports.len();
+    let out = show(&m.step(input).unwrap_or_else(|e| panic!("{}", e)));
+    (out, m, n)
+}
+
+#[test]
+fn esc_aborts_n_and_q_scripted() {
+    use Transfer::{In, Out};
+    // 6.18 Esc: checked on each busy pass; OUT 11h <- 02h (clear), then Aborted.
+    let (out, m, n) = esc_step(&[0x01], b"", b"N x\r\x1B");
+    assert_eq!(out, "N x\\r\\nAborted\\r\\n");
+    let mb = m.mailbox_ports(n);
+    let exec = mb.iter().position(|&t| t == Out(0x11, 0x01)).unwrap();
+    let after = &mb[exec + 1..];
+    assert_eq!(after.last(), Some(&Out(0x11, 0x02)), "{:?}", after);
+    assert!(after[..after.len() - 1].iter().all(|&t| t == In(0x12, 0x01)), "{:?}", after);
+    // Nothing typed: a check reads status first and pops no byte (4 IN 01: the line).
+    let (out, m, n) = esc_step(&[0x01, 0x01, 0x01, 0x02, 0x03], b"A", b"N x\r");
+    assert_eq!(out, "N x\\r\\nA\\r\\n");
+    assert_eq!(m.ports[n..].iter().filter(|t| matches!(t, In(0x01, _))).count(), 4);
+    // Checked at each LF, before it prints: the LF that saw the Esc does not print, and the
+    // message follows on the same line. The endless 00 after the body has no LF.
+    let (out, _, _) = esc_step(&[0x02], b"ab\ncd\n", b"N x\r\x1B");
+    assert_eq!(out, "N x\\r\\nabAborted\\r\\n");
+    // Every other waiting byte is discarded, all of it (the drain): nothing runs after N,
+    // one prompt, the FIFO empty.
+    let body = b"a\nb\nc\n";
+    let st = [0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03];
+    for input in [&b"N x\rq"[..], b"N x\rH 1 1\r"] {
+        let (out, m, _) = esc_step(&st, body, input);
+        assert_eq!(out, "N x\\r\\na\\r\\nb\\r\\nc\\r\\n\\r\\n", "{:?}", show(input));
+        assert!(!m.con().borrow().has_input(), "{:?}", show(input));
+    }
+    // A CR LF terminal: the busy check eats the LF, so no second prompt.
+    let (out, _, _) = esc_step(&[0x01, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03], b"HELLO", b"N x\r\n");
+    assert_eq!(out, "N x\\r\\nHELLO\\r\\n");
+    // 6.15: T never checks (TIME is never busy and has no LF). The Esc reaches the prompt,
+    // which ignores it.
+    let (out, _, _) = esc_step(&[0x02, 0x02, 0x02, 0x03], b"12:", b"T\r\x1B");
+    assert_eq!(out, "T\\r\\n12:\\r\\n");
+}
+
+#[test]
+fn esc_with_the_real_mailbox() {
+    // Bulk replay (PI_DAEMON 7.1): T and a Q that fails at execute read no keyboard, so
+    // all four lines of one step run.
+    let mut m = boot();
+    let out = show(&m.step(b"T\rI 12\rQ\rI 12\r").unwrap());
+    let rest = out.strip_prefix("T\\r\\n").unwrap_or_else(|| panic!("{}", out));
+    assert!(is_time_shape(&rest.as_bytes()[..19]), "{}", out);
+    assert_eq!(&rest[19..], "\\r\\n> I 12\\r\\n03\\r\\n> Q\\r\\nService error\\r\\n> I 12\\r\\n82\\r\\n");
+    // Esc while /hang is busy: Aborted, and the clear left the mailbox IDLE (DEVICE_SPECS 8).
+    let h = http::start();
+    let mut m = net();
+    let url = h.url("/hang");
+    let out = show(&m.step(format!("N {}\r\x1B", url).as_bytes()).unwrap());
+    assert_eq!(out, format!("N {}\\r\\nAborted\\r\\n", url));
+    assert_eq!(m.run("I 12"), "00\\r\\n");
+}
+
 // ---------- A and U (MONITOR_SPEC 6.16, 6.17, 6.17.1) ----------
 
 #[test]

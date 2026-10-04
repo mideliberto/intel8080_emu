@@ -29,9 +29,9 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 | I | `I port` | Input from port |
 | L | `L stor mem [cnt]` | Load from storage (24-bit `stor`); `cnt` default 0100 |
 | M | `M src dst cnt` | Move memory; overlap-safe (memmove) |
-| N | `N url [> file]` | HTTP GET (to the console, or to a storage file); `Service error` on any failure (mailbox `GET`) |
+| N | `N url [> file]` | HTTP GET (to the console, or to a storage file); `Service error` on any failure (mailbox `GET`); Esc aborts (`Aborted`) |
 | O | `O port val` | Output to port |
-| Q | `Q text` | Ask Claude; the answer in plain ASCII lines of at most 79 characters; `Service error` on any failure (mailbox `ASK`) |
+| Q | `Q text` | Ask Claude; the answer in plain ASCII lines of at most 79 characters; `Service error` on any failure (mailbox `ASK`); Esc aborts (`Aborted`) |
 | R | `R` | Registers A, F, BC, DE, HL saved at the last `G` return (`RET`) |
 | S | `S start end b1 [.. b8]` | Search for 1-8 bytes |
 | T | `T` | Show time (mailbox `TIME`); `Service error` on a mailbox failure |

@@ -22,7 +22,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Mailbox `ASM`/`DIS`, A and U (Phase 7) | ✅ |
 | Pi daemon `pi8080d` ([PI_DAEMON](docs/PI_DAEMON.md)): every transcript passes through it on a simulated board; `--sim` runs the whole Pi stack with the CPU model before the board exists; static aarch64 binary links | ✅ Code; 🔲 bench |
 | RAM test build of the monitor (`rom/monitor_ram.hex`, `G D000`): ROM changes on the board without a burn ([ARCHITECTURE](docs/ARCHITECTURE.md) 2.1) | ✅ |
-| Mailbox `GET` and N: HTTP and HTTPS via `curl` on the Pi (Phase 8) | ✅ |
+| Mailbox `GET` and N: HTTP and HTTPS via `curl` on the Pi (Phase 8); Esc aborts N and Q (Phase 12) | ✅ |
 | Mailbox `ASK` and Q: Claude via the Messages API, the key on the Pi (Phase 9) | ✅ |
 | R: the registers a program left at its `G` return (Phase 10) | ✅ |
 | Example programs (`examples/hello`, `examples/memtest`) and the user guide (Phase 11) | ✅ |

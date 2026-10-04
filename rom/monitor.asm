@@ -70,6 +70,7 @@ LF              EQU     0AH
 BS              EQU     08H
 SPACE           EQU     20H
 DEL             EQU     7FH
+ESC             EQU     1BH
 
 ; ============================================
 ; WORKSPACE (RAM at 0x0080-0x00FF, ARCHITECTURE 1.1)
@@ -570,6 +571,8 @@ RANGE:
 ; MAILBOX CLIENT (DEVICE_SPECS 8 reference client, MONITOR_SPEC 9)
 ; Used by T, A, U, N and Q. The caller sends with MB_SEND (and MB_PUT, MB_HEX),
 ; executes (OUT 11 <- 01), then calls MB_GET until it returns done or failed.
+; T, N and Q wait out busy themselves (CT_GET) and enter at MB_GOT, so the
+; Esc check (MB_KEY) runs only for them.
 ; ============================================
 
 ; MB_SEND - Clear the mailbox (the resync), then append a NUL-terminated string
@@ -609,17 +612,36 @@ MBN_DIGIT:
         OUT     MAILBOX_DATA
         RET
 
+; MB_KEY - Esc check for a running N or Q request (MONITOR_SPEC 6.18, 6.19).
+; Reads every console byte waiting. Esc: clears the mailbox (aborts the
+; request), prints Aborted and enters WARM; does not return. Every other byte
+; is discarded. Returns when no byte waits.
+; Trashes: A, flags
+MB_KEY:
+        IN      CONSOLE_STATUS
+        RRC                         ; bit 0 (a byte waits) -> CY
+        RNC                         ; nothing waiting
+        IN      CONSOLE_DATA_IN
+        CPI     ESC
+        JNZ     MB_KEY              ; any other byte: discarded, look again
+        MVI     A,02H
+        OUT     MAILBOX_CTRL        ; clear: aborts the request
+        LXI     H,MSG_ABORTED
+        JMP     PRINT_WARM
+
 ; MB_GET - Wait for the next result after execute. Polls status: 01 (busy)
 ; polls again. Three outcomes; callers test CY before Z:
 ;   byte:   CY=0, A = the next response byte (Z undefined). Status was 02.
 ;   done:   CY=1 Z=1. Status 03.
 ;   failed: CY=1 Z=0, A = the status: 00 (after execute: the Pi service
 ;           restarted) or 80-FF. 04-7F is never returned.
+; MB_GOT - The same, entered with A = a status already read and not 01.
 ; Trashes: A, flags
 MB_GET:
         IN      MAILBOX_STATUS
         CPI     01H
         JZ      MB_GET              ; 01 busy
+MB_GOT:
         CPI     02H
         JNZ     MB_END
         IN      MAILBOX_RESPONSE    ; 02 avail (CY=0 from the CPI)
@@ -1171,7 +1193,8 @@ CS_NEXT:
 ; CMD_TIME - T (arguments ignored, MONITOR_SPEC 6.15). Mailbox TIME: each
 ; response byte is printed as it arrives, an LF as CR LF; done prints CR LF; a
 ; failure prints Service error, after any bytes already printed. N and Q share
-; the loop from CT_EXEC.
+; the loop from CT_EXEC. Esc (MB_KEY) is checked on each busy pass and at each
+; LF, before it prints; TIME is never busy and has no LF, so T never checks.
 CMD_TIME:
         LXI     H,STR_TIME
         CALL    MB_SEND             ; clear, "TIME"
@@ -1179,16 +1202,23 @@ CT_EXEC:
         MVI     A,01H
         OUT     MAILBOX_CTRL        ; execute
 CT_GET:
-        CALL    MB_GET
+        IN      MAILBOX_STATUS      ; the busy wait is CT_GET's own:
+        CPI     01H                 ; A and U never reach MB_KEY
+        JZ      CT_BUSY
+        CALL    MB_GOT
         JC      CT_END
         CPI     LF                  ; LF prints as CR LF
         JNZ     CT_OUT
+        CALL    MB_KEY              ; once per line: Esc stops a fast stream
         MVI     A,CR
         CALL    CONOUT
         MVI     A,LF
 CT_OUT:
         CALL    CONOUT
         JMP     CT_GET
+CT_BUSY:
+        CALL    MB_KEY              ; 01 busy: Esc aborts (not on the
+        JMP     CT_GET              ; path from CT_EXEC: T never checks)
 CT_END:
         JNZ     ERR_SERVICE
         CALL    PRINT_CRLF
@@ -1648,6 +1678,8 @@ MSG_SERVICE:
         DB      "Service error",CR,LF,0
 MSG_BAD_INSN:
         DB      "Invalid instruction",CR,LF,0
+MSG_ABORTED:
+        DB      "Aborted",CR,LF,0
 
 ; Mailbox command words (MB_SEND)
 STR_TIME:
