@@ -298,6 +298,31 @@ fn port_trace_reopened_on_the_same_file_has_only_the_new_trace() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "IN 02 02 ; x2\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn port_trace_to_a_pipe() {
+    // ARCHITECTURE 7.4: FILE may be a pipe (/dev/stdout piped), which cannot be truncated;
+    // re-pointing a running trace at one closes the old trace with its held-back line written.
+    // MVI B,0C / L: IN 02 / DCR B / JNZ L / OUT 10 / IN 02 / IN 02 / HLT
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+    let mut r = ram(&[0x06, 0x0C, 0xDB, 0x02, 0x05, 0xC2, 0x02, 0x01, 0xD3, 0x10, 0xDB, 0x02, 0xDB, 0x02, 0x76]);
+    let path = r.trace_path();
+    let mut fds = [0; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    let (mut rd, wr) = unsafe { (std::fs::File::from_raw_fd(fds[0]), std::fs::File::from_raw_fd(fds[1])) };
+    r.cmd(&format!("t {}", path));
+    r.cmd("s 2");
+    assert_eq!(r.cmd(&format!("t /dev/fd/{}", fds[1])), "");
+    drop(wr); // the trace holds its own write end
+    r.cmd("s 3");
+    r.cmd("t off");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "IN 02 02\n");
+    let mut piped = String::new();
+    rd.read_to_string(&mut piped).unwrap();
+    assert_eq!(piped, "IN 02 02\n");
+}
+
 #[test]
 fn port_trace_repeat_rule() {
     // ARCHITECTURE 7.3: a run of N > 1 identical lines is `<line> ; xN`, N in decimal;

@@ -302,13 +302,18 @@ impl Debugger {
             }
             ("t", [f]) if f.eq_ignore_ascii_case("off") => self.trace = None,
             ("t", [f]) => {
-                // Opened before the old trace closes, so a bad FILE changes nothing; truncated
-                // after it, since FILE may be the same file and the old trace's held-back line
-                // written after a truncation would leave a hole.
-                let file = OpenOptions::new().write(true).create(true).truncate(false).open(f);
-                let file = file.map_err(|e| format!("{}: {}", f, e))?;
-                self.trace = None;
-                file.set_len(0).map_err(|e| format!("{}: {}", f, e))?;
+                // Opened before the old trace closes, so a bad FILE changes nothing. Only a regular
+                // file is truncated (a pipe or a device cannot be), after the old trace writes its
+                // held-back line, since FILE may be the same file and that line written after the
+                // truncation would leave a hole. A failed truncation leaves the old trace running.
+                let err = |e: std::io::Error| format!("{}: {}", f, e);
+                let file = OpenOptions::new().write(true).create(true).truncate(false).open(f).map_err(err)?;
+                if file.metadata().map_err(err)?.is_file() {
+                    if let Some(old) = &mut self.trace {
+                        old.write_pending();
+                    }
+                    file.set_len(0).map_err(err)?;
+                }
                 self.trace = Some(Trace::new(file));
             }
             ("ring", [] | [_]) => {

@@ -670,7 +670,7 @@ At the prompt the terminal is in line mode: the prompt is `dbg> `, Ctrl-C is the
 | `io PORT [in\|out]` | I/O break: stop after an `IN` or `OUT` on PORT (default both). |
 | `bl` | List the breakpoints, watchpoints and I/O breaks, one per line, each as the command that sets it, in the order set. |
 | `bc [ADDR]` | Clear the breakpoint at ADDR; with no argument clear every breakpoint, watchpoint and I/O break. |
-| `t FILE` / `t off` | Port trace to FILE (created or truncated) / stop it. |
+| `t FILE` / `t off` | Port trace to FILE (created, and truncated if a regular file, so a pipe or device works too) / stop it. |
 | `ring [N]` | The last N steps (default all) from the trace ring, oldest first. The ring holds the last 256 steps. |
 | `sym ADDR` | The address and its location (below). |
 | `?` | One-line command summary. |
