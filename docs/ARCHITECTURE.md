@@ -153,7 +153,7 @@ Requirements:
 4. The ROM never executes `EI` or `HLT`.
 5. **WARM** sits directly before MAIN_LOOP. It sets SP to 0xF000 and does nothing else. `G` pushes G_RETURN's address (`MONITOR_SPEC.md` 8), which ends at WARM. The program-facing return contract is in `MONITOR_SPEC.md` (G Return Contract).
 6. The ROM contains no timing-dependent code (no calibrated delay loops). The emulator runs unthrottled, and the hardware clock (6.1) is a design target, not a ROM dependency. The one exception is code that writes the EEPROM (6.10 rules 3 and 4): the bytes of a page load each follow the last within tBLC at the slowest legal clock, and a minimum wait of tBLC at the fastest legal clock closes the page load. Both hold at every legal clock, longer waits are always safe, and the end of the write is still detected by polling. Today that code is `examples/burn`, a user program; the ROM has none.
-7. **COLD_START's first 7 bytes are fixed:** `LXI SP,0F000H`, `DI`, `JMP BOOT_CONTINUE` with BOOT_CONTINUE directly after them, so every ROM image starts `31 00 F0 F3 C3 07 F0` (the RAM test build, 2.1: `31 00 F0 F3 C3 07 D0`). `examples/burn` refuses an image whose byte 0 is not 31 or whose byte 6 is not F0, before it writes anything (6.10). Test: `cold_start_layout_is_what_burn_checks` (`tests/monitor_tests.rs`).
+7. **COLD_START's first 7 bytes are fixed:** `LXI SP,0F000H`, `DI`, `JMP BOOT_CONTINUE` with BOOT_CONTINUE directly after them, so every monitor image starts `31 00 F0 F3 C3 07 F0` (the RAM test build, 2.1: `31 00 F0 F3 C3 07 D0`). The step 3 diagnostic image (`HARDWARE_BUILD.md` 3.3) is not a monitor image and does not start this way, so `examples/burn` refuses it by design. `examples/burn` refuses an image whose byte 0 is not 31 or whose byte 6 is not F0, before it writes anything (6.10). Test: `cold_start_layout_is_what_burn_checks` (`tests/monitor_tests.rs`).
 
 ---
 
@@ -371,7 +371,7 @@ One 74HCT74 half; the other half is the WAIT flip-flop (6.4). /PRE = NOT RESET: 
 
 ### 6.6 Reset
 
-- RESIN (8224 pin 2, active low, Schmitt input) is held low until every rail is in regulation and the -5 V and +12 V ramps are complete. The 8224 only synchronizes RESIN to phi2; it does not stretch it. The reset source therefore guarantees the 8080A's minimum of 3 clocks. Source and button: decision RESET-SOURCE (`HARDWARE_BUILD.md`, Decisions).
+- RESIN (8224 pin 2, active low, Schmitt input) is held low until every rail is in regulation and the -5 V and +12 V ramps are complete. The 8224 only synchronizes RESIN to phi2; it does not stretch it. The reset source therefore guarantees the 8080A's minimum of 3 clocks. Source and button: decision RESET-SOURCE (`HARDWARE_BUILD.md`, Decisions). The DS1813 senses only +5 V. The +12 V boost module and the -5 V charge pump run from +5 V and are assumed to settle in a few milliseconds (est), well inside the DS1813's 100 ms minimum hold after +5 V qualifies, so RESIN rises after them; nothing senses those two rails, and one that never comes up is a broken board that the step 0 rail checks catch. **[bench]** +12 V and VBB in tolerance within 50 ms of +5 V and before RESIN rises (`HARDWARE_BUILD.md` 3, step 1).
 - The 8224 RESET output (pin 1, active high, VOH 3.6 V at -100 uA) has three loads, all CMOS inputs:
   - the 8080 RESET (pin 12), directly;
   - one 74HCT inverter, which drives the overlay flip-flop /PRE, the WAIT flip-flop /CLR and one GAL input: the WAIT set term, the IN-latch enable and the port 0xFF read (6.4, 6.5);
@@ -560,7 +560,7 @@ Decided 2026-10-03 (Mike). 10 kohm pull-up SIPs hold the address bus and the sys
 
 **System data bus (DB0-DB7).**
 - Drivers and their guaranteed sink: the 8228 system side 10 mA at 0.45 V (writes); AS6C62256 2 mA at 0.4 V; AT28C64B 2.1 mA at 0.40 V; 74HCT374 (IN latch) 6 mA at 0.33 V (-40 to 85 °C); ATF22V10C (DB0, 6.5) 16 mA at 0.5 V (0735U 4.1).
-- Low: the pull-up's 0.49 mA, the 8228 DB input's 0.25 mA (IF, "all other inputs", reference 12.7) and the off-state leakage of the idle parts, at most 37 uA (ROM 10, 74LVC245A 10, GAL 10 on DB0, 74HCT374 5, each RAM 1), total 0.78 mA. The weakest driver, the SRAM, keeps 1.22 mA of its 2 mA. DB0 also carries the GAL pin-keeper, which a driver overdrives with 40 uA (typ, no max, 0735U 8), inside that margin.
+- Low: the pull-up's 0.49 mA, the 8228 DB input's 0.25 mA (IF, "all other inputs", reference 12.7) and the off-state leakage of the idle parts, at most 37 uA (ROM 10, 74LVC245A 10, GAL 10 on DB0, 74HCT374 5, each RAM 1), total 0.78 mA. The weakest driver, the SRAM, keeps 1.22 mA of its 2 mA. The 2.2 kohm bring-up pull-down (RN4, Bring-up below) is not in this budget: it is out of its socket in normal use. DB0 also carries the GAL pin-keeper, which a driver overdrives with 40 uA (typ, no max, 0735U 8), inside that margin.
 - High: the pull-up only helps. It lifts the 8228's TTL high (VOH 2.4 V at -1 mA) toward VCC, which adds margin against the AS6C62256 VIH of 2.4 V (`HARDWARE_BUILD.md` 6).
 
 **Why not CPU-side D0-D7.**
@@ -576,6 +576,7 @@ Decided 2026-10-03 (Mike). 10 kohm pull-up SIPs hold the address bus and the sys
 - In halt, RESET and hold the address bus reads FFFF and DB reads FF, unless the ROM drives DB during RESET (above). Nothing samples them then: the WAIT set needs /STSTB low and NOT RESET (6.4 rule 1), port FF is outside the Pi window, and in halt and hold no strobe is active.
 - An undriven DB drifts to FF. An `IN` from a port nothing drives (70-FD, FE) needs its data on DB about 1 us after the memory released DB in the instruction's M2 (est), so it reads FF in practice. This is informative only. `DEVICE_SPECS.md` 2.4 still says the value is undefined, and software MUST NOT depend on FF.
 - **Bring-up.** The DB SIP and the 2.2 kohm bring-up pull-down (`HARDWARE_BUILD.md` 3, step 2) MUST NOT be fitted together. The pull-down alone holds an undriven DB line at <= 0.55 V (the 8228's 0.25 mA IF into 2.2 kohm). With the 10 kohm pull-up added it sits at about 1.4 V (est), above the 8228's minimum threshold of 0.8 V, so the free-run no longer reads NOPs. The DB SIP is therefore socketed: out for step 2 and for any CPU screened that way, in from step 3 on. The address SIPs stay fitted throughout.
+- **The pull-down is socketed too.** It is a bused SIP (RN4) whose common reaches GND only through jumper JP-PD. With the jumper open the common floats, and every pair of DB lines is joined through 4.4 kohm: on a byte with one bit low and seven high the low line's driver sinks another 1.93 mA (7/8 x (5.25 - 0.4) V / 2.2 kohm), 2.71 mA with the budget above against the SRAM's 2 mA. So RN4 is in its socket for step 2 only and out from step 3 on; JP-PD stays as a second guard.
 - **Power.** All 24 lines low draw at most 13 mA from +5 V: 24 x 5.25 V / 9.8 kohm, with the low at 0 V (6.9).
 
 ---

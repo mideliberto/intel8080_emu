@@ -298,9 +298,9 @@ fn rom_flag_runs_the_image_to_its_pass_hlt() {
 fn rom_flag_trace_has_the_bench_fetch_sequence() {
     // The HARDWARE_BUILD.md 3.3 command: the first 256 instructions from the ring. The bench
     // compares their addresses with the analyzer's status A2 rows.
-    let (code, out) = emulator(&["--script", "s.dbg"], "s 100\nring\n");
+    let (code, out) = emulator(&["--script", "s.dbg"], "s 100\nring\nq\n");
     assert_eq!(code, Some(0), "{}", out);
-    let ring: Vec<&str> = out.split("dbg> ring\n").nth(1).unwrap().lines().take_while(|l| !l.is_empty()).collect();
+    let ring: Vec<&str> = out.split("dbg> ring\n").nth(1).unwrap().lines().take_while(|l| !l.is_empty() && !l.starts_with("dbg> ")).collect();
     assert_eq!(ring.len(), 256, "{}", out);
     assert!(ring[0].starts_with("0000  C3 0A F0  JMP F00A "), "{}", ring[0]);
     assert!(ring[1].starts_with("F00A  DB FF     IN FF "), "{}", ring[1]);
@@ -317,4 +317,33 @@ fn rom_flag_trace_has_the_bench_fetch_sequence() {
         assert_eq!(pc, m0[n % m0.len()], "ring line {}", prologue.len() + n);
     }
     assert!(ring[4].starts_with("F011  D3 FE     OUT FE "), "{}", ring[4]);
+}
+
+#[cfg(unix)]
+#[test]
+fn bench_trace_recipe_finishes_from_a_terminal() {
+    // The HARDWARE_BUILD.md 3.3 recipe as written, run from a terminal: stdin is the pty and
+    // stdout goes to the trace file, so a script that runs out leaves the debugger waiting at
+    // a `dbg>` prompt nobody sees. `cargo run --` is the binary, /tmp a temp dir.
+    let doc = include_str!("../docs/HARDWARE_BUILD.md");
+    let block = doc.split("**Emulator trace.** From the repo root:\n\n```\n").nth(1).unwrap();
+    let recipe = block.split("\n```").next().unwrap();
+    assert_eq!(recipe.lines().count(), 3, "{}", recipe);
+    let dir = tempfile::tempdir().unwrap();
+    let recipe = recipe.replace("cargo run --", r#""$0""#).replace("/tmp/", &format!("{}/", dir.path().display()));
+    let mut cmd = std::process::Command::new("sh");
+    cmd.args(["-c", &format!("{}\necho exit=$?", recipe), env!("CARGO_BIN_EXE_intel8080")]);
+    cmd.current_dir(env!("CARGO_MANIFEST_DIR"));
+    cmd.env_remove("ANTHROPIC_API_KEY");
+    let mut p = match rexpect::session::spawn_command(cmd, Some(10_000)) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("skipped: no pty ({})", e);
+            return;
+        }
+    };
+    let out = p.exp_string("exit=0").expect("the recipe did not finish");
+    let pcs: Vec<&str> = out.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    assert_eq!(pcs.len(), 256, "{}", out);
+    assert_eq!((pcs[0], pcs[1], pcs[255]), ("0000", "F00A", "F029"), "{}", out);
 }

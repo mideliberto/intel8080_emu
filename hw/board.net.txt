@@ -567,7 +567,7 @@ part RN3 RN_SIP9 10k    # socketed: out for bring-up step 2
   7 R6  DB5
   8 R7  DB6
   9 R8  DB7
-part RN4 RN_SIP9 2.2k   # bring-up step 2 pull-down, through JP2; never with RN3
+part RN4 RN_SIP9 2.2k   # socketed: in for bring-up step 2 only (pull-down, through JP2); never with RN3
   1 COM PD_COM
   2 R1  DB0
   3 R2  DB1

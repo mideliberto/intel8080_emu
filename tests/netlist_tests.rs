@@ -618,6 +618,18 @@ fn power(ck: &mut Ck) {
     ck.same(&["JP1.2", "U4.WE_N"]);
     ck.same(&["JP2.1", "RN4.COM"]);
     ck.on("JP2.2", "GND");
+    // Each closable is a real break: open, its two pads are on different nets, and the
+    // jumpered nets hold nothing else. ROM /WE reaches the 138 only through JP-WE (6.2,
+    // 6.10), and the 2.2k pull-down reaches GND only through JP-PD (6.13).
+    for (a, b) in ck.closables() {
+        let (na, nb) = (ck.netp(&a), ck.netp(&b));
+        if na == nb {
+            ck.err(format!("{}: both pads on {na}, shorted for good", a.0));
+        }
+    }
+    ck.net_is("JP1.1", &["U12.Y7_N", "J4.CH12"]);
+    ck.net_is("JP1.2", &["U4.WE_N", "R5.1"]);
+    ck.net_is("JP2.1", &["RN4.COM"]);
     // P3: electrolytics the right way round.
     ck.id = "P3";
     ck.on("C22.+", "+5V");
@@ -1445,6 +1457,11 @@ fn checker_catches_mutations() {
         ("P5", &[("part C23 CP 10uF\n1 + +12V\n2 - GND", "")]),
         ("P6", &[("1 K GND\n2 A -5V", "1 K -5V\n2 A GND")]),
         ("P7", &[("2 D +5V_IN\n3 S +5V", "2 D +5V\n3 S +5V_IN")]),
+        // JP-WE shorted for good: ROM /WE wired straight to the 138's /Y7 (6.2, 6.10).
+        ("P2", &[("27 WE_N ROM_WE_N", "27 WE_N Y7_N"),
+                 ("2 ~ ROM_WE_N\npart R5 R 10k\n1 ~ ROM_WE_N", "2 ~ Y7_N\npart R5 R 10k\n1 ~ Y7_N")]),
+        // JP-PD shorted for good: the 2.2k pull-down on DB next to RN3 (6.13).
+        ("P2", &[("1 COM PD_COM", "1 COM GND"), ("1 ~ PD_COM\n2 ~ GND", "1 ~ GND\n2 ~ GND")]),
         ("P8", &[("part JP2 JMP2 JP-PD\n1 ~ PD_COM", "part JP2 JMP2 JP-PD\n1 ~ +5V")]),
         ("C128", &[("15 PHI2 PHI2", "15 PHI2 PHI1"), ("22 PHI1 PHI1", "22 PHI1 PHI2")]),
         ("CBUS", &[("2 A12 GND\n3 A7 A7\n4 A6 A6", "2 A12 GND\n3 A7 A6\n4 A6 A7")]),
