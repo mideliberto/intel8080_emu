@@ -1874,6 +1874,45 @@ fn mandel_mul_is_exact() {
     }
 }
 
+#[test]
+fn example_pi() {
+    boot().play("example_pi");
+}
+
+/// The first 100 decimals of pi as published: OEIS A000796, the decimal expansion of pi.
+/// Typed from there, never from the emulator's output.
+const PI_DECIMALS: &str =
+    "1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679";
+
+/// A booted monitor with examples/pi.hex pasted.
+fn pi_loaded() -> Mon {
+    let mut m = boot();
+    for record in std::fs::read_to_string("examples/pi.hex").unwrap().lines() {
+        m.run(record);
+    }
+    m
+}
+
+#[test]
+fn pi_prints_the_published_digits() {
+    // The transcript's expected output is this: "3." and the published decimals, 50 to a line.
+    let want = format!("3.\\r\\n{}\\r\\n{}\\r\\n", &PI_DECIMALS[..50], &PI_DECIMALS[50..]);
+    assert_eq!(pi_loaded().run("G 0100"), want);
+}
+
+#[test]
+fn pi_needs_its_carry() {
+    // The 100 decimals cover the held-digit carry: the spigot makes a 10 at decimal 32.
+    // With its test (CPI 10; JZ CARRY) made CPI 11, the 10 prints as ':' and decimal 31
+    // stays the 4 the spigot made, so the output leaves the published digits there.
+    let mut m = pi_loaded();
+    let code = m.mem(0x0100, 0x0200);
+    let at = code.windows(3).position(|w| w == [0xFE, 0x0A, 0xCA]).expect("no CPI 10; JZ in examples/pi.hex");
+    m.poke(0x0101 + at as u16, &[11]);
+    let got = m.run("G 0100").replace("\\r\\n", "");
+    assert!(got.starts_with(&format!("3.{}4:", &PI_DECIMALS[..30])), "{}", got);
+}
+
 /// A booted monitor with examples/burn.hex pasted and `image` at 1000, its default source.
 fn burner(image: &[u8]) -> Mon {
     let mut m = boot();
