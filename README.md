@@ -38,6 +38,7 @@ Command summary: [docs/QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md); full contra
     > ?                            # the command list
 
     cargo run -- --jp-we           # JP-WE fitted: a program can rewrite the ROM image (ARCHITECTURE 6.10)
+    cargo run -- --rom FILE        # another ROM image, e.g. rom/diag3.bin (HARDWARE_BUILD 3.3)
 
 Paste `examples/hello.hex` at the prompt, then `G 0100`. Everything else (loading your own programs,
 saving to storage, the debugger, the Pi daemon, the RAM test build): [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
@@ -101,7 +102,8 @@ rom/
 ├── monitor.asm          # Monitor ROM source
 ├── monitor.bin          # Compiled ROM (4KB)
 ├── monitor.sym          # ROM labels for the debugger ('AAAA NAME')
-└── monitor_ram.hex      # RAM test build at D000 (Intel HEX; paste, then G D000)
+├── monitor_ram.hex      # RAM test build at D000 (Intel HEX; paste, then G D000)
+└── diag3.asm / .bin     # Bring-up step 3 diagnostic image, burned in place of monitor.bin (HARDWARE_BUILD 3.3)
 
 examples/
 ├── Makefile             # make: NAME.hex from NAME.asm (asl + p2hex)
@@ -148,6 +150,7 @@ tests/
 ├── mailbox_tests.rs     # Service Mailbox at port level (DEVICE_SPECS 8), black-box from the spec
 ├── debugger_tests.rs   # Debugger: --script runs, breaks, watchpoints, trace (ARCHITECTURE 7.4)
 ├── gal_tests.rs         # GAL: hw/glue.jed for every input against the emulator's decode and ARCHITECTURE 6.2-6.5
+├── diag_tests.rs        # Step 3 diagnostic image: bus transfers against a model, every HLT address by fault injection, --rom trace
 ├── netlist_tests.rs     # Board: hw/board.net.txt pad by pad against ARCHITECTURE 6; KiCad netlist, project files, routed board, parts order
 ├── exerciser.rs         # TST8080, 8080PRE, CPUTEST, 8080EXM under a CP/M shim (#[ignore])
 ├── monitor_tests.rs     # Strict transcript harness: junk RAM, exact output to each prompt; every transcript also through the Pi daemon, some through pi8080d --sim and the RAM test build

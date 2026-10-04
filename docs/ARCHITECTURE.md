@@ -617,6 +617,7 @@ On hardware the Pi passes every byte the terminal sends; the key map does not ex
 | **Debugger** | Every step goes through the debugger (7.4), which records the trace ring and checks breakpoints. When the pump reads Ctrl-E, the bytes before it go into the FIFO and the debugger prompt opens before the next step. |
 | **Host banner and exit lines** | "8080 Emulator", the build timestamp, and any exit message go to host stdout from `main.rs`, never from the CPU core or from a device the 8080 can see. |
 | **Test harness** | Allowed only on the host side: the real port map from `build_bus` with the `Console`'s host side (scripted input and captured output); test `IoDevice`s mapped with `map_port`, for example one that records every port access; `load_program` (writes that bypass the ROM and the overlay); a CPU with no ROM loaded; `interrupt(rst)` (5.7); direct access to the registers, memory, `cycles`, `halted` and `interrupts_enabled`; the debugger's command parser (7.4); `fit_jp_we(twc)` and `set_load_window_cells(on)`, the fitted JP-WE and its page-load reading (6.10, Emulator). |
+| **ROM image** | `--rom FILE` loads FILE in place of `rom/monitor.bin`, and the debugger symbols from FILE with its extension changed to `.sym` when that exists (7.4, Symbols), so the default is unchanged. For images that are not the monitor, such as the bring-up step 3 diagnostic `rom/diag3.bin` (`HARDWARE_BUILD.md` 3.3). It changes only what the emulated ROM chip holds, as a burn would. A file that cannot be read prints its error and exits with status 2. Code: `main` in `src/main.rs`. Tests: `rom_flag_runs_the_image_to_its_pass_hlt`, `rom_flag_trace_has_the_bench_fetch_sequence` (`tests/diag_tests.rs`). |
 | **No throttle** | The emulator runs at host speed, apart from the idle wait above. `cycles` counts T-states only. |
 
 ### 7.3 Port Trace Format
@@ -647,6 +648,7 @@ Host-side only. The 8080 cannot observe it: it adds no cycles, no port, no memor
 | `--debug` | Starts stopped, before the first instruction. |
 | `--script FILE` | Starts stopped and reads commands from FILE, one per line, before the terminal. Each line is echoed as `dbg> line`. Blank lines and lines starting with `#` are skipped. |
 | `--jp-we` | Not a debugger entry: runs with JP-WE fitted (6.10, Emulator). Combines with the others. |
+| `--rom FILE` | Not a debugger entry: runs FILE as the ROM image (7.2, ROM image). Combines with the others. |
 | A breakpoint, watchpoint or I/O break | Stops (below). |
 | A halt, in an interactive run (7.2) | Stops with the reason `halt`. The CPU stays halted: `s` prints the registers line, and `c` stops again at once. |
 
@@ -688,7 +690,7 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 
 **Port trace.** One 7.3 line per `IN` or `OUT` transfer, ports FE and FF included. Repeats are collapsed by the 7.3 rule (`IN 02 02 ; x12`). Pending lines are written at every stop and at `t off` and quit, so a run split by a stop is written as two lines. The debugger writes no `RESET` line: it has no reset. Diffing against a Pi daemon trace (7.3): the Pi never sees ports 70-FF (`DEVICE_SPECS.md`), so drop the FE and FF lines; drop `RESET` lines, which only the daemon writes; drop the `IN 02 02` lines (empty-FIFO console polls carry no data; `N` and `Q` interleave one with every BUSY status read, `MONITOR_SPEC.md` 6.18, so without this their `IN 12 01` lines never merge); strip the ` ; xN` annotation, since poll counts depend on timing; then merge adjacent identical lines, since a stop splits a run (`grep -Ev '^(IN|OUT) F[EF] |^RESET$|^IN 02 02' | sed 's/ ; x[0-9]*$//' | uniq`).
 
-**Symbols.** `rom/monitor.sym` is built with `monitor.bin` by `cd rom && make` and committed with it: one `AAAA NAME` line per label in `monitor.asm`, from asl's NoICE output: the code labels and the workspace labels (1.1), so `w STOR_ADDR` works. EQU constants are left out: they are ports, characters and sizes. The emulator loads it from next to `monitor.bin` when present; without it a `NAME` argument is an error and output has no names.
+**Symbols.** `rom/monitor.sym` is built with `monitor.bin` by `cd rom && make` and committed with it: one `AAAA NAME` line per label in `monitor.asm`, from asl's NoICE output: the code labels and the workspace labels (1.1), so `w STOR_ADDR` works. EQU constants are left out: they are ports, characters and sizes. The emulator loads it from next to `monitor.bin` when present (with `--rom FILE`, FILE's `.sym`, 7.2); without it a `NAME` argument is an error and output has no names.
 
 **Not in v1:** reset, writing registers or memory, conditional breakpoints, expressions beyond `NAME+n`, a TUI.
 
