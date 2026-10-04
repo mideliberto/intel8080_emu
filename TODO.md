@@ -70,7 +70,7 @@ Built to the spec (Key Decisions, "Phase 11 Specified"). 0 ROM bytes (3116, `mak
    - 8 USER_GUIDE sessions: 6.1 from `storage.txt` and 8.2 from `registers.txt`; the others show typed lines only. The draft's line "MONITOR_SPEC says which commands a key cuts short" was wrong (MONITOR_SPEC 2: no command stops for a key) and was fixed before it shipped
    - Found, for Mike: the two Docs-disagree items in Open Decisions (the spec's own finds; both still true)
 6. [x] By hand, from a clean checkout of this tree: `cd examples && make`; `cargo run` piped (`hello.hex`, `G 0100`; `memtest.hex`, `G 0100` prints `RAM OK`); `cargo run --bin pi8080d -- --sim rom/monitor.bin --storage /tmp/pi8080d` with the `nc` script form: hello; the RAM test build paste and `G D000` (banner ends ` RAM`), then `G F000`; the USER_GUIDE 6.3 ROM check (`X ROM.BIN`, `W F000 0 1000`, `X -`, then `cmp -n 4096` against `rom/monitor.bin`: equal)
-7. [ ] By hand: the socat console (USER_GUIDE 9.1, 9.3). socat is not installed on the build Mac
+7. [x] socat console (USER_GUIDE 9.1): verified 2026-10-03 with socat 1.8.1.3 under a pty: prompt, T, H, ?; Ctrl-] exits 0. 9.3 (over ssh -L) needs the Pi.
 8. [x] Review fixes: USER_GUIDE 8.2 no longer says only a `G` return changes what `R` prints (MONITOR_SPEC 6.20: REGS is ordinary RAM), now a pointer; 7.2 cut to procedures plus pointers to 6.18, 6.19, PI_DAEMON 11; README tests list gains `debugger_tests.rs` and `support/`. Logged: README Building vs USER_GUIDE 9 duplicate; CLAUDE.md Status also misses the Phase 11 open decisions
 
 ## Done: Phase 10 - R Command (2026-10-03)
@@ -102,7 +102,7 @@ Built to the spec (Key Decisions, "Phase 8 Specified"). +67 bytes (2893 -> 2960)
 6. [x] Fixed in the spec while building: MONITOR_SPEC 6.18.1's first row said body `Hello` and output `Hello`, but every other row (and the `000007` file row) uses the DEVICE_SPECS `/hello` body `Hello` CR LF. The row now gives the bytes 6.18 steps 2-3 print for that body (`Hello` CR CR LF CR LF). The same row's Effect said "an IN 12 that may read 01 before any of them"; it now says "IN 12 reads of 01 anywhere among them", because after the last buffered byte is popped the status is BUSY and the next check can read 01 before EOF. PI_DAEMON 1 Affinity now says the device reads the bus thread's mask (`sched_getaffinity`) before the fork, not in the `pre_exec`, which is what the code does. No behavior change
 6a. [x] Spec note imprecision (PHASE8_SPEC 7.1, the `-o` flag note): "curl creates no file for an empty body" holds only when there is no body at all (304). For a 200 with `Content-Length: 0`, curl 8.7.1 creates an empty file. The stale-`~FILE` removal is still needed; the module header and `get_to_a_file` (now on `/304`) say so. Normative docs never carried the claim
 7. [x] MONITOR_SPEC 6.18 N print speed measured: 155 cycles a byte, 206 for an LF (was est. 175)
-8. [ ] By hand (needs the internet, so not in `cargo test`): `N https://www.gutenberg.org/cache/epub/1342/pg1342.txt > PRIDE.TXT` in the emulator, then `X PRIDE.TXT` and `L`
+8. [x] Gutenberg (roadmap Phase 8 criterion): verified 2026-10-03. `N https://www.gutenberg.org/cache/epub/1342/pg1342.txt > PRIDE.TXT` wrote 772,386 bytes over HTTPS; `X PRIDE.TXT`, `L 0 0400 100`, `D` shows the title page.
 9. [ ] Bench (PI_DAEMON 14, step 6): the four GET rows (curl version on the Pi OS image, which must be Trixie-based; worker cores; no curl left behind)
 
 ## Done: `pi8080d --sim`, RAM Test Build, Board Debug Aids (2026-10-03)

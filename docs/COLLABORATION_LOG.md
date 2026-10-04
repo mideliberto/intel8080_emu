@@ -648,6 +648,12 @@ Four open, from Phase 11 (`TODO.md`): CLAUDE.md Status and this section disagree
 
 ## Recent Sessions
 
+### 2026-10-03: Phases 8-11 Verified Live
+- Phases 8-11 built in sequence (spec, cross-check of 17 conflicts, build, adversarial review, commit each). Monitor v0.9, 3116/4096 bytes, 342 tests.
+- Live: the Gutenberg download over HTTPS into storage (772 KB), then mounted, loaded and dumped by the 8080 (the Phase 8 roadmap criterion). The USER_GUIDE 9.1 `--sim` and socat console recipe ran as written. N against a local server: stream, file form (length 000021), and a 404 that prints `Service error`.
+- What bit us: the flaky daemon stop test was a 5 ms sleep that assumed scheduling; under load the stop flag won at step 1, exactly as the spec says. It now syncs on SimBoard writes. 0/40 failures under 16 busy loops.
+- Not yet run: live `Q` against the Claude API (needs Mike's key), and everything marked [bench].
+
 ### 2026-10-03: Flaky stop test
 - `stop_while_reset_is_held_returns_and_flushes`: under 28 CPU hogs it failed 231 of 300 runs, always `trace.last()` = `OUT 0B 5A`, not `RESET`. The daemon is right: PI_DAEMON 4 step 1 checks `stop` before reading RESET, so a stop set before the daemon saw RESET ends it there. The test's 5 ms sleep was the assumption.
 - Fix (test and PI_DAEMON 13.3 row only): after a pass, RESET on, then wait for RESET handling's two register writes (`writes()`) before setting stop. 400 of 400 under the same load. No `src/pi` change.
