@@ -1,0 +1,50 @@
+GAL22V10
+GLUE1
+; Board glue: memory decode, Pi-window decode, WAIT set, FE/FF decode and the
+; port FF read of the overlay flip-flop onto DB0.
+; Part: ATF22V10C-15PU, programmed as GAL22V10 JEDEC (QF5892, no power-down fuse).
+; Assembler: galette 0.3.0 (cd hw && make). Spec: ARCHITECTURE.md 6.2 (memory),
+; 6.3 (ports), 6.4 (WAIT set, IN latch), 6.5 (overlay). All outputs combinatorial.
+;
+; Pin-list convention: a name written /X is an active-low net (X_N in the
+; netlist). In the equations X then means "asserted", so they read like
+; ARCHITECTURE 6.2-6.5. Port bit 7..0 = A15..A8 (6.3 allows either copy).
+; /RESET is NOT RESET from the 74HCT14, so /RESET in an equation means
+; "not in reset".
+;
+; Pin classes (checked by tests/gal_tests.rs): nets driven by the 8080A or the
+; 8224 (A8-A15, D4, D6, /STSTB) sit on dedicated inputs (pins 1-11, 13) only,
+; so no GAL image can drive a CPU pin. Outputs sit on I/O pins (14-23).
+; This pin list is the only home of the GAL pinout.
+;
+; Pin 1      2  3  4   5   6   7   8   9   10    11 12
+/STSTB  A8 A9 A10 A11 A12 A13 A14 A15 /MEMR D4 GND
+; Pin 13 14   15     16     17  18      19    20    21   22   23     24
+D6      OVL /ROMOE /RAMOE DB0 /OVLCLR /WSET /LATOE /IOR /IOW /RESET VCC
+
+; 6.2: ROM_SEL = A15..A12 = 1111 OR (OVL AND A15..A12 = 0000); ROM_OE = MEMR AND ROM_SEL
+ROMOE = MEMR * A15 * A14 * A13 * A12 + MEMR * OVL * /A15 * /A14 * /A13 * /A12
+
+; 6.2: RAM_OE = MEMR AND NOT ROM_SEL, written as its complement (3 terms, not 8):
+; the pin is high while MEMR is not asserted or ROM_SEL holds.
+/RAMOE = /MEMR + A15 * A14 * A13 * A12 + OVL * /A15 * /A14 * /A13 * /A12
+
+; 6.4 rule 1: set while STSTB low AND NOT RESET AND (D4 OR D6) AND port in 00-6F.
+; Window 6.3: port bit 7 = 0 AND NOT (bits 6, 5, 4 all 1), i.e. /A15 * (/A14 + /A13 + /A12).
+WSET = STSTB * /RESET * D4 * /A15 * /A14 + STSTB * /RESET * D4 * /A15 * /A13 + STSTB * /RESET * D4 * /A15 * /A12 + STSTB * /RESET * D6 * /A15 * /A14 + STSTB * /RESET * D6 * /A15 * /A13 + STSTB * /RESET * D6 * /A15 * /A12
+
+; 6.5: overlay flip-flop /CLR = NOT (I/OW AND port = FE), full 8-bit compare.
+OVLCLR = IOW * A15 * A14 * A13 * A12 * A11 * A10 * A9 * /A8
+
+; 6.5: overlay Q onto system DB0 while I/OR AND port = FF AND NOT RESET.
+; Hi-Z otherwise.
+DB0.T = OVL
+DB0.E = IOR * /RESET * A15 * A14 * A13 * A12 * A11 * A10 * A9 * A8
+
+; 6.4: 74HCT374 IN latch drives DB while I/OR AND NOT RESET AND port in 00-6F.
+LATOE = IOR * /RESET * /A15 * /A14 + IOR * /RESET * /A15 * /A13 + IOR * /RESET * /A15 * /A12
+
+DESCRIPTION
+
+Intel 8080 board glue. ARCHITECTURE.md 6.2-6.5. Checked by tests/gal_tests.rs
+against the emulator's decode; the .jed is the artifact under test.

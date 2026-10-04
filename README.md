@@ -105,6 +105,11 @@ examples/
 ├── hello.asm / .hex     # Prints a line, returns to the monitor
 └── memtest.asm / .hex   # RAM test over a range
 
+hw/
+├── Makefile             # make: glue.jed from glue.pld (galette 0.3.0)
+├── glue.pld             # GAL source: the only home of the GAL pinout (ARCHITECTURE 6.2-6.5)
+└── glue.jed             # GAL fuse map: burned, and checked by tests/gal_tests.rs
+
 scripts/
 ├── fetch_exercisers.sh  # Downloads the exercisers to tests/data/exercisers (pinned SHA-256)
 ├── pi8080d.service      # systemd unit for the Pi daemon
@@ -132,6 +137,7 @@ tests/
 ├── device_tests.rs      # Console, storage and mount at port level
 ├── mailbox_tests.rs     # Service Mailbox at port level (DEVICE_SPECS 8), black-box from the spec
 ├── debugger_tests.rs   # Debugger: --script runs, breaks, watchpoints, trace (ARCHITECTURE 7.4)
+├── gal_tests.rs         # GAL: hw/glue.jed for every input against the emulator's decode and ARCHITECTURE 6.2-6.5
 ├── exerciser.rs         # TST8080, 8080PRE, CPUTEST, 8080EXM under a CP/M shim (#[ignore])
 ├── monitor_tests.rs     # Strict transcript harness: junk RAM, exact output to each prompt; every transcript also through the Pi daemon, some through pi8080d --sim and the RAM test build
 ├── pi_daemon_tests.rs   # Pi daemon: RESET, faults, startup, stop, TCP console on the simulated board

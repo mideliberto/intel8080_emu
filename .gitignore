@@ -6,3 +6,6 @@ rom/*.p
 rom/*.noi
 .DS_Store
 /tests/data/exercisers
+hw/*.chp
+hw/*.fus
+hw/*.pin
