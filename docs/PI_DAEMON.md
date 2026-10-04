@@ -307,7 +307,7 @@ pub fn ntp_local_time() -> Option<(u16, u8, u8, u8, u8, u8)> {
 - One line per ACKed access: `IN pp vv` (the byte driven) or `OUT pp vv` (the byte sampled). One `RESET` line per handled reset (5.2). An access dropped by RESET has no line.
 - Lines are added after ACK (loop step 7), outside READY. `Trace` writes and flushes when a run of identical lines ends, so tracing costs one `write` per distinct line on the bus thread. Turn it off for timing measurements.
 - A BUSY wait of `N` or `Q` alternates `IN 12 01` with the Esc check's `IN 02 02` (`MONITOR_SPEC.md` 6.18), so its lines never collapse: a trace taken across a long wait grows by one line, and one `write`, per access (a 120 s `Q` wait is millions of lines).
-- Diffing against an emulator trace: the `ARCHITECTURE.md` 7.4 recipe, which drops `RESET` lines, FE and FF, and the empty-FIFO `IN 02 02` polls.
+- Diffing against an emulator trace: the `ARCHITECTURE.md` 7.4 recipe, which drops `RESET` lines, ports 70-FF (the daemon never sees them), and the empty-FIFO `IN 02 02` polls.
 
 ---
 

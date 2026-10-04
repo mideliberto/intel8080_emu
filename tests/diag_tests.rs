@@ -267,21 +267,46 @@ fn diag3_march_faults_stop_at_their_element() {
 /// The emulator binary in an empty directory (so rom/monitor.bin is not there), with the
 /// image by absolute path.
 fn emulator(args: &[&str], script: &str) -> (Option<i32>, String) {
-    use std::process::{Command, Stdio};
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("s.dbg"), script).unwrap();
     let image = Path::new(env!("CARGO_MANIFEST_DIR")).join(IMAGE);
-    let out = Command::new(env!("CARGO_BIN_EXE_intel8080"))
+    let mut all = vec!["--rom", image.to_str().unwrap()];
+    all.extend(args);
+    run_in(dir.path(), &all)
+}
+
+/// How long a run of the binary may take. A piped run ends only on a halt (ARCHITECTURE 7.2),
+/// so a regression that never reaches its HLT fails here instead of hanging cargo test.
+const DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The emulator binary run in `dir` with no input. Returns the exit code and stdout.
+fn run_in(dir: &Path, args: &[&str]) -> (Option<i32>, String) {
+    use std::process::{Command, Stdio};
+    // stdout goes to a file, so a child that never exits cannot block on a full pipe.
+    let stdout = dir.join("stdout.txt");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_intel8080"))
         .env_remove("ANTHROPIC_API_KEY")
-        .arg("--rom")
-        .arg(&image)
         .args(args)
-        .current_dir(dir.path())
+        .current_dir(dir)
         .stdin(Stdio::null())
+        .stdout(std::fs::File::create(&stdout).unwrap())
         .stderr(Stdio::null())
-        .output()
+        .spawn()
         .unwrap();
-    (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned())
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if start.elapsed() > DEADLINE {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("{:?} still running after {:?}; stdout so far:\n{}", args, DEADLINE,
+                String::from_utf8_lossy(&std::fs::read(&stdout).unwrap()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    (status.code(), String::from_utf8_lossy(&std::fs::read(&stdout).unwrap()).into_owned())
 }
 
 #[test]
@@ -317,4 +342,42 @@ fn rom_flag_trace_has_the_bench_fetch_sequence() {
         assert_eq!(pc, m0[n % m0.len()], "ring line {}", prologue.len() + n);
     }
     assert!(ring[4].starts_with("F011  D3 FE     OUT FE "), "{}", ring[4]);
+}
+
+#[test]
+fn rom_flag_loads_the_images_own_symbols() {
+    // ARCHITECTURE 7.2, ROM image: FILE's .sym, never rom/monitor.sym, which is here too.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("rom")).unwrap();
+    std::fs::copy("rom/monitor.sym", dir.path().join("rom/monitor.sym")).unwrap();
+    std::fs::copy(IMAGE, dir.path().join("x.bin")).unwrap();
+    std::fs::write(dir.path().join("s.dbg"), "sym F00B\n").unwrap();
+    let args = ["--rom", "x.bin", "--script", "s.dbg"];
+    let (code, out) = run_in(dir.path(), &args);
+    assert_eq!(code, Some(0), "{}", out);
+    assert!(out.contains("\ndbg> sym F00B\nF00B\n"), "no x.sym: no names\n{}", out);
+    std::fs::write(dir.path().join("x.sym"), "F00A START\n").unwrap();
+    let (code, out) = run_in(dir.path(), &args);
+    assert_eq!(code, Some(0), "{}", out);
+    assert!(out.contains("\ndbg> sym F00B\nF00B START+1\n"), "{}", out);
+}
+
+#[test]
+fn rom_flag_bad_image_or_symbols_exit_2() {
+    // ARCHITECTURE 7.2, ROM image and 7.4, Symbols: printed errors and status 2, never a
+    // panic (101) or a run with no ROM chip.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("empty.bin"), b"").unwrap();
+    std::fs::write(dir.path().join("big.bin"), vec![0x76; 0x1001]).unwrap();
+    std::fs::write(dir.path().join("max.bin"), vec![0x76; 0x1000]).unwrap(); // HLT at 0000
+    for args in [&["--rom", "empty.bin"][..], &["--rom", "empty.bin", "--jp-we"], &["--rom", "big.bin"]] {
+        assert_eq!(run_in(dir.path(), args).0, Some(2), "{:?}", args);
+    }
+    let (code, out) = run_in(dir.path(), &["--rom", "max.bin"]);
+    assert_eq!(code, Some(0), "{}", out);
+    assert!(out.ends_with("\nHLT at PC=0001\n"), "{}", out);
+    for sym in [&b"F000 START ; comment\n"[..], b"\xFF\xFE\n"] {
+        std::fs::write(dir.path().join("max.sym"), sym).unwrap();
+        assert_eq!(run_in(dir.path(), &["--rom", "max.bin"]).0, Some(2), "{:?}", sym);
+    }
 }

@@ -293,8 +293,10 @@ debugger (8.1) does more.
 
 Both write the ARCHITECTURE 7.3 format: `t FILE` in the debugger, `pi8080d --trace FILE` on the Pi.
 Run the same ROM and input on both and diff them. The filter that makes them comparable is in
-ARCHITECTURE 7.4 (Port trace); it drops the empty console polls (`IN 02 02`) that `N` and `Q`
-interleave with their BUSY status reads, so a long `N` or `Q` makes a long trace.
+ARCHITECTURE 7.4 (Port trace). It drops ports 70-FF, which only the emulator traces (the Pi
+never sees them: FE and FF, and any `I`, `O` or program access to 70-FD), and the empty console
+polls (`IN 02 02`) that `N` and `Q` interleave with their BUSY status reads, so a long `N` or `Q`
+makes a long trace.
 
 ---
 

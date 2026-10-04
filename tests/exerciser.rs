@@ -2,7 +2,7 @@
 //
 // Fetch them first (they are not in the repo): scripts/fetch_exercisers.sh
 // Run: cargo test --release --test exerciser -- --ignored --nocapture
-// (8080EXM takes about 20 s in release.) A missing .COM skips its test with a message.
+// (8080EXM takes about 20 s in release.) A missing .COM fails its test with a message.
 //
 // The shim is 8080 code, not a Rust hook, so the same bytes run on hardware: load
 // SHIM at 0000 and the .COM at 0100, then G 0100. Only BDOS 2 (print E) and 9 (print
@@ -42,13 +42,12 @@ const SHIM: [(u16, &[u8]); 3] = [
     ]),
 ];
 
-/// Runs `name` to completion; None if the file is absent.
-fn run(name: &str, max_cycles: u64) -> Option<String> {
+/// Runs `name` to completion and returns its output. A missing file fails: a green run
+/// must mean the exerciser ran.
+fn run(name: &str, max_cycles: u64) -> String {
     let path = format!("{}/tests/data/exercisers/{}", env!("CARGO_MANIFEST_DIR"), name);
-    let Ok(com) = std::fs::read(&path) else {
-        println!("SKIPPED: {} not found; run scripts/fetch_exercisers.sh", path);
-        return None;
-    };
+    let com = std::fs::read(&path)
+        .unwrap_or_else(|e| panic!("{}: {}; run scripts/fetch_exercisers.sh first", path, e));
     let mut cpu = Intel8080::new();
     let dir = tempfile::tempdir().unwrap();
     let (bus, con) = build_bus(dir.path(), mailbox::local_time, AskConfig::default());
@@ -67,37 +66,33 @@ fn run(name: &str, max_cycles: u64) -> Option<String> {
     }
     let out = String::from_utf8_lossy(con.borrow().output()).into_owned();
     println!("== {} ({} cycles)\n{}", name, cpu.cycles, out);
-    Some(out)
+    out
 }
 
 #[test]
 #[ignore]
 fn tst8080() {
-    if let Some(out) = run("TST8080.COM", 10_000_000) {
-        assert!(out.contains("CPU IS OPERATIONAL"), "{}", out);
-    }
+    let out = run("TST8080.COM", 10_000_000);
+    assert!(out.contains("CPU IS OPERATIONAL"), "{}", out);
 }
 
 #[test]
 #[ignore]
 fn pre8080() {
-    if let Some(out) = run("8080PRE.COM", 10_000_000) {
-        assert!(out.contains("Preliminary tests complete") && !out.contains("ERROR"), "{}", out);
-    }
+    let out = run("8080PRE.COM", 10_000_000);
+    assert!(out.contains("Preliminary tests complete") && !out.contains("ERROR"), "{}", out);
 }
 
 #[test]
 #[ignore]
 fn cputest() {
-    if let Some(out) = run("CPUTEST.COM", 1_000_000_000) {
-        assert!(out.contains("CPU TESTS OK") && !out.contains("CPU FAILED"), "{}", out);
-    }
+    let out = run("CPUTEST.COM", 1_000_000_000);
+    assert!(out.contains("CPU TESTS OK") && !out.contains("CPU FAILED"), "{}", out);
 }
 
 #[test]
 #[ignore]
 fn exm8080() {
-    if let Some(out) = run("8080EXM.COM", 50_000_000_000) {
-        assert!(out.contains("Tests complete") && !out.contains("ERROR"), "{}", out);
-    }
+    let out = run("8080EXM.COM", 50_000_000_000);
+    assert!(out.contains("Tests complete") && !out.contains("ERROR"), "{}", out);
 }

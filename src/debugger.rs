@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 use std::fmt::Write as _;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 
 use crate::cpu::{Intel8080, Transfer};
@@ -302,7 +302,13 @@ impl Debugger {
             }
             ("t", [f]) if f.eq_ignore_ascii_case("off") => self.trace = None,
             ("t", [f]) => {
-                let file = File::create(f).map_err(|e| format!("{}: {}", f, e))?;
+                // Opened before the old trace closes, so a bad FILE changes nothing; truncated
+                // after it, since FILE may be the same file and the old trace's held-back line
+                // written after a truncation would leave a hole.
+                let file = OpenOptions::new().write(true).create(true).truncate(false).open(f);
+                let file = file.map_err(|e| format!("{}: {}", f, e))?;
+                self.trace = None;
+                file.set_len(0).map_err(|e| format!("{}: {}", f, e))?;
                 self.trace = Some(Trace::new(file));
             }
             ("ring", [] | [_]) => {

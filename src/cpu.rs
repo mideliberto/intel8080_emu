@@ -204,7 +204,7 @@ impl Intel8080 {
     fn chip_status(&self) -> Option<u8> {
         let w = self.jp_we.as_ref()?;
         let now = self.cycles;
-        if now >= w.end || (w.cells && now - w.last <= TBLC_CYCLES) {
+        if now >= w.end || (w.cells && now.saturating_sub(w.last) <= TBLC_CYCLES) {
             return None;
         }
         // Bit 7: DATA polling. Bit 6: the toggle bit. Bits 5-0 are undefined on the chip;
@@ -222,7 +222,7 @@ impl Intel8080 {
             // last); a byte after that, while the chip programs, is ignored (DS 4.3).
             if let Some(w) = self.jp_we.as_mut() {
                 let now = self.cycles;
-                if now >= w.end || now - w.last <= TBLC_CYCLES {
+                if now >= w.end || now.saturating_sub(w.last) <= TBLC_CYCLES {
                     self.rom[(addr - 0xF000) as usize] = value;
                     (w.last, w.byte, w.end) = (now, value, now + TBLC_CYCLES + w.twc);
                 }
