@@ -312,12 +312,13 @@ make size               # bytes used of 4096
    use the `nc` form in 4.3 and wait for the banner. The banner line ends ` RAM` (MONITOR_SPEC 1.1).
    While it runs the user area is smaller (ARCHITECTURE 2.1). `G F000` or RESET goes back to the ROM.
 3. **Burn in circuit,** with no external programmer: `examples/burn` writes F000-FFFF through
-   jumper JP-WE (ARCHITECTURE 6.10). Rehearse it in the emulator first: copy `monitor.bin` into
-   `storage/`, `cargo run -- --jp-we`, the same steps (the burned image lives in memory only).
+   jumper JP-WE (ARCHITECTURE 6.10). Rehearse it in the emulator first: copy `monitor.bin` to
+   `storage/MONITOR.BIN`, `cargo run -- --jp-we`, the same steps (the burned image lives in
+   memory only).
 
    ```
    cd rom && make                                    # on the Mac
-   scp monitor.bin pi:/var/lib/pi8080d/MONITOR.BIN   # emulator: cp monitor.bin ../storage/
+   scp monitor.bin pi:/var/lib/pi8080d/MONITOR.BIN   # emulator: cp monitor.bin ../storage/MONITOR.BIN
    ```
 
    Then at the monitor:

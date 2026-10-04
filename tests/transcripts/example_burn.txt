@@ -22,6 +22,29 @@ Loaded
 > F 1000 1FFF 00
 > G 0100
 Not a ROM image
+# An erased image, all FF: both bytes above the values checked.
+> F 1000 1FFF FF
+> G 0100
+Not a ROM image
+# Byte 0 right, byte 6 above F0.
+< E 1000\r31\r.
+E 1000
+1000: FF-31
+1001: FF-
+> G 0100
+Not a ROM image
+# Byte 6 right, byte 0 above 31.
+< E 1006\rF0\r.
+E 1006
+1006: FF-F0
+1007: FF-
+< E 1000\r32\r.
+E 1000
+1000: 31-32
+1001: FF-
+> G 0100
+Not a ROM image
+> F 1000 1FFF 00
 # A RAM test build image: byte 6 is D0, not F0.
 < E 1000\r31\r00\rF0\rF3\rC3\r07\rD0\r.
 E 1000

@@ -2478,7 +2478,8 @@ fn jp_we_page_load_is_one_write_cycle() {
         cpu.write_byte(0xF040 + i, i as u8 ^ 0x80);
     }
     let end = 10 + 63 * 46 + TBLC_CYCLES + TWC;
-    assert_eq!(data_read(&mut cpu, end - 1, 0xF07F) & 0x80, 0x00, "DATA polling of the last byte (BF)");
+    // Status follows the last byte (BF), not the first (80): they differ in bits 5-0.
+    assert_eq!(data_read(&mut cpu, end - 1, 0xF07F) & 0xBF, !0xBF & 0xBF, "DATA polling of the last byte");
     cpu.cycles = end;
     for i in 0..64u16 {
         assert_eq!(cpu.read_byte(0xF040 + i), i as u8 ^ 0x80, "page byte {}", i);
@@ -2488,12 +2489,14 @@ fn jp_we_page_load_is_one_write_cycle() {
 
 #[test]
 fn jp_we_byte_after_tblc_is_ignored_until_the_cycle_ends() {
+    // tBLC = 150 us (AT28C64B DS 16) at 2.048 MHz is 307.2 cycles: 307, rounded down.
+    assert_eq!(TBLC_CYCLES, 307);
     let mut cpu = fitted(false);
     cpu.write_byte(0xF000, 0x01);
-    cpu.cycles = TBLC_CYCLES;
+    cpu.cycles = 307;
     cpu.write_byte(0xF001, 0x02); // tBLC after the last: still in the page load
-    let end = 2 * TBLC_CYCLES + TWC;
-    cpu.cycles = 2 * TBLC_CYCLES + 1;
+    let end = 307 + 307 + TWC;
+    cpu.cycles = 307 + 308;
     cpu.write_byte(0xF002, 0x03); // tBLC + 1: the chip is programming
     cpu.cycles = end - 1;
     cpu.write_byte(0xF003, 0x04);
@@ -2505,6 +2508,17 @@ fn jp_we_byte_after_tblc_is_ignored_until_the_cycle_ends() {
     assert_eq!(cpu.read_byte(0xF002) & 0x80, 0x80, "the new write cycle polls");
     cpu.cycles = end + TBLC_CYCLES + TWC;
     assert_eq!(cpu.read_byte(0xF002), 0x03);
+}
+
+#[test]
+fn jp_we_ram_reads_never_toggle() {
+    // I/O6 toggles on the chip's own /OE (DS 4.5): a RAM read between two reads of a busy
+    // chip leaves the toggle alone, so the two chip reads still differ in bit 6.
+    let mut cpu = fitted(false);
+    cpu.write_byte(0xF300, 0x5A);
+    let first = data_read(&mut cpu, 400, 0xF300);
+    assert_eq!(data_read(&mut cpu, 410, 0x2100), 0x00, "RAM");
+    assert_eq!(first ^ data_read(&mut cpu, 420, 0xF300), 0x40);
 }
 
 #[test]
@@ -2530,6 +2544,8 @@ fn jp_we_overlay_reads_the_chip_but_never_writes_it() {
     cpu.cycles = 20;
     cpu.write_byte(0xF005, 0x5A);
     assert_eq!(data_read(&mut cpu, 30, 0x0005) & 0xBF, !0x5A & 0xBF, "the overlay reads a busy chip");
+    // The overlay is the same chip select (ARCHITECTURE 6.2): its data reads toggle I/O6.
+    assert_eq!(data_read(&mut cpu, 30, 0x0005) ^ data_read(&mut cpu, 40, 0x0005), 0x40, "I/O6 through the overlay");
     assert_eq!(data_read(&mut cpu, 20 + TBLC_CYCLES + TWC, 0x0005), 0x5A);
 }
 

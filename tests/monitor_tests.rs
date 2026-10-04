@@ -744,13 +744,16 @@ fn jp_we_fitted_lets_a_ram_program_write_the_rom() {
 #[test]
 fn jp_we_k1_probe() {
     // HARDWARE_BUILD 6, K-1: the record writes FFFF's own byte back, reads it twice at once
-    // (inside tBLC), stores the XOR at 0380, then waits out the page load and toggle-polls.
-    // 40: I/O6 toggled inside tBLC (the model's default reading). 00: it did not (the
-    // literal reading), or JP-WE is open. The ROM never changes.
+    // (inside tBLC), stores bit 6 of the XOR at 0380, then waits out the page load and
+    // toggle-polls. 40: I/O6 toggled inside tBLC (the model's default reading). 00: it did
+    // not (the literal reading), or JP-WE is open. The ROM never changes. The record is the
+    // one in the doc, the one pasted on the board.
+    let doc = std::fs::read_to_string("docs/HARDWARE_BUILD.md").unwrap();
+    let record = doc.lines().map(str::trim).find(|l| l.starts_with(':') && l.get(3..7) == Some("0300")).expect("no K-1 record");
     let rom = std::fs::read("rom/monitor.bin").unwrap();
     for (fitted, cells, want) in [(true, false, 0x40), (true, true, 0x00), (false, false, 0x00)] {
         let mut m = boot();
-        assert_eq!(m.run(":1803000021FFFF7E777EAE328003061405C20C037EAEE640C21003C910"), "");
+        assert_eq!(m.run(record), "");
         if fitted {
             m.cpu.fit_jp_we(20_480);
             m.cpu.set_load_window_cells(cells);
@@ -1643,7 +1646,8 @@ fn burn_with_jp_we_open_fails_at_the_first_differing_byte() {
     // poll ends at once, and verify stops at the first byte that differs, after that page's
     // writes and no later. It prints the address by OUT 00 and spins in the program, with no
     // port access, until RESET, which boots the old ROM. A raised byte after five identical
-    // pages, at page offset 3F; a lowered byte with S clear in the last page.
+    // pages, at page offset 3F; a lowered byte with S clear in the last page. The failure
+    // path runs no ROM code (the ROM may be half new): PC stays below F000 throughout.
     let rom = std::fs::read("rom/monitor.bin").unwrap();
     assert_eq!(rom[0xFC1], 0xFF, "the last page is padding");
     for (offset, value, writes) in [(0x17F, rom[0x17F].wrapping_add(1), 6 * 64), (0xFC1, 0x5A, 4096)] {
@@ -1657,6 +1661,7 @@ fn burn_with_jp_we_open_fails_at_the_first_differing_byte() {
         let mut n = 0;
         while !m.con().borrow().output().ends_with(b"\r\n") {
             assert!(m.cpu.cycles < BUDGET, "{:04X}: no message", offset);
+            assert!(m.cpu.pc < 0xF000, "{:04X}: ROM code at {:04X}", offset, m.cpu.pc);
             m.cpu.execute_one();
             n += m.cpu.transfers().iter().filter(|t| matches!(t, Transfer::MemWrite(0xF000.., _))).count();
             m.ports.extend(m.cpu.transfers().iter().filter(|t| matches!(t, Transfer::In(..) | Transfer::Out(..))));
@@ -1677,33 +1682,40 @@ fn burn_with_jp_we_open_fails_at_the_first_differing_byte() {
 
 #[test]
 fn burn_full_verify_catches_a_page_changed_after_its_verify() {
-    // After the 64 pages, burn verifies all 4096 bytes before it jumps to F000. A page-0
-    // byte changed once page 62 has verified (the chip idle, the last page not yet
-    // written) is caught there.
-    let rom = std::fs::read("rom/monitor.bin").unwrap();
+    // After the 64 pages, burn verifies all 4096 bytes before it jumps to F000. A byte
+    // changed once every page has verified (the chip idle) and the full verify has read
+    // F000 is caught there, in the first page or the last. The failure path runs no ROM
+    // code: PC stays below F000 until the message ends.
     let new = changed_rom();
-    let mut m = burner(&new);
-    m.cpu.fit_jp_we(1);
-    m.con().borrow_mut().push_input(b"G 0100\r");
-    m.run_to(0x0100);
-    let mut writes = 0;
-    // Page 62's verify reads FFBE; the poll reads only FFBF.
-    while !(writes == 4032 && m.cpu.transfers().contains(&Transfer::MemRead(0xFFBE, new[0xFBE]))) {
-        assert!(m.cpu.cycles < BUDGET, "page 62 never verified");
-        m.cpu.execute_one();
-        writes += m.cpu.transfers().iter().filter(|t| matches!(t, Transfer::MemWrite(0xF000.., _))).count();
+    for offset in [0x010, 0xFFF] {
+        let mut m = burner(&new);
+        m.cpu.fit_jp_we(1);
+        m.con().borrow_mut().push_input(b"G 0100\r");
+        m.run_to(0x0100);
+        m.con().borrow_mut().take_output();
+        let mut writes = 0;
+        while !(writes == 4096 && m.cpu.transfers().contains(&Transfer::MemRead(0xF000, new[0]))) {
+            assert!(m.cpu.cycles < BUDGET, "the full verify never started");
+            m.cpu.execute_one();
+            writes += m.cpu.transfers().iter().filter(|t| matches!(t, Transfer::MemWrite(0xF000.., _))).count();
+        }
+        let mut chip = new.clone();
+        chip[offset] ^= 0xFF;
+        m.cpu.load_rom(&chip);
+        while !m.con().borrow().output().ends_with(b"\r\n") {
+            assert!(m.cpu.cycles < BUDGET, "{:04X}: no message", offset);
+            assert!(m.cpu.pc < 0xF000, "{:04X}: ROM code at {:04X}", offset, m.cpu.pc);
+            m.cpu.execute_one();
+        }
+        assert_eq!(show(&m.con().borrow_mut().take_output()), format!("Burn failed {:04X}\\r\\n", 0xF000 + offset));
     }
-    let mut chip = [&new[..0xFC0], &rom[0xFC0..]].concat();
-    chip[0x010] ^= 0xFF;
-    m.cpu.load_rom(&chip);
-    assert_eq!(show(&m.run_for(b"", 2_000_000)), "G 0100\\r\\nBurn failed F010\\r\\n");
 }
 
 #[test]
 fn burn_refuses_a_ram_build_image() {
     // Byte 6 of the RAM test build is D0 (ARCHITECTURE 3.2): with JP-WE fitted, burn prints
-    // `Not a ROM image`, returns, and the ROM is unchanged. Junk and a lone wrong byte 0 are
-    // in the transcript.
+    // `Not a ROM image`, returns, and the ROM is unchanged. Junk, an erased image, and each
+    // byte wrong alone, below and above the value checked, are in the transcript.
     let (_, image) = ram_image();
     let rom = std::fs::read("rom/monitor.bin").unwrap();
     let mut m = burner(&image);
