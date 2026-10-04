@@ -1913,6 +1913,141 @@ fn pi_needs_its_carry() {
     assert!(got.starts_with(&format!("3.{}4:", &PI_DECIMALS[..30])), "{}", got);
 }
 
+#[test]
+fn example_rpn() {
+    boot().play("example_rpn");
+}
+
+/// examples/rpn.asm's rules in i128: what it prints for `line` (escaped as `show` does),
+/// with `stack` updated. An error prints its message and drops the rest of the line;
+/// the token that failed leaves the stack as it was.
+fn rpn_model(stack: &mut Vec<i128>, line: &str) -> String {
+    const MAX: i128 = 9_999_999_999_999_999;
+    let mut out = String::new();
+    let b = line.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i].to_ascii_lowercase();
+        i += 1;
+        let n = stack.len();
+        let err = match c {
+            b'0'..=b'9' => {
+                let mut v = (c - b'0') as i128;
+                while i < b.len() && b[i].is_ascii_digit() && v <= MAX {
+                    v = v * 10 + (b[i] - b'0') as i128;
+                    i += 1;
+                }
+                if v > MAX {
+                    Some("Overflow")
+                } else if n == 4 {
+                    Some("Stack overflow")
+                } else {
+                    stack.push(v);
+                    None
+                }
+            }
+            b' ' => None,
+            b'+' | b'-' | b'*' | b'/' if n < 2 => Some("Stack underflow"),
+            b'/' if stack[n - 1] == 0 => Some("Divide by zero"),
+            b'+' | b'-' | b'*' | b'/' => {
+                let (y, x) = (stack[n - 2], stack[n - 1]);
+                let r = match c { b'+' => y + x, b'-' => y - x, b'*' => y * x, _ => y / x };
+                if r.abs() > MAX {
+                    Some("Overflow")
+                } else {
+                    stack.truncate(n - 2);
+                    stack.push(r);
+                    None
+                }
+            }
+            b'p' if n == 0 => Some("Stack underflow"),
+            b'p' => {
+                out += &format!("{}\\r\\n", stack[n - 1]);
+                None
+            }
+            b's' => {
+                stack.iter().for_each(|v| out += &format!("{}\\r\\n", v));
+                None
+            }
+            b'c' => {
+                stack.clear();
+                None
+            }
+            _ => Some("Bad input"),
+        };
+        if let Some(e) = err {
+            out += e;
+            out += "\\r\\n";
+            break;
+        }
+    }
+    out
+}
+
+/// xorshift64: the operands for rpn_matches_i128.
+struct Rng(u64);
+
+impl Rng {
+    fn below(&mut self, n: u64) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0 % n
+    }
+
+    /// `len` digits, nines-heavy so additions carry through DAA, sometimes behind leading zeros.
+    fn number(&mut self, len: u64) -> String {
+        let mut s = if self.below(10) == 0 { "000".to_string() } else { String::new() };
+        for _ in 0..len {
+            let d = match self.below(10) { 0..=3 => 9, 4 => 0, _ => self.below(10) };
+            s.push((b'0' + d as u8) as char);
+        }
+        s
+    }
+}
+
+#[test]
+fn rpn_matches_i128() {
+    // examples/rpn.asm against an independent model (rpn_model): 200 operations on
+    // pseudo-random operands, each line ending in `s`, so the whole stack is compared with
+    // i128 arithmetic after every one. Results chain, so signs mix; multiplier lengths
+    // mostly fit 16 digits, and the rest overflow.
+    let mut m = boot();
+    for record in std::fs::read_to_string("examples/rpn.hex").unwrap().lines() {
+        m.run(record);
+    }
+    assert_eq!(m.run("G 0100"), "RPN calculator\\r\\n");
+    let mut rng = Rng(0x2545_F491_4F6C_DD1D);
+    let mut stack: Vec<i128> = Vec::new();
+    let (mut ops, mut negative, mut errors) = (0, 0, 0);
+    while ops < 200 {
+        let top = stack.last().map_or(1, |v| v.unsigned_abs().to_string().len() as u64);
+        let line = if stack.is_empty() || rng.below(10) == 0 {
+            let len = 1 + rng.below(16);
+            format!("c {} s", rng.number(len))
+        } else if stack.len() < 3 && rng.below(8) == 0 {
+            let len = 1 + rng.below(16);
+            format!("{} s", rng.number(len))
+        } else {
+            ops += 1;
+            let op = ["+", "-", "*", "/"][rng.below(4) as usize];
+            let len = match op {
+                "*" if rng.below(5) > 0 => 1 + rng.below(17u64.saturating_sub(top).max(1)),
+                "/" => 1 + rng.below(top),
+                _ => 1 + rng.below(16),
+            };
+            let x = if rng.below(25) == 0 { "0".to_string() } else { rng.number(len) };
+            format!("{} {} s", x, op)
+        };
+        let want = rpn_model(&mut stack, &line);
+        assert_eq!(m.run(&line), want, "{:?}", line);
+        negative += want.contains('-') as u32;
+        errors += (want.contains("flow") || want.contains("zero")) as u32;
+    }
+    assert!(negative >= 20 && errors >= 10, "{} negative, {} errors", negative, errors);
+    assert_eq!(m.run("q"), "");
+}
+
 /// A booted monitor with examples/burn.hex pasted and `image` at 1000, its default source.
 fn burner(image: &[u8]) -> Mon {
     let mut m = boot();
