@@ -124,6 +124,7 @@ In `examples/`, each as `.asm` source and a ready `.hex`. Each has a transcript,
 | `burn` | the image at 1000, paste `burn.hex`, fit JP-WE, `G 0100` (section 10) | the new monitor's banner, `Bad source`, `Not a ROM image`, or `Burn failed aaaa` |
 | `tictac` | paste `tictac.hex`, `G 0100`, then one key a move, 1-9 | the board and its replies; it never loses. `N` at `Again? (Y/N)` returns |
 | `ed` | paste `ed.hex`, `G 0100` | its `*` prompt: a line editor (`a`, `i n`, `d n`, `p`, `c`, `w NAME`, `r NAME`, `q`) with storage files; `?` for any error |
+| `life` | paste `life.hex`, `G 0100` (about 12 s at 2 MHz) | Conway's Life on a 32x16 torus: generations 0, 32, 64, 96 and 128 |
 
 `memtest`'s range, what it catches and how to change the range are in the header of
 `examples/memtest.asm`. **Under the RAM test build** (section 10), set the last address to CFFF
