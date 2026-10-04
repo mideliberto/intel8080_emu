@@ -5,13 +5,13 @@
 ; The image address is SRC: change it with E 0103 (low byte first).
 ;
 ; Before any write it checks SRC: the image, SRC to SRC+0FFF, must lie in
-; 0200-EEFF, clear of the workspace, this program (0080-01FF) and the stack
-; page (EF00-EFFF), so SRC is 0200-DF00. F000 (the ROM itself) and an image that wraps past FFFF
-; are refused too. Otherwise it prints "Bad source" and returns to the monitor
-; with nothing written. Then it checks that the image is a ROM build: byte 0 is 31
-; (COLD_START's LXI SP) and byte 6 is F0 (the high byte of its JMP; the RAM
-; test build has D0 there, ARCHITECTURE 3.2). Otherwise it prints
-; "Not a ROM image" and returns to the monitor with nothing written.
+; 0200-EEFF, clear of the workspace (0080-00FF), this program (0100-01FF) and
+; the stack page (EF00-EFFF), so SRC is 0200-DF00. F000 (the ROM itself) and an
+; image that wraps past FFFF are refused too. Otherwise it prints "Bad source"
+; and returns to the monitor with nothing written. Then it checks that the image
+; is a ROM build: byte 0 is 31 (COLD_START's LXI SP) and byte 6 is F0 (the high
+; byte of its JMP; the RAM test build has D0 there, ARCHITECTURE 3.2). Otherwise
+; it prints "Not a ROM image" and returns to the monitor with nothing written.
 ;
 ; Then for each 64-byte page, F000 first: write the 64 bytes, wait for the page
 ; load to close, toggle-poll I/O6 until the write cycle ends, and verify the
