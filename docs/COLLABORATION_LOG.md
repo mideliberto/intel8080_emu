@@ -63,6 +63,20 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-04: Phase 12 Specified: Board Artifacts, In-Circuit Burn, Esc, RST 6
+**Decision:** Mike decided about 40 questions in four batched rounds after six drafts were each critiqued through three lenses (hardware, mantra, testability). Homes: ARCHITECTURE 1, 2, 3.2, 6.4-6.13, 8; MONITOR_SPEC 2, 5, 6.18-6.20, 8.1, 9, 11; HARDWARE_BUILD 1-3, 6; `hw/`; `docs/PARTS_ORDER.md`; `examples/burn`.
+- **Board files:** a plain-text netlist (`hw/board.net.txt`) checked by `cargo test`, which also golden-checks the KiCad netlist; Claude writes netlist, footprints, outline (160 x 120 mm) and DRC rules, Mike places and routes. The netlist is the only home of pin numbers; ARCHITECTURE 6 stays normative for circuits, and its 6.10 and HARDWARE_BUILD 3.1 pin tables became pointers. A test checks the routed `.kicad_pcb` against the netlist once it has footprints.
+- **GAL:** the test evaluates the committed `.jed` fuse map, not the `.pld`. The 22V10 is full (16 inputs, 6 outputs) because it decodes ports from the high address copy. The FF read and the IN-latch enable gain NOT RESET (the 8228's strobe behavior in RESET is unresolved). The GAL drives DB0 itself, so the 74HCT125 is gone: **decision GLUE revised**.
+- **Board choices:** off-board manual-ACK jig on J1; the 330 ohm array between the data 245 and the node shared by the Pi and the 374 (the Pi's read-back sees the latch inputs); RDYIN hard-wired to /Q with a 10 kohm pull-up (no jumper); TEST_RESET by a 2N3904 (a 2N7000 is not guaranteed from a 2.6 V gate); C25 dropped; no test points on phi1/phi2 (6.12 rule 1); a 2.1 mm jack with a **P-MOSFET reverse-polarity switch** (Mike's choice over jack-only; the drop comes out of the 4.85-5.15 V window, measured after the FET).
+- **Parts:** CD74HCT74E (SN74HCT74N is NRND); MAX1044, with **decision POWER reworded "ICL7660-class charge pump"**; Mouser primary, Pololu direct; a series 18.432 MHz crystal with a parallel fallback, plus start-up and drive-level checks in step 1; Mean Well GST18A05 with a loaded check at the jack; any 8080A except a NEC D8080A without F, accepted only after steps 2 and 8; NOS chips ordered when the PCB goes to fab; no 8238; DS1813-5 with no substitute.
+- **Burn:** a user program (`examples/burn`), not a monitor command: 0 ROM bytes, runs on v0.9. After each page it waits at least tBLC at the fastest legal clock, then toggle-polls: correct whether or not the chip polls inside the page-load window (bench item K-1), and a clean `Burn failed aaaa` with JP-WE open. ARCHITECTURE 6.10 rule 3 and 3.2 req. 6 gain that one exception. It checks the source (0200-DF00, `Bad source`) and the image (bytes 0 and 6, `Not a ROM image`; COLD_START's first 7 bytes are now a layout rule), verifies every page and the whole image, then jumps to F000. The emulator models a fitted JP-WE (`--jp-we`) under both readings. Bring-up step 3's write-back loop got the same page-close wait.
+- **Esc (reverses the no-abort halves of Q-HUNG and Q-ABORT; Mike's choice over Claude's "defer"):** checked in N/Q's BUSY wait and once per LF, never in A or U; each check drains the console; `Aborted`. Type-ahead during a running N or Q is discarded (MONITOR_SPEC 2 exception). A stream with no LF still needs RESET or the file form.
+- **RST 6 (supersedes Q-R-BREAK; narrows "No RST Vectors, No API Table"; Mike's choice over Claude's "defer"):** every G writes JMP BRK_ENTRY at 0030-0032; a planted F7 prints `BRK aaaa` and leaves the registers for R. Debugging only: RET stays the only supported exit and programs MUST NOT rely on 0030. No new command, no new workspace.
+- **Phasing:** one Phase 12 before the 1.0 candidate; no command change, so the banner stays 0.9. ASK memory and the interrupt tick stay Someday (no consumer).
+
+**Rationale:** the board files are text a test can hold to the spec, and the agent stops where it can't see (layout). The burn's only consumer is "no TL866", which a program meets with no ROM cost. Esc and RST 6 were Mike's calls: each now has a named consumer (an endless N stream; bring-up debugging) and costs 58 and 44 bytes.
+**Mantra check:** declined: a ROM `P` command (154+ bytes, a bootstrap), a `B` breakpoint command, PC/SP in R, a per-byte Esc check, an on-board jig (8 parts), a RDYIN jumper, a drawn KiCad schematic, autorouting, a shunt diode as "protection".
+
 ### 2026-10-03: Phase 11 Specified: No ROM Code
 **Decision:** Mike accepted every Phase 11 recommendation (Q11-HELP, Q11-SELFTEST, Q11-SAVE, Q11-EXAMPLES, Q11-GUIDE, Q11-V1, Q11-REPLAY), and the Phases 8-11 cross-check fixes that apply to Phase 11:
 - **Detailed help:** cut. `?` stays the one-screen list; detail is in `docs/USER_GUIDE.md` and MONITOR_SPEC 6. Moving the help text behind a mailbox `HELP` command (752 ROM bytes in v0.9, measured 2026-10-03; 656 before Phases 8-10) is a Someday lever, not a plan.
@@ -585,7 +599,7 @@ Console I/O debugging session:
 
 ## Current State
 
-**Last Updated:** October 3, 2026
+**Last Updated:** October 4, 2026
 
 ### Completed
 
@@ -600,10 +614,13 @@ Console I/O debugging session:
 - Q (Phase 9, MONITOR_SPEC 6.19): mailbox `ASK` with the rest of the line verbatim, entering N's tail at `CN_SEND`
 - R (Phase 10, MONITOR_SPEC 6.20): `G` pushes G_RETURN, which saves A, F, BC, DE, HL in REGS (ARCHITECTURE 1.1) before WARM; R prints them
 - ROM overlay boot mechanism; CONOUT is OUT 00 / RET, so the first Pi access after reset is the banner's OUT 00
-- 3116 of 4096 bytes used (980 free; `make size`)
+- Esc aborts a running N or Q, and RST 6 breakpoints print `BRK aaaa` (Phase 12, MONITOR_SPEC 6.18, 8.1)
+- 3218 of 4096 bytes used (878 free; `make size`)
 - RAM test build (ARCHITECTURE 2.1): `rom/monitor_ram.hex`, the same source at D000 (guard top D000, F/M/L refuse the image, ` RAM` banner), loaded through the resident HEX loader and run with `G D000`, in the harness and over TCP on `pi8080d --sim`. Reviewed and fixed 2026-10-03
 
 **Debugger (host-side, ARCHITECTURE 7.4):** Ctrl-E / `--debug` / `--script`, break, step, registers, memory, disassembly with ROM symbols (`rom/monitor.sym`), watchpoints, I/O breaks, port trace, 256-step trace ring
+
+**Board files (Phase 12):** `hw/glue.pld`/`glue.jed` (GAL), `hw/board.net.txt` (netlist, the only home of pin numbers) with `hw/board.kicad.net` and KiCad starting files, `docs/PARTS_ORDER.md`; `examples/burn` and the emulator's `--jp-we` model of a fitted JP-WE
 
 **Examples and user guide (Phase 11):** `examples/hello` and `examples/memtest` (`.asm` and committed `.hex`, `cd examples && make`), each with a transcript on every path; `docs/USER_GUIDE.md`, the non-normative operating guide; Monitor 1.0 defined in the roadmap's End State
 
@@ -612,8 +629,8 @@ Console I/O debugging session:
 
 **Pi daemon `pi8080d` (code, 2026-10-03; PI_DAEMON.md):** `src/pi/mod.rs` (the `Gpio` seam, `setup_pins`, `serve`: the bus loop, RESET handling, TCP console, trace), `src/pi/linux.rs` (`GpioMem`, the RESET line by raw v2 ioctl, `ntp_local_time`), `src/pi_main.rs`. Every transcript passes through it on the simulated board (`src/pi/sim.rs`). `--sim FILE` runs the same board with the CPU model, so the whole Pi stack runs before the board exists (PI_DAEMON 16). The static aarch64 musl binary cross-builds on the Mac with `rust-lld`. Reviewed and fixed 2026-10-03; the simulator gaps left are listed in `TODO.md`. Not yet run on a Pi (PI_DAEMON 14)
 
-**Testing (verified 2026-10-03):**
-- 6 library + 13 host + 130 CPU + 37 device + 56 mailbox + 58 monitor + 18 Pi daemon + 16 debugger + 8 terminal = 342, all passing (the GET, N, ASK and Q tests run curl against a local test server, never the internet or the API, key or no key) (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
+**Testing (verified 2026-10-04):**
+- 6 library + 13 host + 139 CPU + 37 device + 56 mailbox + 73 monitor + 18 Pi daemon + 17 debugger + 8 terminal + 4 GAL + 7 netlist = 378, all passing (the GET, N, ASK and Q tests run curl against a local test server, never the internet or the API, key or no key) (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 - 3 `#[ignore]` GET time-limit tests (connect 10 s, stall 30 s twice) pass: `cargo test --test mailbox_tests -- --ignored`
 - 1 `#[ignore]` live ASK test, not yet run with a key: `ANTHROPIC_API_KEY=... cargo test --test mailbox_tests ask_live -- --ignored`
@@ -626,19 +643,20 @@ Console I/O debugging session:
 - **Phase 9:** done 2026-10-03 (mailbox `ASK`, Q, v0.8), reviewed and fixed the same day. The live ASK test by hand and the Pi bench row remain (`TODO.md`).
 - **Phase 10:** done 2026-10-03 (R, the G_RETURN capture, REGS, v0.9).
 - **Phase 11:** done 2026-10-03 (examples, `docs/USER_GUIDE.md`, the consistency pass, Monitor 1.0 defined; no ROM change). The socat `--sim` console was verified live 2026-10-03.
-- **Next:** Track A, the board design artifacts (schematic/netlist, GAL equations, connectivity test, parts order, PCB split), and Track B, the deliberately deferred Someday items, each needing a named consumer first. The live Q check waits for Mike's API key. Monitor 1.0 is a tag on a board-proven image.
+- **Phase 12:** code complete 2026-10-04 (board files, `examples/burn` and `--jp-we`, Esc, RST 6). Bench: K-1, the fab gates, the parts confirmations, the first in-circuit burn (`TODO.md`).
+- **Next:** Mike places and routes the board in KiCad (HARDWARE_BUILD 2.3, `hw/`), confirms the parts cart, orders. The live Q check waits for his key. Then the 1.0 candidate (End State), proven on the board.
 - **Pi daemon:** specified and built 2026-10-03 (`docs/PI_DAEMON.md`); the bench checks (PI_DAEMON 14) wait for the board.
 - **Review findings:** 2026-10-02 review found CPU flag bugs, ROM range and parse bugs, and vacuous tests. All fixed by 2026-10-03 (steps A-E); `TODO.md` keeps the repros.
 
 ### Open Decisions
 
-None. The Phase 11 doc items (CLAUDE.md Status vs this log, README vs USER_GUIDE 9, the shim's exit wording, the curl Build line) were fixed 2026-10-03. Deferred by design, not open: how transcripts replay on the board (Q11-REPLAY, decided at bring-up step 6). Every earlier set is closed; see Key Decisions. The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
+Phase 12 logged doc conflicts the bench should settle (8228 strobes in RESET, the 8224 crystal and trim capacitor, VBB at 4.85 V, +12 V turn-on, the Pi VOH source) and three small proposals (`TODO.md` Open Decisions). Deferred by design: how transcripts replay on the board (Q11-REPLAY, bring-up step 6).
 
 ### Blocked/Deferred
 
 - **Debugger leftovers:** reset, register and memory writes, conditional breakpoints: Someday, when a need shows up (`TODO.md`). R shipped in Phase 10
 - **Pi services:** one Service Mailbox at 0x10-0x13. Phase 6 `TIME`, 7 `ASM`/`DIS`, 8 `GET` (the background worker and BUSY) and 9 `ASK` (Claude) done
-- **8253 timer / interrupts:** Someday
+- **8253/8254 timer / interrupts, ASK memory:** Someday (no consumer, rechecked in Phase 12)
 
 ### Future Vision
 
@@ -648,6 +666,14 @@ None. The Phase 11 doc items (CLAUDE.md Status vs this log, README vs USER_GUIDE
 ---
 
 ## Recent Sessions
+
+### 2026-10-04: Phase 12 (Tracks A and B)
+- Built: the GAL (`hw/glue.pld`/`.jed`, an exhaustive fuse-map test against the emulator's decode), the board netlist with a pad-anchored checker and KiCad starting files, `docs/PARTS_ORDER.md`; Esc for N and Q, RST 6 breakpoints, `examples/burn` and the `--jp-we` model. ROM 3116 -> 3218, tests 342 -> 378, exercisers 4/4, clippy clean on both targets.
+- Process: six specs drafted, each critiqued through three lenses and revised (30 agents); about 40 decisions in four batched rounds; three lanes built in parallel worktrees, each reviewed with mutation runs in a private copy and fixed before merge; two follow-up lanes for Mike's last four answers.
+- Decided: Key Decisions "Phase 12 Specified". Mike overrode three recommendations: Esc and RST 6 in, and a P-MOSFET reverse switch at the jack.
+- What bit us: the Esc drain stopped at the first Esc, so `Esc [A` left `[A` for the prompt (review found it; +11 bytes). A USER_GUIDE breakpoint procedure stored F7 with `.`, which E discards. HB step 3 made the WAIT set path live without fitting the 74HCT14 that feeds it. An `rsync -a` scratch copy kept timestamps, cargo reused a mutated build, and one mutation run was void until it was redone. Mouser, DigiKey and analog.com block automated reads, so the order list carries "(confirm)" marks.
+- Datasheet corrections on the way: the DS1813 holds RESET at least 100 ms (typ 150), not 150; tPB is 1 us. The AT28C64B leaves open whether it polls inside tBLC (K-1), hence the page-close wait.
+- Not run: the live Q (needs Mike's key; `ask_live` skips without one), every [bench] item.
 
 ### 2026-10-03: Session Close (2026-10-02 to 03 Marathon)
 - Built: every phase, 1-11; the debugger; the Pi daemon with `--sim`; the RAM test build; the hardware reference; and the full hardware design on paper. The whole review, decide, build cycle ran as ultracode workflows, with Mike deciding every question.

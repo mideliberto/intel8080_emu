@@ -1,6 +1,15 @@
 # TODO
 
 ## Open Decisions (Mike decides before anyone codes against them)
+- [x] Phase 12 spec, about 40 questions in four rounds (toolchain, PCB split, GAL proof, Track B triage; burn form, K-1, phasing, Esc; RST 6, GAL changes, netlist set, 5 V input; parts set, burn behavior; TP7/TP8, step 3 loop, burn guard, doc fixes): closed 2026-10-04 (Key Decisions, "Phase 12 Specified: Board Artifacts, In-Circuit Burn, Esc, RST 6"). Mike took every recommendation except: Esc and RST 6 pulled in (Claude said defer), and a P-MOSFET reverse-polarity switch at the 5 V jack (Claude said jack only).
+- [ ] Doc conflict (Phase 12): do the 8228 read strobes follow DBIN (reference 14 item 7, text) or /STSTB (its waveform), which the 8224 holds low through RESET? Under the waveform reading /MEMR and /I/OR are active in RESET, and ARCHITECTURE 6.2's "OVL changes ... never while MEMR is active" is false during reset. The GAL now gates the FF read and the IN latch on NOT RESET, so no driver fights either way; 6.13 calls the behavior unresolved. Settle on the bench (LA-C during a held RESET), then fix 6.2.
+- [ ] Doc conflict (Phase 12): the 8224 crystal. Reference 11.2 asks for series resonance, 20-35 pF load, 4 mW minimum drive, 0.005 % and "may need a 3-10 pF trim capacitor"; ARCHITECTURE 6.1 says no trim capacitor; stock HC-49 parts are rated about 1 mW and +/-30-50 ppm. Step 1 now measures start-up over 20 power cycles and the drive level; decide the wording from that.
+- [ ] Doc conflict (Phase 12): VBB at VCC 4.85 V. With MAX1044/ICL7660 worst case (Rout 100 ohm, 1 mA) VBB is about -4.70 to -4.75 V, at or past the 8080A's -4.75 V. ARCHITECTURE 6.9 states the 4.85-5.15 V window without the derivation. Step 0's loaded check measures it; tighten the window or accept the measurement.
+- [ ] Doc conflict (Phase 12): ARCHITECTURE 6.9 says +12 V never exceeds 12.6 V "including at turn-on", but step 0 checks +12 V only statically. Add a single-shot of +12 V at power-up to step 0?
+- [ ] Doc conflict (Phase 12): ARCHITECTURE 6.7's "Pi GPIO (VOH 2.6-3.0 V)" has no source, and 6.6's TEST_RESET base-drive figure now relies on it. Cite a BCM2711 figure or mark it (est).
+- [ ] Phase 12 proposal: a DMM check in bring-up step 5 for a Pi ribbon fitted rotated at the Pi end (Pi 5 V onto board GND) before first power. PARTS_ORDER only says to mark pin 1.
+- [ ] Phase 12: an identical-image burn ends in the banner, which tests MUST NOT match (MONITOR_SPEC 1.1), so the burn dry run is a Rust test only and a board replay of the transcripts never runs the burn loop. Want a board-side dry run? Needs a transcript-format or 1.1 decision.
+- [ ] Phase 12, minor: the netlist requires the Pololu PS1 EN pin open (S5). Tie it to VIN instead? Edit OPEN_INPUTS and S5 together.
 - The 2026-10-02 set closed 2026-10-02 and the 2026-10-03 sets closed 2026-10-03; see COLLABORATION_LOG Key Decisions. The specs are docs/ARCHITECTURE.md, docs/DEVICE_SPECS.md, docs/MONITOR_SPEC.md, docs/PI_DAEMON.md.
 - [x] Pi daemon spec, 9 questions (build-bus-clock, gpio-seam, reset-check-cost, cdev-interface, listen-default, cross-build, measure-mode, fourth-normative-doc, console-input-arrival, device-send-wording): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Pi Daemon Specified"). Written into docs/PI_DAEMON.md, ARCHITECTURE 6.4/6.6/7.4, DEVICE_SPECS 3/4/8/10, HARDWARE_BUILD 3/5.
 - [x] Phase 11 spec, 7 questions (Q11-HELP, Q11-SELFTEST, Q11-SAVE, Q11-EXAMPLES, Q11-GUIDE, Q11-V1, Q11-REPLAY): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Phase 11 Specified"), with the cross-check fixes for Phase 11 (C15 the stale anchors: MONITOR_SPEC 1.1 is `0.9`, the guide cites N, Q and R as 6.18, 6.19, 6.20; C16 1.0 criterion 5 keeps "no key" for repeatability and criterion 6 restarts the daemon with the key; C17 the PI_DAEMON 13.2 cost line in checklist item 6). Written into IMPLEMENTATION_ROADMAP Phase 11 and The End State (Monitor 1.0), MONITOR_SPEC 1.1, ARCHITECTURE 8, docs/USER_GUIDE.md, README, QUICK_REFERENCE, CLAUDE.md Build.
@@ -34,6 +43,18 @@
   - [x] Gate part: signed off as built: a 74HCT138, not a GAL pin. ARCHITECTURE 6.10.
   - [x] Taken as recommended (SIM-RESET, SIM-UNIT, RAM-BANNER, RAM-TRANSCRIPTS, the HALT LED term, the 1 kohm CPU-side analyzer taps, SDP off, the JP-WE pull-up): signed off as built.
 - [x] Halt floats the buses: closed 2026-10-03, Mike chose 10 kohm pull-up SIPs. Built as A0-A15 and system DB0-DB7; CPU-side D0-D7 excluded (no datasheet margin against the 8080A IDL, and the GAL pin-keepers already hold its only CMOS inputs). DB SIP socketed, never fitted with the 2.2 kohm bring-up pull-down. ARCHITECTURE 6.13, HARDWARE_BUILD 1-3 and 6, DEVICE_SPECS 2.4 (informative FF note only).
+
+## Done: Phase 12 - Board Artifacts, In-Circuit Burn, Esc, RST 6 (2026-10-04, code; bench pending)
+- [x] Track A: `hw/glue.pld` + `hw/glue.jed` + `tests/gal_tests.rs` (2^16 vectors, OE included; 46 .pld mutants, 42 killed, 4 consistent pin swaps or equivalent); 74HCT125 dropped, NOT RESET on the FF read and IN latch
+- [x] Track A: `hw/board.net.txt` + `tests/netlist_tests.rs` (pad-anchored checks, part values, single-driver contention, 5 V isolation, one mutant per check ID), `hw/board.kicad.net`, `board.kicad_pro`/`_pcb`/`_dru`; TP7/TP8 (phi) dropped, C612 rejects any test point on phi or INTA
+- [x] Track A: `docs/PARTS_ORDER.md` with the refdes check; HARDWARE_BUILD BOM, sourcing, placement (2.3), steps 0-4 revised; A7 (step 3 SRAM VIH check on writes, with its fail action)
+- [x] Track B: Esc (+58 bytes, incl. the drain after an Esc found in review), RST 6 (+44), `examples/burn` (0 ROM bytes, source guard 0200-DF00, `Bad source`), the emulator JP-WE model (`--jp-we`); ROM 3218/4096
+- [x] PI_DAEMON 13.2 re-measured (24 transcripts, 222,600-228,500 accesses, about 2.7 s)
+- [ ] Bench K-1 (HARDWARE_BUILD 6): does I/O6 toggle inside tBLC? Informational; record the result in the log
+- [ ] Fab gates (HARDWARE_BUILD 2.2): PS1 pad order (buy the module first), every footprint at the first Pcbnew import, J5 against the bought jack, the KiCad files open in KiCad 8, Mike checks each type table in `tests/netlist_tests.rs` against its datasheet
+- [ ] Parts cart (PARTS_ORDER): SUP53P06-20 active and stocked at Mouser (automated reads were blocked); DS1813-5+ lifecycle; every "(confirm)" PN; PJ-002AH 2.0 mm pin vs the 2.1 mm plug; HLMP-1700 max Vf at 2 mA (ARCHITECTURE 6.11); the programmer takes galette's QF5892 `.jed` for ATF22V10C unconverted
+- [ ] First in-circuit burn after bring-up step 7 (USER_GUIDE 10), K-1 just before it
+- [ ] Live Q check (Mike's key): `ANTHROPIC_API_KEY=... cargo test --test mailbox_tests ask_live -- --ignored` (skips without a key, so its "ok" so far proves nothing), then one real `Q` in `cargo run`
 
 ## Current
 - [x] Apply alignment package (archived: docs/archive/HANDOFF_2026-10.md)
@@ -277,18 +298,23 @@ All done 2026-10-03 (step E): the WARM/error-tail/one-parser/RANGE refactor from
 - None.
 
 ## Someday
-- [ ] ASK with conversation memory (Q-MEMORY: single turn chosen)
+- [ ] ASK with conversation memory (Q-MEMORY: single turn chosen; Phase 12: still no consumer)
 - [ ] ASK prompt from a storage file, `ASK <FILE` (Q-PROMPT-LEN: one line chosen)
-- [ ] Esc aborts a BUSY mailbox request (MB_GET is shared: T, A, U, N and Q; Q-ABORT/Q-HUNG: no abort chosen)
+- [x] Esc aborts a running N or Q: done in Phase 12 (BUSY wait plus once per LF; a stream-form body with no LF still needs RESET or the file form)
 - [ ] A model flag for ASK (Q-MODEL: a constant chosen)
 - [ ] Debugger reset (must reset the devices too, ARCHITECTURE 3.1): when a need shows up
 - [ ] Debugger writes to registers or memory: when a need shows up
 - [ ] Debugger conditional breakpoints: when a need shows up
-- [ ] RST breakpoints for R (stop inside a program on the board): when bench debugging needs them; costs a 0000-007F vector, a memory-map change (Q-R-BREAK: none chosen)
+- [x] RST 6 breakpoints for R: done in Phase 12 (G writes the 0030 vector; debugging only)
 - [ ] 8253 timer, TIMER_ISR, RST 7 vector: when something needs a periodic interrupt
 - [ ] Hardware prototype: see docs/HARDWARE_BUILD.md (BOM, 9-step bring-up)
 - [ ] Pi-assisted hardware single-step (needs A8-A15 on the Pi; not in v1)
-- [ ] Interrupt tick source (Pi GPIO vs 8254) when something needs a periodic interrupt; G_RETURN and WARM then need a DI (MONITOR_SPEC 8)
-- [ ] ROM burn routine through JP-WE (ARCHITECTURE 6.10 rules 1-6), with its emulator model of the fitted jumper (write cycle, polling reads)
+- [ ] Interrupt tick source (Pi GPIO vs 8254) when something needs a periodic interrupt; G_RETURN, BRK_ENTRY and WARM then need a DI (MONITOR_SPEC 8). Phase 12: still no consumer. The 8253 line above is the same item (ARCHITECTURE 6.7 and 8 say 8254); merge them when it is picked up
+- [x] ROM burn through JP-WE: done in Phase 12 as a user program, `examples/burn`, with the emulator's `--jp-we` model
+- [ ] `pi8080d --sim` has no JP-WE option (burn.md 5.1): add it only if a rehearsal over TCP is ever needed
+- [ ] One shared PI_WINDOW const for `pi_main.rs`, `gal_tests.rs` and the test files that loop 0x00..=0x6F: if a fourth use appears
+- [ ] `src/pi/linux.rs` private `RESET_LINE = 13` repeats the bit index of `pi::RESET`
+- [ ] Netlist tests: tie HARDWARE_BUILD 2's BOM test-point count to the netlist, and have `order_check` compare each line's Part/MPN with the netlist value (reviewer mutants that survive today: R14 on the 4.7k line, RN5/RN6 swapped)
+- [ ] Rename `regs_are_written_only_by_a_g_return` (an RST 6 break also writes REGS; the body is right)
 - [ ] RAM-build debugger symbols (`monitor_ram.sym`): only if debugging the RAM image in the emulator ever needs names
 - [ ] If the ROM runs out of room: move the `?` text (`MSG_HELP`; measure it then) behind a mailbox `HELP` command; `?` becomes a fourth mailbox-client user (about 30 bytes). A protocol addition: Mike decides when it is needed

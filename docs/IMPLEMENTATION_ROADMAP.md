@@ -15,6 +15,7 @@
 | 9 | Claude Integration | ✅ Complete |
 | 10 | R command (debugger done early) | ✅ Complete |
 | 11 | Polish | ✅ Complete |
+| 12 | Board artifacts, in-circuit burn, Esc, RST 6 | ✅ Code complete 2026-10-04; bench pending |
 | - | Pi daemon track (parallel) | 🟡 Code done 2026-10-03, bench pending |
 
 ---
@@ -308,6 +309,50 @@ commands run by hand are in `TODO.md` (Done: Phase 11).
 
 ---
 
+## Phase 12: Board Artifacts and the Deferred Items ✅ CODE COMPLETE (2026-10-04)
+
+**Goal:** turn ARCHITECTURE 6 and HARDWARE_BUILD into files a board can be built from, and ship the
+Someday items Mike chose to pull in (Track B). Lands before the 1.0 candidate, so 1.0 criterion 5
+replays the new transcripts on the board.
+
+**Specified and decided 2026-10-03/04** (COLLABORATION_LOG Key Decisions, "Phase 12 Specified: Board
+Artifacts, In-Circuit Burn, Esc, RST 6"). Deferred again, no consumer: ASK conversation memory and the
+interrupt tick.
+
+**Tasks (Track A, board):**
+- [x] GAL: `hw/glue.pld` (galette 0.3.0) and the committed `hw/glue.jed`; `tests/gal_tests.rs` evaluates
+  the fuse map for all 2^16 inputs, output enables included, against a model probed from the emulator's
+  decode plus the ARCHITECTURE 6.3-6.5 terms. NOT RESET on the FF read and the IN-latch enable; the
+  GAL drives DB0 itself and the 74HCT125 is gone.
+- [x] Netlist: `hw/board.net.txt`, the only home of pin numbers; `tests/netlist_tests.rs` checks it pad by
+  pad against `reference/8080_HARDWARE.md` and ARCHITECTURE 6, golden-checks `hw/board.kicad.net`, and
+  checks `hw/board.kicad_pcb` once it has footprints. KiCad starting files: outline 160 x 120 mm, DRC rules.
+- [x] `docs/PARTS_ORDER.md`, one line per order line keyed to the netlist refdes, checked by a test.
+- [x] HARDWARE_BUILD: placement constraints, bring-up steps 0-4 revised (loaded supply check, crystal
+  start-up and drive level, RDYIN hard-wired, off-board ACK jig, the step 3 page-close wait, SRAM VIH on
+  writes).
+
+**Tasks (Track B):**
+- [x] Esc aborts a running N or Q (MONITOR_SPEC 6.18, 6.19): checked in the BUSY wait and once per LF;
+  each check drains the console; prints `Aborted`. Reverses the no-abort halves of Q-HUNG and Q-ABORT.
+- [x] RST 6 breakpoints (MONITOR_SPEC 8.1): G writes JMP BRK_ENTRY at 0030-0032; `BRK aaaa`; R shows
+  the registers. Debugging only.
+- [x] `examples/burn`: programs the ROM in circuit through JP-WE (ARCHITECTURE 6.10), 0 ROM bytes; the
+  emulator models a fitted JP-WE (`--jp-we`), both readings of the page-load window tested.
+
+**Done:** ROM +102 bytes (3116 -> 3218, 878 free): Esc +58, RST 6 +44. Banner stays 0.9 (no command
+change, MONITOR_SPEC 1.1). Tests 342 -> 378. Every lane had an adversarial review with mutation runs;
+every non-equivalent surviving mutant was killed before merge.
+
+**Success criteria:**
+- [x] `cargo test`, clippy on the host and aarch64 musl, and the release exercisers pass.
+- [x] Every new transcript passes in the emulator, through pi8080d on the simulated board, and on the RAM
+  test build.
+- [ ] Bench: K-1, the fab gates in HARDWARE_BUILD 2.2, the parts confirmations in PARTS_ORDER, and the
+  first in-circuit burn after bring-up step 7 (`TODO.md`).
+
+---
+
 ## The End State
 
 An 8080 system that:
@@ -323,7 +368,7 @@ The 8080 code is simple. The coprocessor handles complexity. That's the whole po
 
 1.0 is a git tag, not a phase. It marks the commit whose burned image passed every item below.
 
-- **Candidate.** After Phase 11, one commit sets the banner version to `1.0` (MONITOR_SPEC 1.1),
+- **Candidate.** After Phase 12, one commit sets the banner version to `1.0` (MONITOR_SPEC 1.1),
   rebuilds `rom/monitor.bin` and changes nothing else. That exact image is burned and checked. A
   candidate that fails is fixed and rebuilt, still `1.0`, still untagged, and every item is run again
   on the new image.

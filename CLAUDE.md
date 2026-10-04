@@ -5,11 +5,12 @@
 **Mantra:** "A fool admires complexity, genius admires simplicity."
 
 ## Status
+- Phase 12 code complete 2026-10-04 (bench pending). Track A: the GAL (`hw/glue.pld`, `hw/glue.jed`, exhaustive fuse-map test), the board netlist (`hw/board.net.txt`, pad-anchored checker, KiCad starting files; Mike places and routes), `docs/PARTS_ORDER.md`. Track B: Esc aborts a running N or Q; RST 6 breakpoints (`BRK aaaa`, debugging only); `examples/burn` programs the ROM in circuit through JP-WE, with the emulator's `--jp-we` model. ASK memory and the interrupt tick stay Someday.
 - Phase 11 complete (no ROM change: `examples/hello` and `examples/memtest` with transcripts, `docs/USER_GUIDE.md`, a consistency pass, Monitor 1.0 defined in the roadmap's End State as a tag on a board-proven image). Phase 10 before it (the R command: `G` pushes G_RETURN, which saves A, F, BC, DE, HL in the REGS workspace row for R). Phase 9 before it: mailbox `ASK`, Claude through the Messages API on the same `/usr/bin/curl` worker, the key from `ANTHROPIC_API_KEY` on the Pi; the Q command. Phase 8: mailbox `GET`, the first background command, and N. Phase 7: mailbox `ASM`/`DIS`, A and U, the shared ROM mailbox client. Pi daemon `pi8080d` (`docs/PI_DAEMON.md`) code done 2026-10-03: `src/pi/`, `src/pi_main.rs`; every transcript passes through it on the simulated board (`src/pi/sim.rs`); `--sim` runs the whole Pi stack on that board with the CPU model (PI_DAEMON 16); the static aarch64 musl binary links. Bench checks pending (PI_DAEMON 14).
 - RAM test build (ARCHITECTURE 2.1): `rom/monitor_ram.hex`, the monitor at D000, loaded through the resident HEX loader for testing ROM changes on the board. Board debug aids specified 2026-10-03: analyzer headers, status LEDs, JP-WE (ARCHITECTURE 6.10-6.12).
-- 342 tests passing (6 library + 13 host + 130 CPU + 37 device + 56 mailbox + 58 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 9 `#[ignore]`: 4 CPU exercisers (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`), the 3 GET time-limit tests (`cargo test --test mailbox_tests -- --ignored`, about 35 s), the live ASK test (needs `ANTHROPIC_API_KEY`; skips without it) and `w_command_cycles`; all passing (the live ASK test not yet run with a key)
-- Monitor ROM v0.9, 20 commands plus the `:` HEX loader, matches MONITOR_SPEC. 3116 of 4096 bytes used (`cd rom && make size`), 980 bytes headroom
-- Spec: four normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC since 2026-10-02; PI_DAEMON since 2026-10-03). Open decisions: none (`TODO.md`). Phases 1-11 done; Monitor 1.0 = a tag on a board-proven image (End State).
+- 378 tests passing (6 library + 13 host + 139 CPU + 37 device + 56 mailbox + 73 monitor + 18 Pi daemon + 17 debugger + 8 terminal + 4 GAL + 7 netlist), plus 9 `#[ignore]`: 4 CPU exercisers (`scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`), the 3 GET time-limit tests (`cargo test --test mailbox_tests -- --ignored`, about 35 s), the live ASK test (needs `ANTHROPIC_API_KEY`; skips without it) and `w_command_cycles`; all passing (the live ASK test not yet run with a key)
+- Monitor ROM v0.9, 20 commands plus the `:` HEX loader, matches MONITOR_SPEC. 3218 of 4096 bytes used (`cd rom && make size`), 878 bytes headroom
+- Spec: four normative docs (ARCHITECTURE, DEVICE_SPECS, MONITOR_SPEC since 2026-10-02; PI_DAEMON since 2026-10-03). Open decisions: see `TODO.md` (doc conflicts and bench items logged by Phase 12). Phases 1-12 done (12: bench pending); Monitor 1.0 = a tag on a board-proven image (End State).
 - Live task list: `TODO.md`
 
 ## Roles
@@ -31,6 +32,8 @@
 ## Build
 - `cargo test` / `cargo run`
 - ROM: `cd rom && make` (AS Macro Assembler: `asl` + `p2bin`). Commit `monitor.bin`, `monitor.sym` (debugger symbols) and `monitor_ram.hex` (RAM test build, ARCHITECTURE 2.1), not `.lst`/`.p`/`.noi`.
+- GAL: `cd hw && make` (galette 0.3.0, `cargo install galette`). Commit `glue.pld` with `glue.jed`; tests read the `.jed`, not galette.
+- Board: edit `hw/board.net.txt`, `cargo test`, copy the file the stale-netlist failure names to `hw/board.kicad.net`, commit both (HARDWARE_BUILD 2.2). A refdes change also edits `docs/PARTS_ORDER.md`.
 - Examples: `cd examples && make`. Commit each `.hex` with its `.asm` (the transcripts paste the `.hex`).
 - Requires `/usr/bin/curl` 8.4.0+ (mailbox `GET` and `ASK`; their tests run it against a local server, never the internet or the API). `cargo test -- --ignored` also runs the GET time-limit tests (~35 s) and the exercisers (after `scripts/fetch_exercisers.sh`); the live ASK test runs only with `ANTHROPIC_API_KEY` set.
 
@@ -46,6 +49,8 @@
 - `docs/HARDWARE_BUILD.md` - hardware build plan (non-normative): decisions, BOM, bring-up, sourcing, Pi platform decisions
 - `docs/reference/` - 8080 instruction set (`Complete_Intel_8080_Instruction_Set_Reference.txt`) and hardware (`8080_HARDWARE.md`: 8080A/8224/8228 pins, electrical, timing, cited to the MCS-80 manual)
 - `rom/monitor.asm` - monitor ROM source
+- `hw/` - the board: `glue.pld`/`glue.jed` (GAL), `board.net.txt` (the netlist, only home of pin numbers), KiCad starting files
+- `docs/PARTS_ORDER.md` - parts order list (non-normative), keyed to the netlist refdes and checked by `tests/netlist_tests.rs`
 
 ## Source of Truth
 This repo is the only source of truth for code and docs. The old Claude.ai Project is retired; everything from it was merged here on 2026-10-02. Where docs and code disagree, the code is what exists, not necessarily what was intended.

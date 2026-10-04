@@ -531,7 +531,7 @@ Service error
 
 ### 6.18.1 N conformance vectors
 
-Phase 8 tests MUST cover every row. *ports* and *scripted* as in 6.17.1. *server* rows use the real `Mailbox` from `build_bus` and the `DEVICE_SPECS.md` 8 test HTTP server `H` (`tests/support/http.rs`; its address typed into the line). They are Rust tests in `tests/monitor_tests.rs`, because a transcript cannot know the server's port. A *server* row's step waits on the network, not on the 8080, so it is bounded by a 10 s wall-clock deadline (`Instant`) instead of the cycle budget.
+Phase 8 tests (and Phase 12, for the Esc rows) MUST cover every row. *ports* and *scripted* as in 6.17.1. *server* rows use the real `Mailbox` from `build_bus` and the `DEVICE_SPECS.md` 8 test HTTP server `H` (`tests/support/http.rs`; its address typed into the line). They are Rust tests in `tests/monitor_tests.rs`, because a transcript cannot know the server's port. A *server* row's step waits on the network, not on the 8080, so it is bounded by a 10 s wall-clock deadline (`Instant`) instead of the cycle budget.
 
 | Input | Expected output | Effect |
 |---|---|---|
