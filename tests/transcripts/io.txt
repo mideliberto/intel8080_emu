@@ -7,6 +7,14 @@
 # An unassigned Pi-window port reads FF.
 > I 05
 FF
+# Ports with A6 set are unassigned too, not aliases of 00-3F: IN 53 is not the
+# mailbox response byte (13), and OUT 51 01 is not an execute (11), so the mailbox
+# stays idle (DEVICE_SPECS 2 rule 3).
+> I 53
+FF
+> O 51 01
+> I 12
+00
 # Storage address register round trip, and status 82 (not mounted, EOF).
 > O 08 34
 > I 08

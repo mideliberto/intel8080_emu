@@ -978,14 +978,23 @@ impl Rig {
         self._dir.path()
     }
 
-    /// Clear, the bytes, execute. Returns IN 12 right after execute: "Right after execute,
-    /// IN 12 reads 01, 81, 82 or 83" (80 for an unknown word, as for every command).
+    /// Clear, the bytes, execute. Returns IN 12 right after execute: "Execute leaves the
+    /// status at 01, 81, 82 or 83 ... The first IN 12 after it reads that status or any later
+    /// state the request has reached" (80 for an unknown word, as for every command).
     fn start(&mut self, bytes: &[u8]) -> u8 {
         self.clear();
         self.send(bytes);
         self.out(CTL, EXECUTE);
         let s = self.inp(STATUS);
-        assert!(matches!(s, BUSY | 0x80..=0x83), "{:?}: right after execute IN 12 = {:02X}", String::from_utf8_lossy(bytes), s);
+        assert!(matches!(s, BUSY | AVAIL | DONE | 0x80..=0x83), "{:?}: right after execute IN 12 = {:02X}", String::from_utf8_lossy(bytes), s);
+        s
+    }
+
+    /// `start` for a request the device accepts: never 80-82. How far the worker got by the
+    /// first IN 12 depends on scheduling, so BUSY, AVAIL, DONE and 83 all pass.
+    fn start_ok(&mut self, bytes: &[u8]) -> u8 {
+        let s = self.start(bytes);
+        assert!(matches!(s, BUSY | AVAIL | DONE | E_SERVICE), "{:?}: rejected at execute: {:02X}", String::from_utf8_lossy(bytes), s);
         s
     }
 
@@ -1031,7 +1040,7 @@ fn get_stream_vectors() {
     ];
     for (command, body) in rows {
         let mut r = rig();
-        assert_eq!(r.start(command.as_bytes()), BUSY, "{}", command);
+        r.start_ok(command.as_bytes());
         assert_eq!(r.finish(&command), (DONE, body.to_vec()), "{}", command);
         assert_eq!(r.listing(), Vec::<String>::new(), "{}: storage directory", command);
     }
@@ -1058,7 +1067,7 @@ fn get_empty_bodies_go_straight_to_done() {
     let h = http::start();
     for path in ["/empty", "/304"] {
         let mut r = rig();
-        assert_eq!(r.start(format!("GET {}", h.url(path)).as_bytes()), BUSY);
+        r.start_ok(format!("GET {}", h.url(path)).as_bytes());
         assert_eq!(r.finish(path), (DONE, vec![]), "{}: no AVAIL ever", path);
     }
 }
@@ -1078,7 +1087,7 @@ fn get_failures_are_83_with_no_byte() {
         format!("GET https://{}/hello", h.host()),
     ] {
         let mut r = rig();
-        assert_eq!(r.start(command.as_bytes()), BUSY, "{}", command);
+        r.start_ok(command.as_bytes());
         assert_eq!(r.finish(&command), (E_SERVICE, vec![]), "{}", command);
         assert_eq!(r.inp(RESP), 0x00);
         assert_eq!(r.listing(), Vec::<String>::new(), "{}", command);
@@ -1103,13 +1112,32 @@ fn only_in_12_checks_the_worker() {
 }
 
 #[test]
+fn the_first_in_12_can_see_a_later_state() {
+    // Background commands, Execute: "The first IN 12 after it reads that status or any later
+    // state the request has reached": that read is a check like any other. Row: /hello,
+    // /empty, /404; wait 500 ms before the first IN 12 | 02, 03, 83.
+    let h = http::start();
+    for (path, want) in [("/hello", AVAIL), ("/empty", DONE), ("/404", E_SERVICE)] {
+        let mut r = rig();
+        r.clear();
+        r.send(format!("GET {}", h.url(path)).as_bytes());
+        r.out(CTL, EXECUTE);
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(r.inp(STATUS), want, "{}", path);
+    }
+}
+
+#[test]
 fn the_last_pop_goes_busy_without_a_check() {
     // Background commands: "When it pops the last byte read so far, the status goes back to
     // BUSY without a check." /chunk is 100 KB; one check reads at most 4096 bytes, so after
-    // popping exactly those the next IN 13 is in BUSY and reads 00.
+    // popping exactly those the next IN 13 is in BUSY and reads 00. No IN 12 before the
+    // wait: an early check could find fewer than 4096 bytes in the pipe.
     let h = http::start();
     let mut r = rig();
-    assert_eq!(r.start(format!("GET {}", h.url("/chunk")).as_bytes()), BUSY);
+    r.clear();
+    r.send(format!("GET {}", h.url("/chunk")).as_bytes());
+    r.out(CTL, EXECUTE);
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(r.inp(STATUS), AVAIL);
     for i in 0..4096usize {
@@ -1132,7 +1160,7 @@ fn get_to_a_file() {
     ];
     for (command, name, response, body) in rows {
         let mut r = rig();
-        assert_eq!(r.start(command.as_bytes()), BUSY);
+        r.start_ok(command.as_bytes());
         assert_eq!(r.finish(&command), (DONE, response.to_vec()), "{}", command);
         assert_eq!(std::fs::read(r.dir().join(name)).unwrap(), body, "{}", command);
         assert_eq!(r.listing(), [name], "{}: no ~{}", command, name);
@@ -1411,12 +1439,12 @@ fn ask_rig(key: bool, url: &str, total_secs: u32) -> Rig {
 
 /// One ASK against a server playing `script`: (status after execute, final status,
 /// response, the request H received).
-fn ask_row(command: &[u8], script: Vec<http::Step>) -> (u8, u8, Vec<u8>, http::Request) {
+fn ask_row(command: &[u8], script: Vec<http::Step>) -> (u8, Vec<u8>, http::Request) {
     let h = http::scripted(vec![script]);
     let mut r = ask_rig(true, &h.url("/v1/messages"), 120);
-    let first = r.start(command);
+    r.start_ok(command);
     let (end, got) = r.finish(&String::from_utf8_lossy(command));
-    (first, end, got, h.request())
+    (end, got, h.request())
 }
 
 /// The request body's single user message.
@@ -1460,8 +1488,8 @@ fn ask_request_shape() {
     // <key>, anthropic-version: 2023-06-01, content-type: application/json." The body, its
     // model (Key Decisions, Q-MODEL), max_tokens 2048, stream, effort low, the system
     // prompt and one user message. ASK client: -H "Expect:", so no Expect header.
-    let (first, end, got, req) = ask_row(b"ASK hi", http::sse(&["ok"], "end_turn"));
-    assert_eq!((first, end, &got[..]), (BUSY, DONE, &b"ok"[..]));
+    let (end, got, req) = ask_row(b"ASK hi", http::sse(&["ok"], "end_turn"));
+    assert_eq!((end, &got[..]), (DONE, &b"ok"[..]));
     assert_eq!((req.method.as_str(), req.path.as_str()), ("POST", "/v1/messages"));
     assert_eq!(req.header("x-api-key"), Some(KEY));
     assert_eq!(req.header("anthropic-version"), Some("2023-06-01"));
@@ -1487,9 +1515,9 @@ fn ask_prompts_arrive_trimmed_and_intact() {
     let mut long = b"ASK ".to_vec();
     long.extend([b'x'; 124]);
     for (command, content) in [(&long[..], "x".repeat(124)), (b"ASK   hi  ", "hi".into()), (br#"ASK say "a\b""#, r#"say "a\b""#.into())] {
-        let (first, end, got, req) = ask_row(command, http::sse(&["ok"], "end_turn"));
+        let (end, got, req) = ask_row(command, http::sse(&["ok"], "end_turn"));
         let row = String::from_utf8_lossy(command);
-        assert_eq!((first, end, &got[..]), (BUSY, DONE, &b"ok"[..]), "{}", row);
+        assert_eq!((end, &got[..]), (DONE, &b"ok"[..]), "{}", row);
         assert_eq!(user_content(&req), content, "{}", row);
     }
 }
@@ -1535,8 +1563,8 @@ fn ask_reply_vectors() {
         ("max_tokens", sse(&["cut"], "max_tokens"), "cut".into()),
     ];
     for (row, script, want) in rows {
-        let (first, end, got, _) = ask_row(b"ASK hi", script);
-        assert_eq!((first, end, String::from_utf8_lossy(&got).to_string()), (BUSY, DONE, want), "{}", row);
+        let (end, got, _) = ask_row(b"ASK hi", script);
+        assert_eq!((end, String::from_utf8_lossy(&got).to_string()), (DONE, want), "{}", row);
     }
 }
 
@@ -1569,8 +1597,8 @@ fn ask_failures_deliver_what_came_then_83() {
         rows.push((format!("HTTP {}", code), http::status(code), b""));
     }
     for (row, script, want) in rows {
-        let (first, end, got, _) = ask_row(b"ASK hi", script);
-        assert_eq!((first, end, &got[..]), (BUSY, E_SERVICE, want), "{}", row);
+        let (end, got, _) = ask_row(b"ASK hi", script);
+        assert_eq!((end, &got[..]), (E_SERVICE, want), "{}", row);
     }
 }
 
@@ -1581,11 +1609,11 @@ fn ask_time_limit_and_closed_port() {
     let h = http::scripted(vec![vec![http::Step::Hold]]);
     let mut r = ask_rig(true, &h.url("/v1/messages"), 1);
     let t = Instant::now();
-    assert_eq!(r.start(b"ASK hi"), BUSY);
+    r.start_ok(b"ASK hi");
     assert_eq!(r.finish_within("never answers", 3), (E_SERVICE, vec![]));
     assert!(t.elapsed() >= Duration::from_millis(900), "{:?}: before the limit", t.elapsed());
     let mut r = ask_rig(true, &format!("http://127.0.0.1:{}/v1/messages", closed_port()), 120);
-    assert_eq!(r.start(b"ASK hi"), BUSY);
+    r.start_ok(b"ASK hi");
     assert_eq!(r.finish("closed port"), (E_SERVICE, vec![]));
 }
 
@@ -1613,7 +1641,7 @@ fn ask_streams_and_reads_while_busy_are_00() {
     script.extend(http::sse_stop("end_turn"));
     let h = http::scripted(vec![script]);
     let mut r = ask_rig(true, &h.url("/v1/messages"), 120);
-    assert_eq!(r.start(b"ASK hi"), BUSY);
+    r.start_ok(b"ASK hi");
     assert_eq!(read_n(&mut r, 10), b"first line");
     assert_eq!(r.inp(STATUS), BUSY);
     assert_eq!(r.inp(RESP), 0x00);
@@ -1637,7 +1665,7 @@ fn ask_abort() {
     // Clear.
     let h = http::scripted(vec![held(), http::sse(&["ok"], "end_turn")]);
     let mut r = ask_rig(true, &h.url("/v1/messages"), 120);
-    assert_eq!(r.start(b"ASK hi"), BUSY);
+    r.start_ok(b"ASK hi");
     h.request();
     r.clear();
     assert_eq!(r.inp(STATUS), IDLE, "status 00 at once");
@@ -1645,13 +1673,13 @@ fn ask_abort() {
     h.release();
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!((r.inp(STATUS), r.inp(RESP)), (IDLE, 0x00), "the aborted request delivered");
-    assert_eq!(r.start(b"ASK hi"), BUSY);
+    r.start_ok(b"ASK hi");
     assert_eq!(r.finish("after clear"), (DONE, b"ok".to_vec()));
 
     // A second ASK, no clear.
     let h = http::scripted(vec![held(), http::sse(&["ok"], "end_turn")]);
     let mut r = ask_rig(true, &h.url("/v1/messages"), 120);
-    assert_eq!(r.start(b"ASK hi"), BUSY);
+    r.start_ok(b"ASK hi");
     h.request();
     std::thread::sleep(Duration::from_millis(200)); // Hel is in the pipe, unread
     r.send(b"ASK hi");
@@ -1663,7 +1691,7 @@ fn ask_abort() {
     // RESET: the device dropped.
     let h = http::scripted(vec![held()]);
     let mut r = ask_rig(true, &h.url("/v1/messages"), 120);
-    assert_eq!(r.start(b"ASK hi"), BUSY);
+    r.start_ok(b"ASK hi");
     h.request();
     let (bus, _con) = build_bus(r.dir(), mailbox::local_time, AskConfig::default());
     r.bus = bus;
@@ -1684,7 +1712,7 @@ fn ask_live_answers_in_plain_ascii() {
     let dir = tempfile::tempdir().unwrap();
     let (bus, _con) = build_bus(dir.path(), mailbox::local_time, AskConfig { key: Some(key), ..AskConfig::default() });
     let mut r = Rig { _dir: dir, bus };
-    assert_eq!(r.start(b"ASK What is 2+2? Reply with the digit only."), BUSY);
+    r.start_ok(b"ASK What is 2+2? Reply with the digit only.");
     let (end, got) = r.finish_within("live", 120);
     let text = String::from_utf8_lossy(&got).to_string();
     assert_eq!(end, DONE, "{:?}", text);

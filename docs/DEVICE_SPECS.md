@@ -46,7 +46,7 @@ Normative. Every I/O port the 8080 can see, at register level. Where the emulato
 1. **Reading a write-only register** (`IN` 00, 0D, 0E, 10, 11) returns FF and has no side effect.
 2. **Writing a read-only register** (`OUT` 01, 02, 0F, 12, 13) is ignored.
 3. **Unassigned Pi-window ports** (03-07, 14-6F): `IN` returns FF and `OUT` is ignored. The Pi still completes the READY handshake, so the access never hangs.
-4. **Unmapped ports outside the Pi window** (70-FD, `IN` FE, `OUT` FF): `OUT` is ignored. The value `IN` returns is undefined on hardware, because nothing drives the bus. Software MUST NOT depend on it. The emulator returns FF (`src/io/bus.rs:26`). (`IN` FF is the system status port, section 5.) Informative, not part of this contract: on the board the system data bus pull-ups (`ARCHITECTURE.md` 6.13) make such an `IN` read FF in practice.
+4. **Unmapped ports outside the Pi window** (70-FD, `IN` FE, `OUT` FF): `OUT` is ignored. The value `IN` returns is undefined on hardware, because nothing drives the bus. Software MUST NOT depend on it. The emulator returns FF (`IoBus::read` in `src/io/bus.rs`). (`IN` FF is the system status port, section 5.) Informative, not part of this contract: on the board the system data bus pull-ups (`ARCHITECTURE.md` 6.13) make such an `IN` read FF in practice.
 5. **Reads with side effects:** only `IN 01` (pops the console FIFO), `IN 0B` (advances the storage address) and `IN 13` in the AVAIL state (pops the mailbox response). Every other `IN` has no side effect and can be repeated. One exception: while a background mailbox request runs, `IN 12` is where the device checks on it (section 8, Background commands). A status read never pops a byte, but it can see the request end, and for `GET > FILE` that puts the file in place. The monitor's `I` command triggers the same side effects.
 6. **Undefined values** written to a command or control register (0C, 0E, 11) change nothing, with one exception: every write to 0E, whatever the value, clears the filename buffer (section 7).
 7. **No device raises an interrupt.** Hardware v1 has no interrupt source. The interrupt input and its future tick source are in `ARCHITECTURE.md` (Interrupts).
@@ -504,7 +504,7 @@ Device-level tests MUST cover every row. Responses are shown as hex bytes; for D
 
 A background command (`GET`, `ASK`) runs in a **worker**, a process on the Pi apart from the device service's bus thread. The device and its state stay on the bus thread (`PI_DAEMON.md` 1). The worker does the network I/O. The device starts it, checks on it and stops it, each as bounded local work (section 3.3).
 
-- **Execute** validates the request (80, 81, 82 at once, as for every command), then starts the worker and goes to BUSY. A worker that cannot be started gives 83 at once. Right after execute, `IN 12` reads 01, 81, 82 or 83, or 00 after a Pi service restart (rule 2.9).
+- **Execute** validates the request (80, 81, 82 at once, as for every command), then starts the worker and goes to BUSY. A worker that cannot be started gives 83 at once. Execute leaves the status at 01, 81, 82 or 83. The first `IN 12` after it reads that status or any later state the request has reached (02, 03 or 83: that read is a check like any other, next bullet), or 00 after a Pi service restart (rule 2.9).
 - **Progress is seen at `IN 12`.** The device checks the worker when the 8080 reads `IN 12` in BUSY, and at no other time. A check is one non-blocking read of the worker's output (at most 4096 bytes) or one non-blocking wait for its exit. BUSY becomes AVAIL, DONE or ERROR at the read that sees it. `IN 13` behaves as in every command: in BUSY it reads 00 with no side effect, and in AVAIL it pops a byte. When it pops the last byte read so far, the status goes back to BUSY without a check. A client that wants the result polls `IN 12` until DONE or ERROR, as MB_GET does.
 - **Flow control.** Streamed output waits in the worker's pipe (64 KiB on Linux) until the 8080 reads it. A client that stops reading stops the transfer; if the server gives up meanwhile, the request ends in 83.
 - **One request at a time.** Execute and clear abort a running request (Abort, above): the device kills the worker and reaps it within the `OUT 11` access, discards its output and removes its temporary file. Nothing the aborted request did becomes visible later.
@@ -560,7 +560,7 @@ A background command (`GET`, `ASK`) runs in a **worker**, a process on the Pi ap
 
 Device-level tests MUST cover every row. `H` is the test HTTP server in `tests/support/http.rs`, shared by the GET and N tests: a `std::net::TcpListener` on `127.0.0.1:0`, one thread per connection, canned responses by path. A connection whose first bytes are not `GET ` is closed at once. The `/hang` and `/drip` handlers send their bytes, then block on `read` until the client closes; they report the request's arrival and the close on an mpsc channel, so a test can wait until the worker is connected before it aborts it. No test touches the internet.
 
-"Final" is the status after polling `IN 12` until it is not 01. "Response" is every byte read from 13, in hex or as quoted text. A status may read 01 before any `IN 12` read. Every polling loop has a 10 s `Instant` deadline and fails with a message naming the row; "the server sees the close" waits with `recv_timeout(5 s)`. Rows marked *ignored* take 10 s or more and are `#[ignore]` tests, run with `cargo test -- --ignored`.
+"Final" is the status after polling `IN 12` until it is not 01. "Response" is every byte read from 13, in hex or as quoted text. A status may read 01 before any `IN 12` read, and the first `IN 12` after execute may already read a later status (Background commands). Every polling loop has a 10 s `Instant` deadline and fails with a message naming the row; "the server sees the close" waits with `recv_timeout(5 s)`. Rows marked *ignored* take 10 s or more and are `#[ignore]` tests, run with `cargo test -- --ignored`.
 
 | Command buffer | Server | Final, response | Storage directory afterwards |
 |---|---|---|---|
@@ -578,10 +578,11 @@ Device-level tests MUST cover every row. `H` is the test HTTP server in `tests/s
 | `GET http://127.0.0.1:P/` (P a closed port) | none | 83 | unchanged |
 | `GET https://H/hello` | plain HTTP; closes the TLS hello | 83 (no TLS server needed) | unchanged |
 | `GET http://H/hang`; `IN 13`; `IN 12` | accepts, never answers | `IN 13` = 00, then `IN 12` = 01 | unchanged |
+| `GET http://H/hello`, `GET http://H/empty`, `GET http://H/404`; wait 500 ms before the first `IN 12` | as in their rows above | the first `IN 12` = 02, 03, 83 | unchanged |
 | `GET http://H/hello > BOOK.TXT` | as `/hello` | 03 after `"000007"` | `BOOK.TXT` = `Hello` 0D 0A; no `~BOOK.TXT` |
 | `GET http://H/hello   >   book.txt ` | as `/hello` | 03 after `"000007"` | `BOOK.TXT` as above |
 | `GET http://H/empty > E.BIN` | 200, empty | 03 after `"000000"` | `E.BIN` exists, empty |
-| `~E.BIN` = `junk` in the directory; `GET http://H/empty > E.BIN` | 200, empty | 03 after `"000000"` | `E.BIN` exists, empty; no `~E.BIN` |
+| `~E.BIN` = `junk` in the directory; `GET http://H/304 > E.BIN` | 304, empty (no body, so curl creates no file: only the device's removal keeps the junk out) | 03 after `"000000"` | `E.BIN` exists, empty; no `~E.BIN` |
 | `GET http://H/max > M.BIN` | 200, FFFFFF bytes | 03 after `"FFFFFF"` | `M.BIN` is FFFFFF bytes, equal to the body |
 | `GET http://H/over > O.BIN` | 200, chunked, 1000000h = 16,777,216 bytes (FFFFFF + 1) | 83 | no `O.BIN`, no `~O.BIN` |
 | `GET http://H/404 > KEEP.TXT`, `KEEP.TXT` = `old` | 404 | 83 | `KEEP.TXT` = `old`; no `~KEEP.TXT` |
@@ -635,7 +636,7 @@ Device-level tests MUST cover every row. `H` is the test HTTP server in `tests/s
   2. Remove empty input lines at the start and at the end.
   3. An input line of at most 79 characters is one output line. A longer one is cut at the last space at index 1-79 that has a non-space character before it, removing that space and the spaces next to it on both sides; if there is no such space, after its 79th character, removing spaces at the start of the rest. Repeat on the rest. Spaces at the start of an input line (indentation) are kept.
   4. Output lines are joined with CR LF; none after the last.
-- **Delivery is incremental.** A byte is delivered as soon as no later text can change it, and is never taken back. Held back at any moment: the current line from the start of its last run of spaces (at most 80 characters), and line breaks not yet followed by text.
+- **Delivery is incremental.** A byte is delivered once it is outside the held-back part below, and is never taken back. Held back at any moment: the current line from the start of its last run of spaces (at most 80 characters), and line breaks not yet followed by text.
 - **DONE** when the stream ends normally (`message_stop`), including when the reply reached the output cap: it is then cut where the cap fell, with nothing added.
 - **83** (Service failed): no key (above); the worker cannot start; DNS, connect or TLS failure; an HTTP status of 400 or above; an `error` event; a data line that is not JSON; a stream that ends without `message_stop`; stop reason `refusal`; a time limit (Limits). No retries: a 429 or 529 gives 83 and the user asks again.
 - **Never reaches the 8080:** the key, the system prompt, the model name, HTTP headers, JSON, the text of an API error.

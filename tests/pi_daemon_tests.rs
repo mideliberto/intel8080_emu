@@ -221,6 +221,31 @@ fn reset_and_reboot_during_a_slow_access() {
 }
 
 #[test]
+fn reset_and_reboot_during_a_slow_in_never_drives_d() {
+    // 5.2 table row 4 on an IN: the rebooted 8080's request (an OUT) is up when the device
+    // call returns. The edge latch must stop the drive, not only the ACK: D0-D7 as outputs
+    // with DIR = OUT is a board violation.
+    let mut rig = Rig::new(Knobs::default());
+    let mut client = rig.connect();
+    rig.start();
+    rig.mount(b"A.BIN");
+    rig.board.pause_next_request();
+    rig.board.begin(0x0F, Access::In);
+    rig.board.wait_paused();
+    rig.board.pulse_reset();
+    rig.board.begin(0x00, Access::Out(b'B'));
+    rig.board.resume();
+    assert_eq!(rig.board.wait(), Done::Aborted);
+    assert_eq!(rig.board.wait(), Done::Out);
+    assert_eq!(recv(&mut client, 1), b"B");
+    assert_eq!(rig.inp(0x0C) & 0x01, 0x00, "storage still mounted");
+    let (result, trace) = rig.finish();
+    assert_eq!(result, Ok(()));
+    let at = trace.iter().position(|l| l == "RESET").unwrap();
+    assert_eq!(trace[at + 1..], ["OUT 00 42", "IN 0C 82"]);
+}
+
+#[test]
 fn reset_pulse_during_in_readback_does_not_hang() {
     let mut rig = Rig::new(Knobs::default());
     rig.start();
@@ -265,8 +290,9 @@ fn reset_while_idle_resets_devices() {
     rig.start();
     client.write_all(b"ab").unwrap();
     rig.wait_input();
-    // The FIFO holds input, so the daemon leaves these in the socket: RESET discards them.
-    client.write_all(b"cd").unwrap();
+    // The FIFO holds input, so the daemon leaves these in the socket: RESET discards them,
+    // all of them, not just the first 4 KiB read (5.2 step 6 reads until the socket is empty).
+    client.write_all(&[b'c'; 10 * 1024]).unwrap();
     std::thread::sleep(Duration::from_millis(5));
     rig.board.pulse_reset();
     assert_eq!(rig.inp(0x02), 0x02);
@@ -357,11 +383,35 @@ fn startup_releases_d_and_drives_ack_and_latch_low() {
 
 #[test]
 fn a_pin_in_an_alt_function_refuses_to_start() {
-    let knobs = Knobs::default();
-    let board = SimBoard::new(Knobs { fsel: [knobs.fsel[0] | 0o4 << 21, knobs.fsel[1], knobs.fsel[2]], ..knobs });
-    let e = pi::setup_pins(&board).unwrap_err();
-    assert_eq!(e, "BCM 7 is in an ALT function");
-    assert_eq!(board.writes(), 0);
+    // Every field that is neither 000 (input) nor 001 (output): ALT0-ALT5 are 100, 101, 110,
+    // 111, 011 and 010. BCM 7 in GPFSEL0, 12 in GPFSEL1, 27 in GPFSEL2.
+    for pin in [7, 12, 27] {
+        for code in 2..=7u32 {
+            let knobs = Knobs::default();
+            let mut fsel = knobs.fsel;
+            let shift = pin % 10 * 3;
+            fsel[pin / 10] = fsel[pin / 10] & !(7 << shift) | code << shift;
+            let board = SimBoard::new(Knobs { fsel, ..knobs });
+            let e = pi::setup_pins(&board).unwrap_err();
+            assert_eq!(e, format!("BCM {} is in an ALT function", pin), "field {:03b}", code);
+            assert_eq!(board.writes(), 0);
+        }
+    }
+}
+
+#[test]
+fn a_second_daemon_is_refused_by_the_gpio_lock() {
+    // GpioMem::open's guard, on a plain file: two opens are two open file descriptions,
+    // as two daemons opening /dev/gpiomem are.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gpiomem");
+    std::fs::write(&path, [0u8; 16]).unwrap();
+    let first = std::fs::File::open(&path).unwrap();
+    pi::lock_gpio(&first, "/dev/gpiomem").unwrap();
+    let second = std::fs::File::open(&path).unwrap();
+    assert_eq!(pi::lock_gpio(&second, "/dev/gpiomem").unwrap_err(), "/dev/gpiomem: another pi8080d holds the GPIO");
+    drop(first);
+    pi::lock_gpio(&second, "/dev/gpiomem").unwrap();
 }
 
 #[test]
