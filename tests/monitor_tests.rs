@@ -1617,6 +1617,67 @@ fn example_burn() {
     boot().play("example_burn");
 }
 
+#[test]
+fn example_life() {
+    boot().play("example_life");
+}
+
+/// Conway's Life on a 32x16 torus (B3/S23), counted the textbook way: the 8 neighbours.
+fn life_step(g: &[[bool; 32]; 16]) -> [[bool; 32]; 16] {
+    let mut next = [[false; 32]; 16];
+    for r in 0..16 {
+        for c in 0..32 {
+            let mut n = 0;
+            for dr in [15, 0, 1] {
+                for dc in [31, 0, 1] {
+                    if (dr, dc) != (0, 0) && g[(r + dr) % 16][(c + dc) % 32] {
+                        n += 1;
+                    }
+                }
+            }
+            next[r][c] = n == 3 || (n == 2 && g[r][c]);
+        }
+    }
+    next
+}
+
+#[test]
+fn life_matches_a_reference_model() {
+    // examples/life.asm against a Rust model with the seed its header states: an
+    // R-pentomino at rows 6-8, columns 20-22, and a glider at rows 1-3, columns 2-4.
+    // 128 generations, every 32nd printed.
+    let mut g = [[false; 32]; 16];
+    for (r, c) in [(1, 3), (2, 4), (3, 2), (3, 3), (3, 4)] {
+        g[r][c] = true;
+    }
+    // The model's wrap: a lone glider moves one row and one column every 4 generations, so
+    // after 128 it has gone 32 of each, once round the torus across and twice down.
+    let mut alone = g;
+    for _ in 0..128 {
+        alone = life_step(&alone);
+    }
+    assert!(alone == g, "the model's glider did not come home");
+    for (r, c) in [(6, 21), (6, 22), (7, 20), (7, 21), (8, 21)] {
+        g[r][c] = true;
+    }
+    let mut want = String::new();
+    for gen in 0..=128 {
+        if gen % 32 == 0 {
+            want += &format!("Gen {:03}\\r\\n", gen);
+            for row in &g {
+                want.extend(row.iter().map(|&a| if a { '#' } else { '.' }));
+                want += "\\r\\n";
+            }
+        }
+        g = life_step(&g);
+    }
+    let mut m = boot();
+    for record in std::fs::read_to_string("examples/life.hex").unwrap().lines() {
+        m.run(record);
+    }
+    assert_eq!(m.run("G 0100"), want);
+}
+
 /// A booted monitor with examples/burn.hex pasted and `image` at 1000, its default source.
 fn burner(image: &[u8]) -> Mon {
     let mut m = boot();
