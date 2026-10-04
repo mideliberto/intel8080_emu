@@ -2,11 +2,13 @@
 ; jumper JP-WE (ARCHITECTURE 6.10), then cold-starts the new monitor.
 ; Load: the image to 1000-1FFF (X MONITOR.BIN, L 0 1000 1000), then paste
 ; burn.hex. Fit JP-WE. Run: G 0100. Procedure: USER_GUIDE.md 10.
-; The image address is SRC: change it with E 0103 (low byte first). The image
-; must lie in RAM, clear of this program (0100-01FF), the workspace and the
-; stack page; F000-FFFF itself is not an image.
+; The image address is SRC: change it with E 0103 (low byte first).
 ;
-; Before any write it checks that the image is a ROM build: byte 0 is 31
+; Before any write it checks SRC: the image, SRC to SRC+0FFF, must lie in
+; 0200-EEFF, clear of the workspace, this program (0080-01FF) and the stack
+; page (EF00-EFFF), so SRC is 0200-DF00. F000 (the ROM itself) and an image that wraps past FFFF
+; are refused too. Otherwise it prints "Bad source" and returns to the monitor
+; with nothing written. Then it checks that the image is a ROM build: byte 0 is 31
 ; (COLD_START's LXI SP) and byte 6 is F0 (the high byte of its JMP; the RAM
 ; test build has D0 there, ARCHITECTURE 3.2). Otherwise it prints
 ; "Not a ROM image" and returns to the monitor with nothing written.
@@ -42,6 +44,16 @@ START:  JMP     MAIN
 SRC:    DW      1000H           ; image address
 
 MAIN:   LHLD    SRC
+        MOV     A,H
+        CPI     02H
+        JC      BADSRC          ; SRC below 0200
+        LXI     D,0FFFH
+        DAD     D               ; HL = the image's last byte
+        JC      BADSRC          ; past FFFF
+        MOV     A,H
+        CPI     0EFH
+        JNC     BADSRC          ; in the stack page or above
+        LHLD    SRC
         MOV     A,M
         CPI     31H             ; LXI SP
         JNZ     NOTROM
@@ -114,6 +126,9 @@ SPIN:   JMP     SPIN            ; until RESET
 NOTROM: LXI     H,MSGNOT
         JMP     PUTS            ; PUTS returns to the monitor
 
+BADSRC: LXI     H,MSGSRC
+        JMP     PUTS
+
 ; HEX2: print A as two hex digits.
 HEX2:   PUSH    PSW
         RRC
@@ -141,5 +156,6 @@ PUTS:   MOV     A,M
 MSGNOT: DB      "Not a ROM image"
 CRLF:   DB      0DH,0AH,0
 MSGBURN: DB     "Burn failed ",0
+MSGSRC: DB      "Bad source",0DH,0AH,0
 
         END     START

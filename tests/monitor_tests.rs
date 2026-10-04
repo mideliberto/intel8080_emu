@@ -1824,6 +1824,34 @@ fn burn_refuses_a_ram_build_image() {
 }
 
 #[test]
+fn burn_checks_the_source_first() {
+    // The image, SRC to SRC+0FFF, must lie in 0200-EEFF: a ROM image at either end burns. Just
+    // outside, below and above, at F000 (the ROM, a ROM image itself) and wrapping past FFFF,
+    // burn prints `Bad source` with JP-WE fitted and the bytes the image check reads right
+    // (the first 7, so nothing lands in the stack page), and the ROM is unchanged. The
+    // transcript has the same bounds with JP-WE open.
+    let new = changed_rom();
+    let rom = std::fs::read("rom/monitor.bin").unwrap();
+    for src in [0x0200u16, 0xDF00, 0x01FF, 0xDF01, 0xF000, 0xFFFF] {
+        let ok = src == 0x0200 || src == 0xDF00;
+        let mut m = burner(&[]);
+        if src < 0xF000 {
+            m.poke(src, if ok { &new } else { &new[..7] });
+        }
+        m.poke(0x0103, &src.to_le_bytes());
+        m.cpu.fit_jp_we(20_480);
+        let out = m.run("G 0100");
+        if ok {
+            assert!(out.ends_with("\\r\\nREady.\\r\\n"), "SRC {:04X}: {}", src, out);
+            assert!(m.mem(0xF000, 0x1000) == new, "SRC {:04X}: the ROM is not the image", src);
+        } else {
+            assert_eq!(out, "Bad source\\r\\n", "SRC {:04X}", src);
+            assert!(m.mem(0xF000, 0x1000) == rom, "SRC {:04X}: the ROM changed", src);
+        }
+    }
+}
+
+#[test]
 fn burn_of_the_same_image_is_a_dry_run() {
     // JP-WE open and the image already in the ROM (M F000 1000 1000): every page verifies, and
     // the ROM monitor cold-starts, unchanged. Also when started from the RAM test build

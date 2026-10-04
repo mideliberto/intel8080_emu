@@ -120,7 +120,7 @@ In `examples/`, each as `.asm` source and a ready `.hex`. Each has a transcript,
 |---|---|---|
 | `hello` | paste `hello.hex`, `G 0100` | `Hello, 8080!` |
 | `memtest` | paste `memtest.hex`, `G 0100` | `RAM OK`, or `FAIL aaaa` at the first bad byte |
-| `burn` | the image at 1000, paste `burn.hex`, fit JP-WE, `G 0100` (section 10) | the new monitor's banner, `Not a ROM image`, or `Burn failed aaaa` |
+| `burn` | the image at 1000, paste `burn.hex`, fit JP-WE, `G 0100` (section 10) | the new monitor's banner, `Bad source`, `Not a ROM image`, or `Burn failed aaaa` |
 
 `memtest`'s range, what it catches and how to change the range are in the header of
 `examples/memtest.asm`. **Under the RAM test build** (section 10), set the last address to CFFF
@@ -369,13 +369,15 @@ make size               # bytes used of 4096
    - **The banner** is the new monitor cold-starting: the burn worked. Remove JP-WE before anything
      else: while it is fitted, any write to F000-FFFF reprograms the ROM (ARCHITECTURE 6.10 rule 1),
      and keys typed during the burn run on the new monitor.
+   - **`Bad source`:** nothing was written. The image address is outside 0200-DF00: the image,
+     4096 bytes from there, must lie in 0200-EEFF, clear of the program and the stack page.
    - **`Not a ROM image`:** nothing was written. Byte 0 of the image is not 31 or byte 6 is not F0
      (ARCHITECTURE 3.2 requirement 7). A RAM test build has D0 there: burn `monitor.bin`.
    - **`Burn failed aaaa`:** the byte at aaaa did not verify, and the program spins until RESET. With
      JP-WE open nothing was written: RESET, fit JP-WE, `G 0100` again (RAM survives RESET,
      ARCHITECTURE 3.1). With JP-WE fitted the ROM is part new, part old: use the external
      programmer (step 4).
-   - The image is read from 1000. Elsewhere: `E 0103`, the address low byte first.
+   - The image is read from 1000. Elsewhere: `E 0103`, the address low byte first, 0200-DF00.
 4. **External programmer** (HARDWARE_BUILD): the first image, and recovery from a failed burn. Then
    check it (6.3).
 
