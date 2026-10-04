@@ -41,13 +41,14 @@ enum Signal {
     Debug,
 }
 
-const USAGE: &str = "usage: intel8080 [--debug] [--script FILE] [--jp-we]";
+const USAGE: &str = "usage: intel8080 [--debug] [--script FILE] [--jp-we] [--rom FILE]";
 
 fn main() {
     // ARCHITECTURE 7.4, Entry.
     let mut start_stopped = false;
     let mut scripted = false;
     let mut jp_we = false;
+    let mut rom = String::from("rom/monitor.bin");
     let mut script = Vec::new();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -55,6 +56,10 @@ fn main() {
         match args[i].as_str() {
             "--debug" => start_stopped = true,
             "--jp-we" => jp_we = true,
+            "--rom" if i + 1 < args.len() => {
+                i += 1;
+                rom = args[i].clone();
+            }
             "--script" if i + 1 < args.len() => {
                 i += 1;
                 let text = std::fs::read_to_string(&args[i]).unwrap_or_else(|e| {
@@ -83,14 +88,19 @@ fn main() {
     let key = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty());
     let (bus, console) = build_bus(Path::new("storage"), mailbox::local_time, AskConfig { key, ..AskConfig::default() });
     *cpu.io_bus_mut() = bus;
-    cpu.load_rom_from_file(Path::new("rom/monitor.bin")).expect("Failed to load ROM");
+    cpu.load_rom_from_file(Path::new(&rom)).unwrap_or_else(|e| {
+        eprintln!("{}: {}", rom, e);
+        std::process::exit(2);
+    });
     if jp_we {
         // ARCHITECTURE 6.10, Emulator. tWC 10 ms (AT28C64B DS 16 max) at 2.048 MHz.
         cpu.fit_jp_we(20_480);
     }
     let mut dbg = Debugger::new();
-    if let Ok(text) = std::fs::read_to_string("rom/monitor.sym") {
-        dbg.load_symbols(&text).expect("rom/monitor.sym");
+    // The symbols next to the image (ARCHITECTURE 7.4, Symbols), when present.
+    let sym = Path::new(&rom).with_extension("sym");
+    if let Ok(text) = std::fs::read_to_string(&sym) {
+        dbg.load_symbols(&text).unwrap_or_else(|e| panic!("{}: {}", sym.display(), e));
     }
 
     let mut stdout = std::io::stdout();

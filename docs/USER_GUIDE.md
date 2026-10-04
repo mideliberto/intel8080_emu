@@ -29,6 +29,7 @@ cargo run                       # from the repo root: rom/monitor.bin, storage f
 cargo run -- --debug            # start stopped at the debugger prompt
 cargo run -- --script FILE      # run debugger commands from FILE first
 cargo run -- --jp-we            # JP-WE fitted: writes to F000-FFFF program the ROM image (in memory only)
+cargo run -- --rom FILE         # FILE as the ROM image in place of rom/monitor.bin (symbols: FILE's .sym)
 ```
 
 - **Ctrl-C** quits. **Ctrl-E** stops the 8080 and opens the debugger (section 8). The 8080 never sees
@@ -241,7 +242,8 @@ yet (DEVICE_SPECS 8, TIME).
 Ctrl-E (or `--debug`) opens `dbg>`, and `?` there lists its commands with their syntax. You will use
 breakpoints at ROM labels (`rom/monitor.sym`), step and continue, registers, memory, disassembly,
 watchpoints on memory and ports, the instruction ring and the port trace. Full contract: ARCHITECTURE
-7.4. A `--script` file runs the same commands.
+7.4. A `--script` file runs the same commands. With `--rom FILE` the debugger runs that image (for
+example the bring-up step 3 diagnostic, whose fetch trace the bench compares: HARDWARE_BUILD 3.3).
 
 ### 8.2 Registers from the monitor
 

@@ -15,9 +15,14 @@ ROM_P = monitor.p
 RAM_HEX = monitor_ram.hex
 RAM_P = monitor_ram.p
 
+# Bring-up step 3 diagnostic image (HARDWARE_BUILD.md 3.3), committed: diag3.bin
+DIAG_SRC = diag3.asm
+DIAG_BIN = diag3.bin
+DIAG_P = diag3.p
+
 .PHONY: all clean size disasm
 
-all: $(ROM_BIN) $(ROM_SYM) $(RAM_HEX)
+all: $(ROM_BIN) $(ROM_SYM) $(RAM_HEX) $(DIAG_BIN)
 
 # Assemble to .p file (and .lst, and .noi with the labels)
 $(ROM_P): $(ROM_SRC)
@@ -39,6 +44,13 @@ $(RAM_P): $(ROM_SRC)
 
 $(RAM_HEX): $(RAM_P)
 	$(P2HEX) $(RAM_P) $(RAM_HEX) -F Intel -l 16
+
+# The diagnostic image: F000-FFFF, padded with FF like monitor.bin.
+$(DIAG_P): $(DIAG_SRC)
+	$(ASL) -cpu 8080 -L $(DIAG_SRC)
+
+$(DIAG_BIN): $(DIAG_P)
+	$(P2BIN) $(DIAG_P) $(DIAG_BIN) -r '$$F000-$$FFFF'
 
 clean:
 	rm -f *.p *.bin *.lst *.noi *.sym $(RAM_HEX)
