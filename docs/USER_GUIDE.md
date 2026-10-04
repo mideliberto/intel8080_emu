@@ -129,6 +129,7 @@ In `examples/`, each as `.asm` source and a ready `.hex`. Each has a transcript,
 | `pi` | paste `pi.hex`, `G 0100` | `3.` and 100 decimals of pi, 50 to a line |
 | `rpn` | paste `rpn.hex`, `G 0100`, then lines such as `12 34 + p`; `q` quits | an RPN calculator on signed 16-digit BCD numbers: `+ - * /`, `p`, `s`, `c` (tokens in the header of `examples/rpn.asm`) |
 | `sieve` | paste `sieve.hex`, `G 0100` | the number of primes below 8192 (1028), the last ten, and their sum |
+| `hanoi` | paste `hanoi.hex`, `G 0100` (7 s at 2 MHz) | the 15 moves for 4 disks, the move count for 1 to 16 disks, `Stack OK` |
 
 `memtest`'s range, what it catches and how to change the range are in the header of
 `examples/memtest.asm`. **Under the RAM test build** (section 10), set the last address to CFFF
