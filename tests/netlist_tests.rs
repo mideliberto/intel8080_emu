@@ -156,7 +156,8 @@ const TYPES: &[(&str, &str, &str)] = &[
         26 BCM7 io  27 BCM0 io  28 BCM1 io  29 BCM5 io  30 GND pwr:GND  31 BCM6 io  32 BCM12 io
         33 BCM13 io  34 GND pwr:GND  35 BCM19 io  36 BCM16 io  37 BCM26 io  38 BCM20 io
         39 GND pwr:GND  40 BCM21 io"),
-    // HARDWARE_BUILD 3.1: pin n = channel n - 1, pins 17-20 GND.
+    // GND on pins 17-20: decision LA-HEADER (HARDWARE_BUILD 1). Pin n = channel n - 1 is this
+    // table's own convention; the channel order is HARDWARE_BUILD 3.1, checked in C612.
     ("LA_HDR", "Connector_IDC:IDC-Header_2x10_P2.54mm_Vertical", "
         1 CH0 probe  2 CH1 probe  3 CH2 probe  4 CH3 probe  5 CH4 probe  6 CH5 probe  7 CH6 probe
         8 CH7 probe  9 CH8 probe  10 CH9 probe  11 CH10 probe  12 CH11 probe  13 CH12 probe
@@ -506,7 +507,7 @@ fn structure(ck: &mut Ck) {
     for s in singles {
         ck.err(format!("net {s} has one pad"));
     }
-    // S5: no input left open, except these (each open by its datasheet).
+    // S5: no input left open, except these, which are open by their datasheets and must stay open.
     const OPEN_INPUTS: [&str; 4] = [
         "U2.13",  // 8224 TANK: overtone crystals only (6.1)
         "PS1.1",  // U3V40F12 EN: 30k on-board pull-up to VIN
@@ -518,6 +519,13 @@ fn structure(ck: &mut Ck) {
     for (pad, net) in &ck.net_of {
         if net == "NC" && ck.kind(pad) == Some(In) && !OPEN_INPUTS.contains(&format!("{}.{}", pad.0, pad.1).as_str()) {
             found.push(format!("{}.{}: input on NC", pad.0, pad.1));
+        }
+    }
+    for spec in OPEN_INPUTS {
+        let (r, pad) = spec.split_once('.').unwrap();
+        let n = ck.netp(&(r.to_string(), pad.to_string()));
+        if n != "NC" {
+            found.push(format!("{spec}: open by its datasheet, is on {n}"));
         }
     }
     found.sort();
@@ -557,12 +565,17 @@ fn structure(ck: &mut Ck) {
     for f in found {
         ck.err(f);
     }
+    // S8: a totem-pole output owns its net: no second output and no three-state, bidirectional
+    // or open-drain pad beside it (one totem pole on a bus is permanent contention).
     ck.id = "S8";
     let mut found = Vec::new();
     for (n, pads) in &ck.nets {
         let outs: Vec<&Pad> = pads.iter().filter(|p| ck.kind(p) == Some(Out)).collect();
+        let others = pads.iter().filter(|p| matches!(ck.kind(p), Some(Tri | Io | Od))).count();
         if outs.len() > 1 {
             found.push(format!("net {n}: {} totem-pole outputs", outs.len()));
+        } else if outs.len() == 1 && others > 0 {
+            found.push(format!("net {n}: totem-pole {}.{} with {others} three-state, bidirectional or open-drain pads", outs[0].0, outs[0].1));
         }
         if !outs.is_empty() && RAILS.contains(&n.as_str()) {
             found.push(format!("{}.{}: output on rail {n}", outs[0].0, outs[0].1));
@@ -976,6 +989,47 @@ fn circuits(ck: &mut Ck) {
             ck.err(format!("CPU-side D{k} ({n}) carries {bad:?}"));
         }
     }
+
+    // CVAL: part values. The circuit checks above are topology only, and the golden KiCad file
+    // agrees with any value once regenerated, so each value is asserted against its source.
+    ck.id = "CVAL";
+    const VALUES: &[(&str, &str)] = &[
+        ("Y1", "18.432MHz"),           // 6.1
+        ("R1 R2", "510R"),             // 6.1, 8224 note 1
+        ("R3", "1k"),                  // 6.7, INTA strap
+        ("R4", "10k"),                 // 6.7, INT pull-down
+        ("R5", "10k"),                 // 6.10, ROM /WE pull-up
+        ("R6 R7", "4.7k"),             // 6.4, ACK and LATCH pull-downs
+        ("R8 R9 R10 R11", "1k"),       // 6.11, LED resistors
+        ("R12", "4.7k"),               // 6.6, TEST_RESET base resistor
+        ("R13", "10k"),                // HARDWARE_BUILD 2 (decision Q-NET-RDYIN), RDYIN pull-up
+        ("R14", "10k"),                // 6.9, P-FET gate to GND
+        ("RN1 RN2 RN3", "10k"),        // 6.13, bus pull-ups
+        ("RN4", "2.2k"),               // 6.13 Bring-up, DB pull-down
+        ("RN5", "1k"),                 // 6.12 rule 2, analyzer isolation
+        ("RN6", "330R"),               // 6.4, Pi D0-D7 series array
+        ("Q2", "SUP53P06-20"),         // 6.9, the fitted P-MOSFET
+        ("D1", "SCHOTTKY"),            // 6.9, VBB clamp
+        ("C22 C23 C24 C25", "10uF"),   // 6.9 bulk; HARDWARE_BUILD 2, the pump capacitors
+    ];
+    for (refs, v) in VALUES {
+        for r in refs.split_whitespace() {
+            match ck.ix.get(r).map(|&i| ck.parts[i].value.as_str()) {
+                Some(got) if got == *v => {}
+                Some(got) => ck.err(format!("{r} is {got}, not {v}")),
+                None => ck.err(format!("{r}: no such part")),
+            }
+        }
+    }
+
+    // CTP: test points on their rails and probe nets (HARDWARE_BUILD 2, 2.3, 3 steps 0, 1, 4).
+    ck.id = "CTP";
+    for (tp, rail) in [("TP1.1", "GND"), ("TP2.1", "GND"), ("TP3.1", "+5V"), ("TP4.1", "+12V"), ("TP5.1", "-5V"), ("TP6.1", "+3V3_PI")] {
+        ck.on(tp, rail);
+    }
+    ck.same(&["TP7.1", "U2.PHI1"]);
+    ck.same(&["TP8.1", "U2.PHI2"]);
+    ck.same(&["TP9.1", "U8.2PRE_N"]);
 }
 
 // ---------------------------------------------------------------- KiCad files
@@ -1268,19 +1322,35 @@ fn kicad_files_parse() {
     let heads: Vec<Option<&str>> = dru.iter().map(|x| match x { Sx::L(v) => v.first().and_then(atom), Sx::A(_) => None }).collect();
     assert!(heads.iter().all(|h| matches!(h, Some("version" | "rule"))), "kicad_dru top level: {heads:?}");
     let mut rules = 0;
+    let mut width: BTreeMap<&str, f64> = BTreeMap::new(); // net -> widest track_width min naming it
     for rule in kids(&dru, "rule") {
         rules += 1;
+        let mut min_width = None;
         for c in kids(rule, "constraint") {
             let k = c.get(1).and_then(atom).unwrap_or("");
             assert!(["track_width", "clearance", "via_diameter", "hole_size", "edge_clearance"].contains(&k), "unknown constraint {k}");
+            if k == "track_width" {
+                min_width = val(c, "min").and_then(|v| v.strip_suffix("mm")).and_then(|v| v.parse::<f64>().ok());
+            }
         }
         if let Some(cond) = val(rule, "condition") {
             for name in cond.split("NetName == '").skip(1).map(|s| s.split('\'').next().unwrap()) {
                 assert!(nets.contains(name), "kicad_dru names net {name}, which hw/board.net.txt does not have");
+                if let Some(w) = min_width {
+                    let e = width.entry(name).or_insert(0.0);
+                    *e = e.max(w);
+                }
             }
         }
     }
     assert!(rules >= 3, "kicad_dru has {rules} rules");
+    // Rail widths (decision T-PCB): every rail has a width rule; the about 1 A path (6.9) and
+    // its return at least 0.8 mm, the others at least 0.4 mm, as hw/board.kicad_dru states.
+    for rail in RAILS {
+        let want = if ["+5V", "+5V_IN", "GND"].contains(&rail) { 0.8 } else { 0.4 };
+        let got = width.get(rail).copied().unwrap_or(0.0);
+        assert!(got >= want, "kicad_dru: track_width min for {rail} is {got} mm, needs {want} mm");
+    }
 
     // The board: 160 x 120 mm outline on Edge.Cuts (Q-NET-OUTLINE).
     let pcb = sx(PCB).expect("hw/board.kicad_pcb");
@@ -1362,9 +1432,13 @@ fn checker_catches_mutations() {
         ("S3", &[("17 DB0 DB0", "17 FFRD_N DB0")]),
         ("S4", &[("4 G2A_N MEMW_N", "4 G2A_N MEMWN")]),
         ("S5", &[("13 6A GND", "13 6A NC")]),
+        // A datasheet-open input strapped: the charge pump's oscillator stopped.
+        ("S5", &[("7 OSC NC", "7 OSC GND")]),
         ("S6", &[("26 NC NC", "26 NC A13")]),
         ("S7", &[("12 4A GND\n13 4B GND", "12 4A X4\n13 4B X4")]),
         ("S8", &[("6 2Y WAIT_B", "6 2Y REQ")]),
+        // A spare inverter (input on GND) driving DB5 high for ever.
+        ("S8", &[("12 6Y NC", "12 6Y DB5")]),
         ("P1", &[("19 OE_N DOE_N\n20 VCC +3V3_PI", "19 OE_N DOE_N\n20 VCC +5V")]),
         ("P2", &[("part SW1 SW RESET\n1 ~ RESIN_N\n2 ~ GND", "part SW1 SW RESET\n1 ~ RESIN_N\n2 ~ +5V")]),
         ("P3", &[("part C22 CP 10uF\n1 + +5V\n2 - GND", "part C22 CP 10uF\n1 + GND\n2 - +5V")]),
@@ -1399,6 +1473,8 @@ fn checker_catches_mutations() {
         ("C612", &[("1 CH0 LAD0", "1 CH0 D0")]),
         ("C612", &[("9 CH8 ACK\n10 CH9 LATCH", "9 CH8 LATCH\n10 CH9 ACK")]),
         ("C613", &[("part H4 HOLE M3", "part H4 HOLE M3\npart R99 R 10k\n1 ~ D3\n2 ~ +5V")]),
+        ("CVAL", &[("part RN6 RN_DIP16 330R", "part RN6 RN_DIP16 33k")]),
+        ("CTP", &[("part TP7 TP PHI1\n1 ~ PHI1", "part TP7 TP PHI1\n1 ~ PHI2"), ("part TP8 TP PHI2\n1 ~ PHI2", "part TP8 TP PHI2\n1 ~ PHI1")]),
     ];
     assert!(check(NETLIST).is_empty(), "the unmutated board must be clean first");
     let norm = |l: &str| l.split('#').next().unwrap().split_whitespace().collect::<Vec<_>>().join(" ");

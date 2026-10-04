@@ -115,7 +115,11 @@ fn emulator_decode() -> Decode {
     for ovl in [false, true] {
         cpu.rom_overlay_enabled = ovl;
         for addr in 0..=0xFFFFu16 {
-            let rom = cpu.read_byte(addr) == 0xA5;
+            // ROM or RAM, nothing else: an open-bus FF (an unmapped decode, or an overlay window
+            // past the 4 KB image) is neither.
+            let byte = cpu.read_byte(addr);
+            assert!(byte == 0xA5 || byte == 0x5A, "read of {addr:04X} (overlay {ovl}) is {byte:02X}: neither ROM nor RAM");
+            let rom = byte == 0xA5;
             let hi = (addr >> 8) as usize;
             if addr & 0xFF == 0 {
                 d.rom_sel[ovl as usize][hi] = rom;
