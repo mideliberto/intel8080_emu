@@ -1,6 +1,8 @@
 # Quick Reference
 
-Cheat sheet. Not normative. Every section links to the doc that owns the detail, and where this page and that doc disagree, the doc wins:
+Cheat sheet. Not normative. How to operate the machine (running, loading, saving, debugging): [USER_GUIDE.md](USER_GUIDE.md).
+
+Every section links to the doc that owns the detail, and where this page and that doc disagree, the doc wins:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): memory map, workspace, boot, overlay, CPU contract, hardware interface, host-side keys.
 - [DEVICE_SPECS.md](DEVICE_SPECS.md): every port protocol and the READY contract.

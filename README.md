@@ -16,7 +16,7 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Storage device (24-bit, 16MB) | ✅ |
 | Monitor ROM v0.9 (20 commands + Intel HEX loader) | ✅ |
 | Host-side debugger (breakpoints, watchpoints, I/O breaks, port trace, trace ring, ROM symbols) | ✅ |
-| 338 tests (6 library + 13 host + 130 CPU + 37 device + 56 mailbox + 54 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 9 `#[ignore]` (4 exercisers, 3 GET time limits, 1 live ASK, 1 measurement) | ✅ |
+| 342 tests (6 library + 13 host + 130 CPU + 37 device + 56 mailbox + 58 monitor + 18 Pi daemon + 16 debugger + 8 terminal), plus 9 `#[ignore]` (4 exercisers, 3 GET time limits, 1 live ASK, 1 measurement) | ✅ |
 | Intel HEX loader (Phase 5) | ✅ |
 | Service Mailbox (ports 10-13) and `TIME` / T (Phase 6) | ✅ |
 | Mailbox `ASM`/`DIS`, A and U (Phase 7) | ✅ |
@@ -25,51 +25,19 @@ An Intel 8080 emulator in Rust with a monitor ROM. Period-appropriate architectu
 | Mailbox `GET` and N: HTTP and HTTPS via `curl` on the Pi (Phase 8) | ✅ |
 | Mailbox `ASK` and Q: Claude via the Messages API, the key on the Pi (Phase 9) | ✅ |
 | R: the registers a program left at its `G` return (Phase 10) | ✅ |
+| Example programs (`examples/hello`, `examples/memtest`) and the user guide (Phase 11) | ✅ |
 
 ## Monitor Commands
 
-```
-A addr                - Assemble, one instruction per line ('.' ends)
-C start end dest      - Compare memory regions
-D [start] [end]       - Dump memory
-E [addr]              - Examine/modify memory
-F start end val       - Fill memory
-G [addr]              - Go (execute at address)
-H num1 num2           - Hex math (sum, difference)
-I port                - Input from I/O port
-L stor mem [cnt]      - Load from storage to memory
-M src dst cnt         - Move memory block
-N url [> file]        - HTTP GET to the console, or to a storage file
-O port val            - Output to I/O port
-Q text                - Ask Claude (plain ASCII answer)
-R                     - Registers at the last G return
-S start end bytes     - Search for pattern
-T                     - Show time (YYYY-MM-DD HH:MM:SS)
-U addr [cnt]          - Unassemble cnt instructions (default 8)
-W mem stor [cnt]      - Write memory to storage
-X [file | -]          - Mount/unmount storage
-:LLAAAATT..CC         - Intel HEX record (paste at the prompt)
-?                     - Help
-```
+Command summary: [docs/QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md); full contract: [docs/MONITOR_SPEC.md](docs/MONITOR_SPEC.md).
 
-Full contract for every command, argument and message: [docs/MONITOR_SPEC.md](docs/MONITOR_SPEC.md).
+## Quick Start
 
-## Storage System
+    cargo run                      # the monitor prompt; Ctrl-C quits, Ctrl-E opens the debugger
+    > ?                            # the command list
 
-24-bit linear-addressed storage with 16MB address space. No sectors, no tracks—just bytes.
-
-```
-> X DATA.BIN
-Mounted
-> L 0 1000 100           ; Load 256 bytes from storage:0x000000 to mem:0x1000
-Loaded
-> W 2000 10000 80        ; Write 128 bytes from mem:0x2000 to storage:0x010000
-Written
-> X -
-Unmounted
-```
-
-Storage addresses take up to 6 hex digits (24-bit). Mounting a missing file creates it. Protocol: [docs/DEVICE_SPECS.md](docs/DEVICE_SPECS.md).
+Paste `examples/hello.hex` at the prompt, then `G 0100`. Everything else (loading your own programs,
+saving to storage, the debugger, the Pi daemon, the RAM test build): [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## Building
 
@@ -100,65 +68,9 @@ scp target/aarch64-unknown-linux-musl/release/pi8080d pi:/usr/local/bin/
 
 On the Pi: `pi8080d --storage DIR [--listen ADDR:PORT] [--trace FILE] [--sim FILE]`, or the unit `scripts/pi8080d.service`. `--sim rom/monitor.bin` runs the emulated 8080 on a simulated board instead of GPIO, on the Pi or the Mac (`cargo run --bin pi8080d -- --sim rom/monitor.bin --storage /tmp/pi8080d`); the unit drop-in is `scripts/pi8080d-sim.conf` ([docs/PI_DAEMON.md](docs/PI_DAEMON.md) 16). The console is TCP, `127.0.0.1:8080` by default: `ssh -L 8080:localhost:8080 pi`, then `socat -,rawer,escape=0x1d TCP:localhost:8080`. Deployment: [docs/PI_DAEMON.md](docs/PI_DAEMON.md) 11.
 
-## Running
-
-```bash
-cargo run
-```
-
-You'll see:
-```
-8080 Emulator
-Built: 2026-10-02 19:20:00        <- emulator build time (build.rs)
-
-8080 Monitor v0.9
-Built: 10/02/2026 19:13:00        <- ROM assembly time (asl DATE/TIME)
-Ready.
-> 
-```
-
-Ctrl-C quits the emulator. Ctrl-E opens the debugger. Host key mapping: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). With stdin piped instead of a terminal, its bytes go straight to the console. A piped run ends only on HLT (`HLT at PC=xxxx`) or Ctrl-C; at end of input the monitor just waits at its prompt. A `--script` run also prints `HLT at PC=xxxx` and exits on a halt; see Debugger for how else it ends. In an interactive terminal run with no `--script`, HLT opens the debugger prompt instead (`q` quits). Example: `printf 'F 0200 0200 76\rG 0200\r' | cargo run`.
-
-## Debugger
-
-Host-side; the 8080 never sees it. Ctrl-E stops the CPU and opens a `dbg>` prompt; `cargo run -- --debug` starts stopped; `cargo run -- --script FILE` runs debugger commands from FILE first (each echoed as `dbg> ...`; a bad line exits with status 2). ROM labels from `rom/monitor.sym` work anywhere an address does, as `NAME` or `NAME+n`. Numbers are hex.
-
-```
-c                  continue              s [n]            step n instructions
-r                  registers             m addr [len]     memory (D format)
-u [addr] [n]       disassemble           b addr           breakpoint
-w addr[-end] [r|w] watchpoint            io port [in|out] break on IN/OUT
-bl / bc [addr]     list / clear breaks   t file|off       port trace to a file
-ring [n]           last n steps          sym addr         address and label
-?                  command summary       q                quit
-```
-
-A stop prints the reason, the last 8 steps from the trace ring, the registers and the next instruction:
-
-```
-dbg> b CMD_DUMP
-dbg> c
-> D 0200 020F
-* break F28B CMD_DUMP
-...
-F05E  FE 44     CPI 44             A=44 F=12 BC=0B0D DE=0000 HL=0081 SP=F000
-F060  CA 8B F2  JZ CMD_DUMP        A=44 F=56 BC=0B0D DE=0000 HL=0081 SP=F000
-PC=F28B SP=F000 A=44 F=56 -ZAP- BC=0B0D DE=0000 HL=0081 INTE=0 OVL=0
-CMD_DUMP:
-F28B  CD 59 F1  CALL SKIP_SPACES
-```
-
-Full contract (formats, watchpoint and trace semantics): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) section 7.4.
-
 ## ROM Development
 
-The monitor ROM uses the AS macro assembler (Alfred Arnold).
-
-```bash
-cd rom
-make          # monitor.bin, monitor.sym (debugger symbols) and monitor_ram.hex
-              # (RAM test build at D000, ARCHITECTURE 2.1); commit all three
-```
+Build, test, try on the board without burning, burn and check: [docs/USER_GUIDE.md](docs/USER_GUIDE.md) section 10.
 
 ## ROM Overlay Boot
 
@@ -185,7 +97,8 @@ src/
     ├── device.rs        # IoDevice trait
     └── devices/
         ├── console.rs       # Console 00-02: input FIFO, output buffer
-        ├── mailbox.rs       # Service Mailbox 10-13: TIME, ASM, DIS
+        ├── mailbox.rs       # Service Mailbox 10-13: TIME, ASM, DIS, GET, ASK
+        ├── ask.rs           # ASK: prompt rules, curl request, SSE reader, wrap (ask_system.txt: the system prompt)
         └── storage.rs       # Storage and mount 08-0F: 24-bit linear storage
 
 rom/
@@ -196,7 +109,9 @@ rom/
 └── monitor_ram.hex      # RAM test build at D000 (Intel HEX; paste, then G D000)
 
 examples/
-└── hello.asm            # Example 8080 program
+├── Makefile             # make: NAME.hex from NAME.asm (asl + p2hex)
+├── hello.asm / .hex     # Prints a line, returns to the monitor
+└── memtest.asm / .hex   # RAM test over a range
 
 scripts/
 ├── fetch_exercisers.sh  # Downloads the exercisers to tests/data/exercisers (pinned SHA-256)
@@ -211,6 +126,7 @@ docs/
 ├── DEVICE_SPECS.md          # Normative: port protocols, READY
 ├── MONITOR_SPEC.md          # Normative: monitor commands, HEX loader
 ├── PI_DAEMON.md             # Normative: the Pi daemon (bus loop, RESET, TCP console, build, deploy)
+├── USER_GUIDE.md            # Operating the machine (non-normative)
 ├── QUICK_REFERENCE.md       # Cheat sheet
 ├── HARDWARE_BUILD.md         # Build plan: BOM, bring-up, Pi platform decisions
 ├── IMPLEMENTATION_ROADMAP.md
@@ -223,10 +139,12 @@ tests/
 ├── cpu_tests.rs         # CPU: reference-model flags, opcode cycle/length table, branches, wrap
 ├── device_tests.rs      # Console, storage and mount at port level
 ├── mailbox_tests.rs     # Service Mailbox at port level (DEVICE_SPECS 8), black-box from the spec
+├── debugger_tests.rs   # Debugger: --script runs, breaks, watchpoints, trace (ARCHITECTURE 7.4)
 ├── exerciser.rs         # TST8080, 8080PRE, CPUTEST, 8080EXM under a CP/M shim (#[ignore])
 ├── monitor_tests.rs     # Strict transcript harness: junk RAM, exact output to each prompt; every transcript also through the Pi daemon, some through pi8080d --sim and the RAM test build
 ├── pi_daemon_tests.rs   # Pi daemon: RESET, faults, startup, stop, TCP console on the simulated board
 ├── terminal_tests.rs    # The real binary under a pty: raw mode, key map, Ctrl-C/Ctrl-E, HLT prompt (Unix)
+├── support/            # Shared test code: mod.rs, http.rs (local HTTP server for GET and ASK; never the internet or the API)
 └── transcripts/         # Monitor transcripts (data; also meant for hardware over the Pi console); ram/ only for the RAM test build
 ```
 
@@ -259,6 +177,7 @@ Normative specs (code that differs from them is tracked in `TODO.md`):
 - [`docs/PI_DAEMON.md`](docs/PI_DAEMON.md) — The Pi daemon `pi8080d`: bus loop, RESET, TCP console, TIME clock, build, deployment, tests
 
 Working docs:
+- [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — Operating the machine: emulator, Pi daemon, loading, saving, debugging, ROM changes
 - [`docs/QUICK_REFERENCE.md`](docs/QUICK_REFERENCE.md) — Cheat sheet
 - [`docs/HARDWARE_BUILD.md`](docs/HARDWARE_BUILD.md) — Hardware build plan: BOM, bring-up, sourcing, Pi platform decisions (non-normative)
 - [`docs/reference/8080_HARDWARE.md`](docs/reference/8080_HARDWARE.md) — 8080A, 8224, 8228 hardware reference (MCS-80 User's Manual)

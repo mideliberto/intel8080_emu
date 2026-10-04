@@ -14,7 +14,7 @@
 | 8 | Internet Services | ✅ Complete |
 | 9 | Claude Integration | ✅ Complete |
 | 10 | R command (debugger done early) | ✅ Complete |
-| 11 | Polish | 🔲 Future |
+| 11 | Polish | ✅ Complete |
 | - | Pi daemon track (parallel) | 🟡 Code done 2026-10-03, bench pending |
 
 ---
@@ -236,9 +236,75 @@ The host-side debugger shipped before Phase 5 (2026-10-03, ARCHITECTURE 7.4). It
 
 ---
 
-## Phase 11: Polish & Documentation
+## Phase 11: Polish & Documentation ✅ COMPLETE (2026-10-03)
 
-Detailed help, self-test, state save/load, example programs, documentation.
+**Goal:** someone who has never seen the repo can run the machine, load a program, save their work and
+find the spec for anything they see, and every doc agrees with the code. No new ROM code.
+
+**Specified 2026-10-03** (decisions: COLLABORATION_LOG Key Decisions, "Phase 11 Specified").
+
+**Cut, with where each need is met instead:**
+- **Detailed help.** `?` stays the one-screen list (MONITOR_SPEC 6.14). Detail: `docs/USER_GUIDE.md`
+  and MONITOR_SPEC 6. If a later change runs the ROM out of room, moving `MSG_HELP` behind the
+  mailbox is the lever (TODO, Someday), not a Phase 11 task.
+- **Self-test.** No ROM self-test. RAM: `examples/memtest`. ROM: `W F000 0 1000` to a storage file,
+  then `cmp -n 4096` against `rom/monitor.bin` (USER_GUIDE 6.3). CPU: the four exercisers
+  (`tests/exerciser.rs`, HARDWARE_BUILD 3 step 8). Before the Pi exists: the step 3 diagnostic image.
+- **State save/load.** W and L are save and load (USER_GUIDE 6.2). No host-side emulator snapshot:
+  the 8080 could not see it, the board could not do it, and the debugger plus transcripts already
+  reproduce any state worth reproducing.
+
+**Tasks:**
+- [x] `examples/`: `hello.asm` returns with `RET` (it ended in `HLT`, which breaks the G return
+  contract: the emulator exits, the board stops until RESET); new `memtest.asm`; `Makefile`
+  (`asl` + `p2hex -F Intel -l 16`); `hello.hex` and `memtest.hex` committed, as `rom/monitor_ram.hex` is,
+  so `cargo test` needs no assembler.
+- [x] `tests/transcripts/example_hello.txt`, `example_memtest.txt`: paste the `.hex`, run, check the
+  output. As transcripts they also run through the daemon and on the RAM test build. `memtest` runs on
+  a short range (0200-0FFF, below the RAM build's image) and on F000-F0FF, where the ROM ignores
+  writes, for the `FAIL F000` line.
+- [x] `tests/monitor_tests.rs`: `example_hello`, `example_memtest`, `memtest_default_range` (the
+  default 0200-EEFF, local path only) and `examples_match_their_hex` (each `examples/NAME.hex` equals
+  the `> :` lines of `example_NAME.txt`, in order).
+- [x] `docs/USER_GUIDE.md` (non-normative), including N, Q and R, written from the MONITOR_SPEC
+  sections Phases 8-10 shipped (6.18, 6.19, 6.20). README's Running, Debugger, Storage System and ROM
+  Development sections move into it. README keeps the vision, the status table and a short quick start
+  that links it. QUICK_REFERENCE links it.
+- [x] Consistency pass (the checklist below), after Phase 10 shipped. Every mismatch goes to `TODO.md`.
+  A doc is fixed to match the code only where the spec is unambiguous; otherwise the mismatch goes to
+  Open Decisions (CLAUDE.md).
+- [x] The 1.0 definition in The End State (below). Writing it down is the task; meeting it is not.
+
+**Consistency checklist** (one pass, by hand or by an agent; no new tests):
+1. Messages: every string in MONITOR_SPEC 5 is in `rom/monitor.asm`, every ROM message is in the
+   table, and `File not found` is not in the ROM.
+2. Commands: MONITOR_SPEC 3 rule 5, the ROM dispatch table, `dispatch.txt`, the 6.14 help block,
+   `help.txt`, `MSG_HELP` and the QUICK_REFERENCE table name the same set.
+3. Ports: DEVICE_SPECS 1, `build_bus`, MONITOR_SPEC 11 and the QUICK_REFERENCE port map agree.
+4. Mailbox: the DEVICE_SPECS 8 Commands table and `mailbox.rs` have the same commands, and no
+   placeholder row is left.
+5. Placeholders gone once Phases 8-10 ship: MONITOR_SPEC Scope, Status, 3 rule 5 and 10;
+   DEVICE_SPECS 3.3 and 8; ARCHITECTURE 3.1 (the Phase 10 reset note) and 8; PI_DAEMON 1 and 15;
+   QUICK_REFERENCE Future commands; README "Coming"; this file's phase table.
+6. Counts: test counts and ROM bytes in README, CLAUDE.md Status and COLLABORATION_LOG Current State
+   equal `cargo test` and `make size`, and the PI_DAEMON 13.2 cost line is re-measured with the
+   example transcripts.
+7. References: every `FILE.md N.N` reference names a section that exists, including those in
+   USER_GUIDE.
+8. USER_GUIDE: every monitor session with output lines is copied from the transcript it names.
+
+**Done:** 0 ROM bytes (3116, `make size` unchanged). Two example programs with transcripts on every
+path, four tests, `docs/USER_GUIDE.md`, the 1.0 definition. The checklist's findings and the host
+commands run by hand are in `TODO.md` (Done: Phase 11).
+
+**Success criteria:**
+- [x] `cargo test` passes, with both example transcripts on every path and the four example tests.
+- [x] USER_GUIDE meets checklist item 8.
+- [ ] Its host commands (`cargo run`, `pi8080d --sim`, socat, the `nc` script form, the RAM test build
+  load, `cd examples && make`) have been run once by hand from a clean checkout. All but socat, which
+  is not installed on the build Mac (`TODO.md`).
+- [x] The checklist is done and its findings are fixed or logged.
+- [x] `make size` is unchanged by this phase.
 
 ---
 
@@ -252,3 +318,31 @@ An 8080 system that:
 5. Debugs itself (with emulator help)
 
 The 8080 code is simple. The coprocessor handles complexity. That's the whole point.
+
+### Monitor 1.0
+
+1.0 is a git tag, not a phase. It marks the commit whose burned image passed every item below.
+
+- **Candidate.** After Phase 11, one commit sets the banner version to `1.0` (MONITOR_SPEC 1.1),
+  rebuilds `rom/monitor.bin` and changes nothing else. That exact image is burned and checked. A
+  candidate that fails is fixed and rebuilt, still `1.0`, still untagged, and every item is run again
+  on the new image.
+- **Tag.** `v1.0` goes on the commit whose `rom/monitor.bin` passed. Its COLLABORATION_LOG entry
+  records the results.
+
+Criteria, all on one candidate image:
+1. Phases 8-11 are complete to their success criteria.
+2. `cargo test` is green, the four exercisers pass in the emulator, and the aarch64 musl check and
+   clippy gate pass.
+3. `make size` is at most 4096.
+4. On the board, with the candidate burned: HARDWARE_BUILD 3 steps 5-8 pass (steps 0-4 are board
+   construction, done once at build), and so do the PI_DAEMON 14 bench checks.
+5. Every file in `tests/transcripts/` replays on the board by the step 6 method (Q11-REPLAY). The
+   storage directory is empty and the board is fresh from RESET before each file. The daemon runs
+   without `ANTHROPIC_API_KEY`, so no replay reaches the API, and the Pi clock is NTP-synced
+   (`time.txt`). Output matches under the harness's rules (`tests/monitor_tests.rs` header: `\d`
+   matches any digit). The boot port trace equals the emulator's.
+6. Live, on the board: the daemon restarted with the key installed, one `Q` prints an answer, and one
+   `N` against a real URL prints its body.
+7. F000-FFFF as the 8080 reads it equals the candidate's `rom/monitor.bin` (USER_GUIDE 6.3).
+8. `TODO.md` has no open decision and no open "code differs from spec" item.

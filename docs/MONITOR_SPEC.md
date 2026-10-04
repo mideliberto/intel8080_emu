@@ -38,6 +38,9 @@ Ready.<CR><LF>
 ```
 
 - `<version>` is `0.9` today (`MSG_BANNER` in `rom/monitor.asm`; Phase 10). A phase that changes the command set bumps it in the same commit.
+- `1.0` is set by the 1.0 candidate commit (`IMPLEMENTATION_ROADMAP.md`, The End State, Monitor 1.0).
+  It changes no command and no message. The release is the tagged commit whose burned image passed,
+  not the first image that says `1.0`.
 - The RAM test build (`ARCHITECTURE.md` 2.1) prints `8080 Monitor v<version> RAM` on that line; nothing else in the banner differs. A test MAY check the ` RAM` marker, but still MUST NOT match the version, date or time.
 - `<date>` and `<time>` are the assembler's `DATE` and `TIME` at build time.
 - Tests MUST NOT match on the version, date or time. A banner check matches only `8080 Monitor v`.
@@ -80,7 +83,7 @@ After READ_LINE returns:
 3. The first non-space character selects the command. `a`-`z` fold to `A`-`Z`.
 4. `:` selects the Intel HEX loader (Intel HEX Loader). It is not a command letter. Leading spaces before `:` are allowed.
 5. The recognized characters are `A C D E F G H I L M N O Q R S T U W X ?` and `:`. `T` came with Phase 6, `A` and `U` with Phase 7, `N` with Phase 8, `Q` with Phase 9, and `R` with Phase 10.
-6. Anything else prints `Unknown command. Type ? for help.` This includes the letters reserved for later phases (Future Commands) until they are implemented.
+6. Anything else prints `Unknown command. Type ? for help.`
 
 Arguments start right after the command character. The space between the letter and the first argument is optional, so `D0200` is the same as `D 0200`.
 

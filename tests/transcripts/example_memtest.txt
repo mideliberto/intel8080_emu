@@ -1,0 +1,33 @@
+# examples/memtest.asm (USER_GUIDE.md 5): paste examples/memtest.hex, then run it.
+# The records must equal examples/memtest.hex line for line (examples_match_their_hex).
+> :10010000C307010002FFEE0E00CD1901D80EFFCD8E
+> :100110001901D8217E01C37501CD39017DACA977C4
+> :10012000231B7AB3C21C01CD39017DACA9BEC249E3
+> :1001300001231B7AB3C22A01C92A0301EB2A050154
+> :100140007D936F7C9A6723EBC9E5218701CD75010B
+> :10015000E17CCD61017DCD6101218401CD75013747
+> :10016000C9F50F0F0F0FCD6A01F1E60FC69027CE2C
+> :100170004027D300C97EB7C8D30023C375015241BD
+> :0D0180004D204F4B0D0A004641494C200018
+> :00010001FE
+Loaded
+# A short range (LAST = 0FFF) keeps the step fast and stays below the RAM test
+# build's image (D000-EEFF), so this runs on both monitors. The default range
+# 0200-EEFF is the same code with a longer count.
+< E 0105\rFF\r0F\r.
+E 0105
+0105: FF-FF
+0106: EE-0F
+0107: 0E-
+> G 0100
+RAM OK
+# The ROM ignores writes (JP-WE open), so a range in it fails at its first byte.
+< E 0103\r00\rF0\rFF\rF0\r.
+E 0103
+0103: 00-00
+0104: 02-F0
+0105: FF-FF
+0106: 0F-F0
+0107: 0E-
+> G 0100
+FAIL F000

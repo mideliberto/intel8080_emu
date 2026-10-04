@@ -1,0 +1,11 @@
+# examples/hello.asm (USER_GUIDE.md 5): paste examples/hello.hex, then run it.
+# The records must equal examples/hello.hex line for line (examples_match_their_hex).
+> :10010000210C017EB7C8D30023C3030148656C6C82
+> :0B0110006F2C2038303830210D0A0021
+> :00010001FE
+Loaded
+> G 0100
+Hello, 8080!
+# It returned with RET (MONITOR_SPEC 8): the prompt is back and runs commands.
+> G
+Hello, 8080!

@@ -63,6 +63,20 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-03: Phase 11 Specified: No ROM Code
+**Decision:** Mike accepted every Phase 11 recommendation (Q11-HELP, Q11-SELFTEST, Q11-SAVE, Q11-EXAMPLES, Q11-GUIDE, Q11-V1, Q11-REPLAY), and the Phases 8-11 cross-check fixes that apply to Phase 11:
+- **Detailed help:** cut. `?` stays the one-screen list; detail is in `docs/USER_GUIDE.md` and MONITOR_SPEC 6. Moving the help text behind a mailbox `HELP` command (752 ROM bytes in v0.9, measured 2026-10-03; 656 before Phases 8-10) is a Someday lever, not a plan.
+- **Self-test:** no ROM self-test. RAM: `examples/memtest`. ROM: `W F000 0 1000`, then `cmp -n 4096`. CPU: the exercisers.
+- **Save/load:** W and L, documented. No host-side snapshot.
+- **Examples:** `hello` (now returns with RET) and `memtest`, committed `.hex` with transcripts that run on every path, plus a local test of memtest's default range.
+- **User guide:** one non-normative doc that holds procedures and points at the specs for facts; README's how-to sections move into it.
+- **1.0:** an End State milestone, not a Phase 11 task. A `1.0` candidate image is burned and checked; the `v1.0` tag marks the commit whose image passed (IMPLEMENTATION_ROADMAP, The End State).
+- **Board transcript replay (Q11-REPLAY):** decided at bring-up step 6, which needs it first; 1.0 says "by the step 6 method". Logged in TODO Open Decisions.
+- **Cross-check fixes taken into Phase 11:** the stale anchors (C15: MONITOR_SPEC 1.1 says `0.9`; N, Q and R are 6.18, 6.19, 6.20); 1.0 criterion 5 keeps "no API key" for repeatability, not because `ask.txt` needs it, and criterion 6 restarts the daemon with the key (C16); the PI_DAEMON 13.2 cost line joins checklist item 6 (C17).
+
+**Rationale:** each cut need is already met by something that exists (W/L, the exercisers, the HEX loader) or by a program that costs the ROM nothing. All 980 free bytes stay free.
+**Mantra check:** declined: `? cmd` in ROM, a boot ROM checksum, a RAM-test command, an emulator snapshot format, a mailbox demo example, doc-consistency tests.
+
 ### 2026-10-03: Phase 10 Specified: R
 **Decision:** Mike accepted every Phase 10 recommendation, and the Phases 8-11 cross-check fixes that apply to Phase 10. Homes: MONITOR_SPEC 6.20 (R, vectors 6.20.1) and 8 (G_RETURN), ARCHITECTURE 1.1 (REGS).
 - **Q-R-SHIP:** ship R; REGS takes 00EA-00F1 under 1.1's existing rule (new workspace goes into 00EA-00FF first). Free workspace 24 -> 16 bytes.
@@ -591,13 +605,15 @@ Console I/O debugging session:
 
 **Debugger (host-side, ARCHITECTURE 7.4):** Ctrl-E / `--debug` / `--script`, break, step, registers, memory, disassembly with ROM symbols (`rom/monitor.sym`), watchpoints, I/O breaks, port trace, 256-step trace ring
 
+**Examples and user guide (Phase 11):** `examples/hello` and `examples/memtest` (`.asm` and committed `.hex`, `cd examples && make`), each with a transcript on every path; `docs/USER_GUIDE.md`, the non-normative operating guide; Monitor 1.0 defined in the roadmap's End State
+
 **Devices:**
 - Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), Service Mailbox (0x10-0x13, `TIME`, `ASM`, `DIS`, `GET` and `ASK`, the background commands whose worker is a `/usr/bin/curl` child process checked at `IN 12` (ASK: a POST to the Messages API, its SSE stream mapped and wrapped to ASCII lines of at most 79 by `src/io/devices/ask.rs`, the key from `ANTHROPIC_API_KEY`); the clock is a plain fn passed to `Mailbox::new`; `ASM`/`DIS` read the one opcode table in `src/disasm.rs`, which the debugger shares), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
 **Pi daemon `pi8080d` (code, 2026-10-03; PI_DAEMON.md):** `src/pi/mod.rs` (the `Gpio` seam, `setup_pins`, `serve`: the bus loop, RESET handling, TCP console, trace), `src/pi/linux.rs` (`GpioMem`, the RESET line by raw v2 ioctl, `ntp_local_time`), `src/pi_main.rs`. Every transcript passes through it on the simulated board (`src/pi/sim.rs`). `--sim FILE` runs the same board with the CPU model, so the whole Pi stack runs before the board exists (PI_DAEMON 16). The static aarch64 musl binary cross-builds on the Mac with `rust-lld`. Reviewed and fixed 2026-10-03; the simulator gaps left are listed in `TODO.md`. Not yet run on a Pi (PI_DAEMON 14)
 
 **Testing (verified 2026-10-03):**
-- 6 library + 13 host + 130 CPU + 37 device + 56 mailbox + 54 monitor + 18 Pi daemon + 16 debugger + 8 terminal = 338, all passing (the GET, N, ASK and Q tests run curl against a local test server, never the internet or the API, key or no key) (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
+- 6 library + 13 host + 130 CPU + 37 device + 56 mailbox + 58 monitor + 18 Pi daemon + 16 debugger + 8 terminal = 342, all passing (the GET, N, ASK and Q tests run curl against a local test server, never the internet or the API, key or no key) (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 - 3 `#[ignore]` GET time-limit tests (connect 10 s, stall 30 s twice) pass: `cargo test --test mailbox_tests -- --ignored`
 - 1 `#[ignore]` live ASK test, not yet run with a key: `ANTHROPIC_API_KEY=... cargo test --test mailbox_tests ask_live -- --ignored`
@@ -609,12 +625,13 @@ Console I/O debugging session:
 - **Phase 8:** done 2026-10-03 (mailbox `GET`, N, v0.7). The by-hand Gutenberg fetch and the Pi bench rows remain (`TODO.md`).
 - **Phase 9:** done 2026-10-03 (mailbox `ASK`, Q, v0.8), reviewed and fixed the same day. The live ASK test by hand and the Pi bench row remain (`TODO.md`).
 - **Phase 10:** done 2026-10-03 (R, the G_RETURN capture, REGS, v0.9).
+- **Phase 11:** done 2026-10-03 (examples, `docs/USER_GUIDE.md`, the consistency pass, Monitor 1.0 defined; no ROM change). The socat console by hand remains (`TODO.md`). Next: the board (1.0 is a tag on a board-proven image).
 - **Pi daemon:** specified and built 2026-10-03 (`docs/PI_DAEMON.md`); the bench checks (PI_DAEMON 14) wait for the board.
 - **Review findings:** 2026-10-02 review found CPU flag bugs, ROM range and parse bugs, and vacuous tests. All fixed by 2026-10-03 (steps A-E); `TODO.md` keeps the repros.
 
 ### Open Decisions
 
-None open. The choices flagged while building `--sim`, the RAM test build and the board debug aids, and the halted 8080's floating buses (10 kohm pull-ups, ARCHITECTURE 6.13), closed 2026-10-03; see Key Decisions. The MONITOR_SPEC 6.17 U cost figure was corrected to the measurement 2026-10-03. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon, Phase 7, Phase 8, Phase 9 and Phase 10 sets closed 2026-10-03 too. Left to Mike: the CLAUDE.md Build line for curl (`TODO.md`). The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
+Four open, from Phase 11 (`TODO.md`): CLAUDE.md Status and this section disagree on whether open decisions remain; README Building and USER_GUIDE 9 both hold the Pi deploy and console recipe; HARDWARE_BUILD 3 step 8's exerciser shim jumps to "the monitor warm entry", which ARCHITECTURE 2 does not publish; how transcripts replay on the board (Q11-REPLAY, decided at bring-up step 6). Before Phase 11: none open. The choices flagged while building `--sim`, the RAM test build and the board debug aids, and the halted 8080's floating buses (10 kohm pull-ups, ARCHITECTURE 6.13), closed 2026-10-03; see Key Decisions. The MONITOR_SPEC 6.17 U cost figure was corrected to the measurement 2026-10-03. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon, Phase 7, Phase 8, Phase 9 and Phase 10 sets closed 2026-10-03 too. Left to Mike: the CLAUDE.md Build line for curl (`TODO.md`). The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
 
 ### Blocked/Deferred
 
@@ -630,6 +647,14 @@ None open. The choices flagged while building `--sim`, the RAM test build and th
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Phase 11 - Polish & Documentation
+- Specs integrated: IMPLEMENTATION_ROADMAP Phase 11 (tasks, checklist, criteria) and The End State (Monitor 1.0), MONITOR_SPEC 1.1, ARCHITECTURE 8, new `docs/USER_GUIDE.md` (7.2 and 8.2 written from the shipped 6.18-6.20), README (how-to sections moved to the guide, the command block now a link), QUICK_REFERENCE, CLAUDE.md Build; Key Decision "Phase 11 Specified" with C15-C17.
+- Built: `examples/hello.asm` (RET, not HLT), `examples/memtest.asm` (141 bytes), `examples/Makefile`, both `.hex` committed; 0 ROM bytes (3116, unchanged; `monitor.bin` not rebuilt).
+- Tests 338 -> 342: `example_hello.txt` and `example_memtest.txt` (local, through the daemon, on the RAM build), `memtest_default_range` (0200-EEFF), `examples_match_their_hex`. Each fails on its hand mutant (expected string, one checksum digit). Release exercisers 4/4; clippy clean on the host and aarch64 musl. PI_DAEMON 13.2 re-measured: 22 transcripts, 153,600-156,400 accesses, about 2.1 s.
+- Consistency pass: messages, commands, ports, mailbox commands and every `FILE.md N.N` reference clean. Fixed: MONITOR_SPEC 3 rule 6's stale "letters reserved for later phases", README Project Structure (GET/ASK, `ask.rs`, `tests/support/http.rs`), the guide draft's claim that a key cuts some commands short. For Mike: the CLAUDE.md Status vs Current State open-decisions mismatch, HARDWARE_BUILD step 8's "warm entry", Q11-REPLAY.
+- By hand from a clean checkout: `cd examples && make` (byte-identical), piped `cargo run` (hello, memtest `RAM OK`), `pi8080d --sim` with the `nc` script form (hello, the RAM build `G D000`, the 6.3 ROM `cmp`). Not run: socat (not installed here).
+- What bit us: clippy's `unnecessary_map_or` on the drafted test (now `extension() != Some("hex")`). Review: the guide's rewritten 8.2 said only a `G` return changes what `R` prints, against MONITOR_SPEC 6.20 (REGS is ordinary RAM); now a pointer to 6.20, and 7.2 cut to procedures plus pointers. README's tests list gained `debugger_tests.rs` and `support/`. Logged for Mike: README Building duplicates USER_GUIDE 9's console recipe; CLAUDE.md Status also misses the Phase 11 open decisions.
 
 ### 2026-10-03: Phase 10 - R Command
 - Specs integrated: MONITOR_SPEC Scope/Status/1.1/3/6.5/6.14/6.20/6.20.1/8/10 (section 10 is now empty), ARCHITECTURE 1.1 (REGS), 2.1, 3.1, 3.2, 8; QUICK_REFERENCE, README, PI_DAEMON 13.2; Key Decision "Phase 10 Specified" with the cross-check fixes (C9, C10, C14).

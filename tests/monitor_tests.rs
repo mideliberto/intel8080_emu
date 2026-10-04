@@ -1450,3 +1450,50 @@ fn hex_records_are_validated_before_any_write() {
         assert!((sym("HR_WRITE")..sym("HR_EOF")).contains(&m.cpu.pc), "{}: write from {:04X}", line, m.cpu.pc);
     }
 }
+
+// ---------- Example programs (examples/, USER_GUIDE 5) ----------
+
+#[test]
+fn example_hello() {
+    boot().play("example_hello");
+}
+
+#[test]
+fn example_memtest() {
+    boot().play("example_memtest");
+}
+
+#[test]
+fn memtest_default_range() {
+    // The range a user runs: 0200-EEFF as assembled, about 13.1M cycles (under BUDGET).
+    // Local only: the transcript uses a short range so it also runs on the daemon path and
+    // under the RAM test build, where the default range would overwrite the running monitor.
+    let mut m = boot();
+    for record in std::fs::read_to_string("examples/memtest.hex").unwrap().lines() {
+        m.run(record);
+    }
+    assert_eq!(m.run("G 0100"), "RAM OK\\r\\n");
+}
+
+#[test]
+fn examples_match_their_hex() {
+    // examples/NAME.hex is what a user pastes; tests/transcripts/example_NAME.txt pastes the
+    // same records, in order, as its `> :` lines. The .hex is built from NAME.asm by
+    // `cd examples && make` and committed, as rom/monitor_ram.hex is.
+    let mut n = 0;
+    for e in std::fs::read_dir("examples").unwrap() {
+        let path = e.unwrap().path();
+        if path.extension() != Some("hex".as_ref()) {
+            continue;
+        }
+        let name = path.file_stem().unwrap().to_str().unwrap().to_string();
+        let hex = std::fs::read_to_string(&path).unwrap();
+        let script = std::fs::read_to_string(format!("tests/transcripts/example_{}.txt", name))
+            .unwrap_or_else(|e| panic!("examples/{}.hex has no transcript: {}", name, e));
+        let pasted: Vec<&str> = script.lines().filter_map(|l| l.strip_prefix("> ")).filter(|l| l.starts_with(':')).collect();
+        let records: Vec<&str> = hex.lines().collect();
+        assert_eq!(pasted, records, "examples/{}.hex", name);
+        n += 1;
+    }
+    assert!(n >= 2, "{} examples", n);
+}
