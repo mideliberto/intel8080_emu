@@ -1617,6 +1617,115 @@ fn example_burn() {
     boot().play("example_burn");
 }
 
+#[test]
+fn example_tictac() {
+    boot().play("example_tictac");
+}
+
+/// The reference for examples/tictac: plain minimax, no pruning. A board is 9 squares,
+/// 0 free, 1 X, 2 O.
+const TTT_LINES: [[usize; 3]; 8] = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+
+fn ttt_won(b: &[u8; 9], p: u8) -> bool {
+    TTT_LINES.iter().any(|l| l.iter().all(|&i| b[i] == p))
+}
+
+/// The score of `p` taking square `sq`, for `p`: a win scores the squares still free
+/// plus one (sooner is better), a full board 0, any other move minus the best reply.
+fn ttt_score(b: &mut [u8; 9], sq: usize, p: u8) -> i32 {
+    b[sq] = p;
+    let free = b.iter().filter(|&&c| c == 0).count() as i32;
+    let s = if ttt_won(b, p) {
+        free + 1
+    } else if free == 0 {
+        0
+    } else {
+        let free: Vec<usize> = (0..9).filter(|&i| b[i] == 0).collect();
+        -free.into_iter().map(|i| ttt_score(b, i, 3 - p)).max().unwrap()
+    };
+    b[sq] = 0;
+    s
+}
+
+/// The board as tictac prints it (transcript text): X, O, or the square's digit.
+fn ttt_show(b: &[u8; 9]) -> String {
+    let cell = |i: usize| match b[i] { 1 => 'X', 2 => 'O', _ => (b'1' + i as u8) as char };
+    (0..3).map(|r| format!("{} {} {}\\r\\n", cell(3 * r), cell(3 * r + 1), cell(3 * r + 2))).collect()
+}
+
+/// tictac's BOARD (0103-010B: 0 free, 1 X, 4 O) and FREE (010C, the free squares).
+fn ttt_memory(b: &[u8; 9]) -> Vec<u8> {
+    let free = b.iter().filter(|&&c| c == 0).count() as u8;
+    b.iter().map(|&c| [0, 1, 4][c as usize]).chain([free]).collect()
+}
+
+/// Every game from `b`, X to move: tictac sits at its move prompt with `b` on its board,
+/// unless `again` (a game just ended, Again? is up). Each X move is tried in turn from
+/// the same position, restored by writing BOARD and FREE back. Returns (games, won).
+fn ttt_explore(m: &mut Mon, b: [u8; 9], again: &mut bool, best: &mut std::collections::HashMap<[u8; 9], Vec<usize>>) -> (u32, u32) {
+    let at_again = "Again? (Y/N)\\r\\n";
+    let saved = ttt_memory(&b);
+    let (mut games, mut won) = (0, 0);
+    for sq in (0..9).filter(|&i| b[i] == 0) {
+        if *again {
+            assert_eq!(m.run("Y"), format!("You are X. Type 1-9.\\r\\n{}", ttt_show(&[0; 9])));
+            *again = false;
+            m.poke(0x0103, &saved);
+        }
+        assert_eq!(m.mem(0x0103, 10), saved, "{:?}: BOARD and FREE", b);
+        let mut b = b;
+        b[sq] = 1;
+        let out = m.run(&(sq + 1).to_string());
+        assert!(!ttt_won(&b, 1), "the program lost: {:?}", b);
+        if b.iter().all(|&c| c != 0) {
+            assert_eq!(out, format!("{}Draw\\r\\n{}", ttt_show(&b), at_again), "{:?}", b);
+            (games, *again) = (games + 1, true);
+            continue;
+        }
+        let moves = best.entry(b).or_insert_with(|| {
+            let mut t = b;
+            let s: Vec<i32> = (0..9).map(|i| if t[i] == 0 { ttt_score(&mut t, i, 2) } else { i32::MIN }).collect();
+            let max = *s.iter().max().unwrap();
+            (0..9).filter(|&i| s[i] == max).collect()
+        });
+        let reply = out.strip_prefix("I play ").and_then(|r| r.get(..1)).and_then(|d| d.parse::<usize>().ok());
+        let o = reply.unwrap_or_else(|| panic!("no reply to {:?}: {}", b, out)) - 1;
+        assert!(moves.contains(&o), "{:?}: played {}, best {:?}", b, o + 1, moves);
+        assert_eq!(o, moves[0], "{:?}: a tie goes to the lowest square", b);
+        b[o] = 2;
+        let shown = format!("I play {}\\r\\n{}", o + 1, ttt_show(&b));
+        if ttt_won(&b, 2) {
+            assert_eq!(out, format!("{}I win\\r\\n{}", shown, at_again), "{:?}", b);
+            (games, won, *again) = (games + 1, won + 1, true);
+        } else {
+            assert_eq!(out, shown, "{:?}", b);
+            let (g, w) = ttt_explore(m, b, again, best);
+            (games, won) = (games + g, won + w);
+        }
+    }
+    (games, won)
+}
+
+#[test]
+fn tictac_never_loses_and_plays_optimal_moves() {
+    // examples/tictac against every sequence of human moves (all of them, no sampling).
+    // Every reply must be a move the Rust minimax scores best, so the program never loses,
+    // takes the fastest win and puts off a loss. Each board it prints and each result line
+    // must match the game. One session: a branch already played is not replayed from the
+    // start; its position is written back into BOARD and FREE at the move prompt, where
+    // they are tictac's whole game state.
+    let mut m = boot();
+    for record in std::fs::read_to_string("examples/tictac.hex").unwrap().lines() {
+        m.run(record);
+    }
+    assert_eq!(m.run("G 0100"), format!("You are X. Type 1-9.\\r\\n{}", ttt_show(&[0; 9])));
+    let mut again = false;
+    let (games, won) = ttt_explore(&mut m, [0; 9], &mut again, &mut std::collections::HashMap::new());
+    assert!(again);
+    assert_eq!(show(&m.step(b"N").unwrap()), "N\\r\\n");
+    assert!(games > 9 * 7 && won > 0, "{} games, {} won", games, won);
+}
+
 /// A booted monitor with examples/burn.hex pasted and `image` at 1000, its default source.
 fn burner(image: &[u8]) -> Mon {
     let mut m = boot();
