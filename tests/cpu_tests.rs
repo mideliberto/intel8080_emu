@@ -2575,6 +2575,51 @@ fn jp_we_pads_a_short_rom_with_erased_cells() {
     assert_eq!(cpu.read_byte(0xFFFF), 0x33);
 }
 
+#[test]
+fn jp_we_reset_does_not_touch_the_chip() {
+    // ARCHITECTURE 6.10, Emulator: RESET mid write cycle sets the overlay, so 0000 reads
+    // the busy chip's status (why rule 1 exists), then the new byte once the cycle ends.
+    let mut cpu = fitted(false);
+    cpu.cycles = 100;
+    cpu.write_byte(0xF000, 0x22);
+    cpu.reset();
+    assert!(cpu.rom_overlay_enabled);
+    let end = 100 + TBLC_CYCLES + TWC;
+    assert_eq!(data_read(&mut cpu, 200, 0x0000) & 0xBF, !0x22 & 0xBF, "status after RESET");
+    assert_eq!(data_read(&mut cpu, end - 1, 0x0000) & 0xBF, !0x22 & 0xBF, "still busy");
+    assert_eq!(data_read(&mut cpu, end, 0x0000), 0x22, "the new byte");
+}
+
+#[test]
+fn jp_we_fetches_never_toggle() {
+    // ARCHITECTURE 6.10, Emulator: the model's simplification. On the chip a fetch is an
+    // /OE read and flips I/O6; here it does not (rule 2 code never fetches from a busy
+    // chip). FF written: its status with bit 6 clear is 00, a NOP.
+    let mut cpu = fitted(false);
+    cpu.cycles = 100;
+    cpu.write_byte(0xF000, 0xFF);
+    cpu.pc = 0xF000;
+    cpu.cycles = 200;
+    cpu.execute_one();
+    assert_eq!(cpu.pc, 0xF001, "fetched the status byte 00, a NOP");
+    assert_eq!(data_read(&mut cpu, 300, 0xF000), 0x00, "the fetch left bit 6 clear");
+    assert_eq!(data_read(&mut cpu, 310, 0xF000), 0x40, "a data read flips it");
+}
+
+#[test]
+fn jp_we_survives_a_harness_rewinding_cycles() {
+    // The harness may set cycles (ARCHITECTURE 7.2, Test harness). Below the last accepted
+    // write counts as inside the page load: no u64 underflow.
+    let mut cpu = fitted(false);
+    cpu.set_load_window_cells(true);
+    cpu.cycles = 500;
+    cpu.write_byte(0xF000, 0x22);
+    cpu.cycles = 100;
+    assert_eq!(cpu.read_byte(0xF000), 0x22, "cells reading inside the page load");
+    cpu.write_byte(0xF001, 0x33);
+    assert_eq!(cpu.read_byte(0xF001), 0x33);
+}
+
 /// Program F123 = 5A from RAM at 2000, toggle-poll I/O6 until two reads agree, HLT.
 /// With `wait`, wait at least tBLC (480 T) before the poll, as K-1 decides.
 /// Returns the cycle of the HLT.

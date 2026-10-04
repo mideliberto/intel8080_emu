@@ -88,19 +88,32 @@ fn main() {
     let key = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty());
     let (bus, console) = build_bus(Path::new("storage"), mailbox::local_time, AskConfig { key, ..AskConfig::default() });
     *cpu.io_bus_mut() = bus;
-    cpu.load_rom_from_file(Path::new(&rom)).unwrap_or_else(|e| {
+    let len = cpu.load_rom_from_file(Path::new(&rom)).unwrap_or_else(|e| {
         eprintln!("{}: {}", rom, e);
         std::process::exit(2);
     });
+    // The chip holds 1-4096 bytes (ARCHITECTURE 7.2, ROM image). An empty image would be
+    // the harness's no-ROM CPU, which no board can be.
+    if !(1..=0x1000).contains(&len) {
+        eprintln!("{}: {} bytes; a ROM image is 1-4096 bytes", rom, len);
+        std::process::exit(2);
+    }
     if jp_we {
         // ARCHITECTURE 6.10, Emulator. tWC 10 ms (AT28C64B DS 16 max) at 2.048 MHz.
         cpu.fit_jp_we(20_480);
     }
     let mut dbg = Debugger::new();
     // The symbols next to the image (ARCHITECTURE 7.4, Symbols), when present.
+    // A missing file means no symbols; one that cannot be read or parsed exits 2.
     let sym = Path::new(&rom).with_extension("sym");
-    if let Ok(text) = std::fs::read_to_string(&sym) {
-        dbg.load_symbols(&text).unwrap_or_else(|e| panic!("{}: {}", sym.display(), e));
+    let loaded = match std::fs::read_to_string(&sym) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(e) => Err(e.to_string()),
+        Ok(text) => dbg.load_symbols(&text),
+    };
+    if let Err(e) = loaded {
+        eprintln!("{}: {}", sym.display(), e);
+        std::process::exit(2);
     }
 
     let mut stdout = std::io::stdout();

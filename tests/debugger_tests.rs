@@ -264,6 +264,63 @@ fn port_trace_collapses_repeats_and_sees_fe_ff() {
     assert_eq!(r.cmd("c").lines().next(), Some("* io OUT FE 02"));
     r.cmd("io FF in");
     assert_eq!(r.cmd("c").lines().next(), Some("* io IN FF 00"));
+    // An `in` break ignores an OUT to its port: the OUT 10 runs past to the OUT FE.
+    let mut r = ram(&[0x3E, 0x55, 0xD3, 0x10, 0xDB, 0x02, 0xDB, 0x02, 0xDB, 0x02, 0xD3, 0xFE, 0xDB, 0xFF, 0x76]);
+    r.cmd("io 10 in");
+    r.cmd("io FE out");
+    assert_eq!(r.cmd("c").lines().next(), Some("* io OUT FE 02"));
+}
+
+#[test]
+fn port_trace_reopened_on_the_same_file_has_only_the_new_trace() {
+    // ARCHITECTURE 7.4: `t FILE` truncates FILE, even while it is the file being traced
+    // and an `s` that ended without a stop still holds a line back.
+    // MVI B,0C / L: IN 02 / DCR B / JNZ L / OUT 10 / IN 02 / IN 02 / HLT
+    let mut r = ram(&[0x06, 0x0C, 0xDB, 0x02, 0x05, 0xC2, 0x02, 0x01, 0xD3, 0x10, 0xDB, 0x02, 0xDB, 0x02, 0x76]);
+    let path = r.trace_path();
+    r.cmd(&format!("t {}", path));
+    r.cmd("b 0108");
+    r.cmd("c"); // the stop writes IN 02 02 ; x12
+    r.cmd("bc");
+    r.cmd("s 2"); // OUT 10, IN 02: held back
+    r.cmd(&format!("t {}", path));
+    r.cmd("s");
+    r.cmd("t off");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "IN 02 02\n");
+    // A FILE that cannot be opened changes nothing: the trace goes on.
+    let mut r = ram(&[0x06, 0x0C, 0xDB, 0x02, 0x05, 0xC2, 0x02, 0x01, 0xD3, 0x10, 0xDB, 0x02, 0xDB, 0x02, 0x76]);
+    r.cmd(&format!("t {}", path));
+    r.cmd("s 2");
+    let bad = r.dir.path().join("no/such/dir").to_str().unwrap().to_string();
+    assert!(r.cmd(&format!("t {}", bad)).starts_with("? "));
+    r.cmd("s 3");
+    r.cmd("t off");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "IN 02 02 ; x2\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn port_trace_to_a_pipe() {
+    // ARCHITECTURE 7.4: FILE may be a pipe (/dev/stdout piped), which cannot be truncated;
+    // re-pointing a running trace at one closes the old trace with its held-back line written.
+    // MVI B,0C / L: IN 02 / DCR B / JNZ L / OUT 10 / IN 02 / IN 02 / HLT
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+    let mut r = ram(&[0x06, 0x0C, 0xDB, 0x02, 0x05, 0xC2, 0x02, 0x01, 0xD3, 0x10, 0xDB, 0x02, 0xDB, 0x02, 0x76]);
+    let path = r.trace_path();
+    let mut fds = [0; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    let (mut rd, wr) = unsafe { (std::fs::File::from_raw_fd(fds[0]), std::fs::File::from_raw_fd(fds[1])) };
+    r.cmd(&format!("t {}", path));
+    r.cmd("s 2");
+    assert_eq!(r.cmd(&format!("t /dev/fd/{}", fds[1])), "");
+    drop(wr); // the trace holds its own write end
+    r.cmd("s 3");
+    r.cmd("t off");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "IN 02 02\n");
+    let mut piped = String::new();
+    rd.read_to_string(&mut piped).unwrap();
+    assert_eq!(piped, "IN 02 02\n");
 }
 
 #[test]
@@ -321,6 +378,7 @@ fn break_at_a_rom_symbol() {
     let cmd_dump = r.sym("CMD_DUMP");
     let read_word = r.sym("READ_HEX_WORD");
     assert_eq!(r.cmd("sym cmd_dump+3"), format!("{:04X} CMD_DUMP+3\n", cmd_dump + 3));
+    assert!(r.cmd("sym cmd_dump+100").starts_with(&format!("{:04X}", cmd_dump + 0x100)), "an offset above FF");
     assert_eq!(r.cmd("sym 0100"), "0100\n");
     r.type_in("D 0200 020F\r");
     r.cmd("b CMD_DUMP");
@@ -408,6 +466,10 @@ fn io_break_and_port_trace_of_a_mount() {
 
 // ---------- The binary: CLI and --script (7.4, Entry) ----------
 
+/// How long a run of the binary may take. A piped run ends only on a halt (ARCHITECTURE 7.2),
+/// so a regression that never reaches its HLT fails here instead of hanging cargo test.
+const DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Runs the emulator binary in a fresh directory holding rom/monitor.bin and rom/monitor.sym,
 /// with `stdin` piped in. Returns the exit code and stdout.
 fn emulator(args: &[&str], script: &str, stdin: &[u8]) -> (Option<i32>, String) {
@@ -419,18 +481,32 @@ fn emulator(args: &[&str], script: &str, stdin: &[u8]) -> (Option<i32>, String) 
         std::fs::copy(Path::new("rom").join(f), dir.path().join("rom").join(f)).unwrap();
     }
     std::fs::write(dir.path().join("s.dbg"), script).unwrap();
+    // stdout goes to a file, so a child that never exits cannot block on a full pipe.
+    let stdout = dir.path().join("stdout.txt");
     let mut child = Command::new(env!("CARGO_BIN_EXE_intel8080"))
         .env_remove("ANTHROPIC_API_KEY") // cargo test never reaches the API (PI_DAEMON 13.2)
         .args(args)
         .current_dir(dir.path())
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
+        .stdout(std::fs::File::create(&stdout).unwrap())
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
     child.stdin.take().unwrap().write_all(stdin).unwrap();
-    let out = child.wait_with_output().unwrap();
-    (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned())
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if start.elapsed() > DEADLINE {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("{:?} still running after {:?}; stdout so far:\n{}", args, DEADLINE,
+                String::from_utf8_lossy(&std::fs::read(&stdout).unwrap()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    (status.code(), String::from_utf8_lossy(&std::fs::read(&stdout).unwrap()).into_owned())
 }
 
 #[test]
@@ -477,6 +553,19 @@ fn jp_we_fits_the_jumper() {
     let (code, out) = emulator(&[], "", input);
     assert_eq!(code, Some(0), "{}", out);
     assert!(out.contains(&line("FF")), "{}", out);
+}
+
+#[test]
+fn jp_we_write_cycle_is_tblc_plus_20480_cycles() {
+    // ARCHITECTURE 6.10, Emulator: `--jp-we` fits tWC = 20,480 cycles. A RAM program writes
+    // A5 to FFFE, then counts DATA polls in BC until the byte reads back:
+    // 0300 LXI H,FFFE / MVI M,A5 (at w) / LXI B,0 / L: INX B / MOV A,M / CPI A5 / JNZ L / HLT
+    // Poll k's MOV runs at w + 25 + 29(k-1) and reads status while that is below
+    // w + 307 + 20480, so k = 717 (2CDh) is the first to read the byte.
+    let input = b":1003000021FEFF36A5010000037EFEA5C20803768C\rG 0300\r";
+    let (code, out) = emulator(&["--jp-we", "--script", "s.dbg"], "b 030F\nc\n", input);
+    assert_eq!(code, Some(0), "{}", out);
+    assert!(out.contains("\n* break 030F\n") && out.contains(" A=A5 F=56 -ZAP- BC=02CD "), "{}", out);
 }
 
 #[test]
