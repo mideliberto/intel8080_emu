@@ -1228,7 +1228,8 @@ CS_NEXT:
 ; response byte is printed as it arrives, an LF as CR LF; done prints CR LF; a
 ; failure prints Service error, after any bytes already printed. N and Q share
 ; the loop from CT_EXEC. Esc (MB_KEY) is checked on each busy pass and at each
-; LF, before it prints; TIME is never busy and has no LF, so T never checks.
+; LF, after it prints (Aborted starts a line); TIME is never busy and has no
+; LF, so T never checks.
 CMD_TIME:
         LXI     H,STR_TIME
         CALL    MB_SEND             ; clear, "TIME"
@@ -1243,16 +1244,14 @@ CT_GET:
         JC      CT_END
         CPI     LF                  ; LF prints as CR LF
         JNZ     CT_OUT
-        CALL    MB_KEY              ; once per line: Esc stops a fast stream
-        MVI     A,CR
-        CALL    CONOUT
-        MVI     A,LF
+        CALL    PRINT_CRLF
+        JMP     CT_BUSY             ; once per line: Esc stops a fast stream
 CT_OUT:
         CALL    CONOUT
         JMP     CT_GET
 CT_BUSY:
-        CALL    MB_KEY              ; 01 busy: Esc aborts (not on the
-        JMP     CT_GET              ; path from CT_EXEC: T never checks)
+        CALL    MB_KEY              ; 01 busy or after an LF: Esc aborts
+        JMP     CT_GET              ; (TIME is never busy and has no LF)
 CT_END:
         JNZ     ERR_SERVICE
         CALL    PRINT_CRLF

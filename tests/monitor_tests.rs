@@ -1233,10 +1233,14 @@ fn esc_aborts_n_and_q_scripted() {
     let (out, m, n) = esc_step(&[0x01, 0x01, 0x01, 0x02, 0x03], b"A", b"N x\r");
     assert_eq!(out, "N x\\r\\nA\\r\\n");
     assert_eq!(m.ports[n..].iter().filter(|t| matches!(t, In(0x01, _))).count(), 4);
-    // Checked at each LF, before it prints: the LF that saw the Esc does not print, and the
-    // message follows on the same line. The endless 00 after the body has no LF.
+    // Checked at each LF, after it prints (as CR LF): the message starts a line. The endless
+    // 00 after the body has no LF.
     let (out, _, _) = esc_step(&[0x02], b"ab\ncd\n", b"N x\r\x1B");
-    assert_eq!(out, "N x\\r\\nabAborted\\r\\n");
+    assert_eq!(out, "N x\\r\\nab\\r\\nAborted\\r\\n");
+    // A CR LF body (every ASK reply): the body's CR is out before the LF check, and the
+    // LF still prints, so the message does not overprint the line.
+    let (out, _, _) = esc_step(&[0x02], b"Hello world\r\nsecond\r\n", b"Q x\r\x1B");
+    assert_eq!(out, "Q x\\r\\nHello world\\r\\r\\nAborted\\r\\n");
     // Every other waiting byte is discarded, all of it (the drain): nothing runs after N,
     // one prompt, the FIFO empty.
     let body = b"a\nb\nc\n";

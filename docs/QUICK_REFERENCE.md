@@ -48,7 +48,7 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 - Byte arguments parse as a word and must be at most FF (`00AA` is fine, `1AA` is an error).
 - L/W/M/U count 0 prints `Invalid range`.
 - Tokens after the last argument are ignored.
-- A command that reports an argument error writes no memory outside the workspace and no I/O port.
+- A command that reports an argument error writes no memory outside the workspace and the stack page, and no I/O port.
 
 ### HEX loader
 
