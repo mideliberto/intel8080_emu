@@ -7,6 +7,7 @@
 // "Pulse RESET" is reset(true), 2 ms, reset(false). "After a pass" means edge_calls() has
 // risen by 2 since the access completed (a console pass makes exactly one reset_edge call).
 
+use intel8080_emu::io::devices::ask::AskConfig;
 use intel8080_emu::io::devices::mailbox;
 use intel8080_emu::pi::sim::{Access, Done, Knobs, SimBoard};
 use intel8080_emu::pi::{self, ACK, GPFSEL2, GPIO_PUP_PDN_CNTRL_REG1, GPLEV0, LATCH};
@@ -69,7 +70,7 @@ impl Rig {
         self.thread = Some(std::thread::spawn(move || {
             let fsel2 = pi::setup_pins(&board)?;
             let trace = traced.then(|| std::fs::File::create(trace).unwrap());
-            pi::serve(board, fsel2, &storage, mailbox::local_time, listener, trace, &stop)
+            pi::serve(board, fsel2, &storage, mailbox::local_time, AskConfig::default(), listener, trace, &stop)
         }));
         self.board.wait_edge_calls(1);
     }

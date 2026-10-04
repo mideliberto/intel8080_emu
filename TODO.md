@@ -3,8 +3,9 @@
 ## Open Decisions (Mike decides before anyone codes against them)
 - The 2026-10-02 set closed 2026-10-02 and the 2026-10-03 sets closed 2026-10-03; see COLLABORATION_LOG Key Decisions. The specs are docs/ARCHITECTURE.md, docs/DEVICE_SPECS.md, docs/MONITOR_SPEC.md, docs/PI_DAEMON.md.
 - [x] Pi daemon spec, 9 questions (build-bus-clock, gpio-seam, reset-check-cost, cdev-interface, listen-default, cross-build, measure-mode, fourth-normative-doc, console-input-arrival, device-send-wording): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Pi Daemon Specified"). Written into docs/PI_DAEMON.md, ARCHITECTURE 6.4/6.6/7.4, DEVICE_SPECS 3/4/8/10, HARDWARE_BUILD 3/5.
+- [x] Phase 9 spec, 10 questions (Q-MODEL, Q-FALLBACK, Q-MEMORY, Q-PROMPT-LEN, Q-ABORT, Q-EOL, Q-JSON, Q-CONTEXT, Q-KEY, Q-NONASCII): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Phase 9 Specified"), with the cross-check fixes for Phase 9 (C1 checks at `IN 12` only, C2 `/usr/bin/curl` and GET's spawn, C4 no separate `env_remove` on curl, C6 the CR LF exceptions sentence, C7 the placeholder sentence and test deleted, C8 `Service error` then CR LF, C13 clear keeps `AskConfig`, C14 Q in README's command block). Written into DEVICE_SPECS 3/8/10, MONITOR_SPEC 1.1/2/3/5/6.14/6.15/6.19/9/10/11, PI_DAEMON 1/2/6/10/11/13.2/14/16.5, ARCHITECTURE 8.
 - [x] Phase 8 spec, 7 questions (Q-CLIENT, Q-HUNG, Q-LF, Q-FILE, Q-STATUS, Q-SCOPE, Q-N-82): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Phase 8 Specified"), with the cross-check fixes for Phase 8 (curl `-N` in the stream form, the shared test server `tests/support/http.rs`, the `CN_SEND` label, N in README's command block). Written into DEVICE_SPECS 2/3/8/10, MONITOR_SPEC 2/3/5/6.14/6.15/6.18/9/10/11, PI_DAEMON 1/2/11/12.1/14/15, ARCHITECTURE 6.4/8, HARDWARE_BUILD 5.
-- [ ] **Mike:** CLAUDE.md Build gains "`/usr/bin/curl` 8.4.0+ (mailbox `GET`; the GET tests run it against a local server; `cargo test -- --ignored` runs the time-limit tests)". Left to Mike (his file), as the musl gate was.
+- [ ] **Mike:** CLAUDE.md Build gains "`/usr/bin/curl` 8.4.0+ (mailbox `GET` and `ASK`; their tests run it against a local server; `cargo test -- --ignored` runs the GET time-limit tests; `ANTHROPIC_API_KEY=... cargo test --test mailbox_tests ask_live -- --ignored` is the one live ASK check)". Left to Mike (his file), as the musl gate was.
 - [x] Phase 7 spec, 10 questions (Q-ALIAS, Q-HSUFFIX, Q-REGNUM, Q-ADDR-DEFAULT, Q-U-ARGS, Q-U-BADCOUNT, Q-A-LOOP, Q-DIS-SHAPE, Q-READY, Q-LINE-FN): closed 2026-10-03, Mike accepted every recommendation (Key Decisions, "Phase 7 Specified"). Written into DEVICE_SPECS 8, MONITOR_SPEC 6.16-6.17, and the cross-doc edits.
 - [x] Idle wait slowed compute-bound programs 15x (2026-10-03): closed 2026-10-03, the wait now also requires an `IN 02` read in the last pump interval (ARCHITECTURE 7.2); the 26M-step loop is back to no-wait speed.
 - [x] Debugger NAME+n only within one memory-map region (2026-10-03): accepted by Mike 2026-10-03 (ARCHITECTURE 7.4 Location).
@@ -45,6 +46,17 @@
 - [x] Verify the cross build on the Mac (PI_DAEMON 2; not a decision): done 2026-10-03. `rustup target add aarch64-unknown-linux-musl`, `.cargo/config.toml` linker = `rust-lld`, `cargo build --release --target aarch64-unknown-linux-musl --bin pi8080d` links a static aarch64 ELF (about 760 KiB, rustc 1.89). The musl `cargo check` and `cargo clippy --bins` gate is clean
 - [ ] On the Pi (bench, PI_DAEMON 14, bring-up step 5): the cross-built binary runs, and local time under musl reads `/etc/localtime`. Fallback if it does not: build natively on the Pi (`cargo build --release --bin pi8080d`)
 - [x] Loose ends (2026-10-03): `cargo clippy --all-targets` clean (Default for Intel8080, Debugger, IoBus, Console; a `MountCase` alias in `device_tests.rs`). Real-terminal tests `tests/terminal_tests.rs` (8): the binary under a pty via `rexpect` (Unix-only dev-dependency), wrapped in `sh` so each test checks the exit status and `stty -g` before = after; raw mode boot, echo and run, Ctrl-C mid `JMP $`, Ctrl-E / bad line / `c`, interactive HLT / `q`, Backspace 7F -> 08 at `IN 01` and in a line edit, a piped `--script c` run leaving the terminal mode alone. No pty: prints `skipped: no pty` and passes; libtest captures that line, so the 266 count looks the same either way (`cargo test --test terminal_tests -- --nocapture` shows it). cargo-mutants `src/main.rs`: 8 missed -> 0 (65 caught, 5 timeouts = arg-loop hangs and a quit/resume swap that hangs the piped tests, 6 unviable)
+
+## Done: Phase 9 - Claude Integration (2026-10-03)
+Built to the spec (Key Decisions, "Phase 9 Specified"). +50 bytes (2960 -> 3010), as the sketch measured.
+1. [x] `src/io/devices/ask.rs` + `ask_system.txt`: prompt rules (82), `MODEL` = `claude-opus-5-5`, `AskConfig` (key, endpoint, total limit), curl argv (`-N`, `-f`, connect 10 s, `--max-time`, `Expect:`, `-K -`) and the stdin config (key header, body), the body via `serde_json::json!`, the SSE `Reader`, the mapping table and the incremental wrap (held back: the current line from its last run of spaces, at most 80, plus pending line breaks)
+2. [x] `mailbox.rs`: `ASK` on GET's `/usr/bin/curl` spawn (one `curl()` builder: `env_clear`, stderr null, Linux `pre_exec`); pipe reads go through the reader; DONE or 83 only after the last reply byte (`end`); clear passes `AskConfig` through
+3. [x] `build_bus(storage_dir, clock, ask)`, `pi::serve(.., clock, ask, ..)`; `main.rs` and `pi_main.rs` read `ANTHROPIC_API_KEY` once; startup line `ask on|off`; unit `EnvironmentFile=-/etc/pi8080d/env`
+4. [x] ROM v0.8: Q (`CMD_ASK` jumps into N's tail at `CN_SEND`, `STR_ASK`), help line
+5. [x] Tests: 5 `ask.rs` unit tests (argv holds no key, config fits a pipe, the mapping table, split independence at every offset, the system prompt lists every help command); `tests/support/http.rs` scripted SSE server; 8 ASK device tests + 1 `#[ignore]` live; 3 Q tests + `ask.txt` (local, daemon path, RAM build); `env_remove("ANTHROPIC_API_KEY")` at all four built-binary spawn sites (the spec named three; Phase 8 added `the_worker_gets_an_empty_environment`)
+6. [x] Found while building: the spec's "abc, refusal" and "Hel, ..." rows deliver every byte before the end, so they never exercise "the end comes after the last byte"; a hand mutant (last pop = DONE) survived them. Added held-back variants (`abc def`, `Hel lo`) whose last word only the end releases; both mutants now die. `serve` has eight arguments as PI_DAEMON 2 gives them: `#[allow(clippy::too_many_arguments)]`, the repo's first clippy allow
+7. [ ] By hand, once (needs the network and a key): `ANTHROPIC_API_KEY=... cargo test --test mailbox_tests ask_live -- --ignored`, and a `Q` in the emulator
+8. [ ] Bench (PI_DAEMON 14, step 6): the Q row (answer with the key, `Service error` with the network down and with no key, no key in `ps` or the journal)
 
 ## Done: Phase 8 - Internet Services (2026-10-03)
 Built to the spec (Key Decisions, "Phase 8 Specified"). +67 bytes (2893 -> 2960), as the sketch measured.
@@ -231,7 +243,10 @@ All done 2026-10-03 (step E): the WARM/error-tail/one-parser/RANGE refactor from
 - [ ] R command - needs register capture on return (Phase 10)
 
 ## Someday
-- [ ] Phase 9: Claude (mailbox `ASK`, Q command)
+- [ ] ASK with conversation memory (Q-MEMORY: single turn chosen)
+- [ ] ASK prompt from a storage file, `ASK <FILE` (Q-PROMPT-LEN: one line chosen)
+- [ ] Esc aborts a BUSY mailbox request (MB_GET is shared: T, A, U, N and Q; Q-ABORT/Q-HUNG: no abort chosen)
+- [ ] A model flag for ASK (Q-MODEL: a constant chosen)
 - [ ] Phase 10: R command (the debugger shipped early, ARCHITECTURE 7.4)
 - [ ] 8253 timer, TIMER_ISR, RST 7 vector: when something needs a periodic interrupt
 - [ ] Hardware prototype: see docs/HARDWARE_BUILD.md (BOM, 9-step bring-up)

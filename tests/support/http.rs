@@ -11,10 +11,17 @@
 // /404 and /500 (with a body), /max (FFFFFF bytes of `pattern`), /over (1000000h bytes
 // of `pattern`, chunked), /hang (accepts, never answers), /drip (`abc` of a promised
 // 1000, then silence). Anything else is a 404.
+//
+// `scripted` is the ASK side of H (DEVICE_SPECS 8, ASK vectors): each connection's
+// request is read in full (method, path, headers, the body by Content-Length) and
+// reported, then the connection plays its script: chunks written and flushed one by
+// one, `Hold` until the test releases it (reporting a client close meanwhile), and the
+// close. `sse` writes the Messages API events for a list of text deltas.
 
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -140,4 +147,216 @@ fn hold(mut conn: TcpStream, path: &str, events: &Sender<String>) -> std::io::Re
     while let Ok(1..) = conn.read(&mut buf) {}
     let _ = events.send(format!("close {}", path));
     Ok(())
+}
+
+/// One step of a scripted connection.
+pub enum Step {
+    /// Write these bytes and flush.
+    Send(Vec<u8>),
+    /// Wait until the test calls `release`, or the client closes (reported); the script
+    /// then goes on either way.
+    Hold,
+}
+
+/// A request as the server read it.
+#[derive(Debug)]
+pub struct Request {
+    pub method: String,
+    pub path: String,
+    /// Names lowercased, values as sent.
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl Request {
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
+    }
+}
+
+pub struct Scripted {
+    addr: SocketAddr,
+    requests: Receiver<Request>,
+    /// One message per client close seen during a `Hold`.
+    closes: Receiver<()>,
+    release: Sender<()>,
+}
+
+/// Start a scripted server. Connection i plays `scripts[i]`, the last script for every
+/// connection after it; the connection closes when its script ends.
+pub fn scripted(scripts: Vec<Vec<Step>>) -> Scripted {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (request_tx, requests) = mpsc::channel();
+    let (close_tx, closes) = mpsc::channel();
+    let (release, held) = mpsc::channel();
+    let held = Arc::new(Mutex::new(held));
+    let scripts: Vec<Arc<Vec<Step>>> = scripts.into_iter().map(Arc::new).collect();
+    thread::spawn(move || {
+        for (i, conn) in listener.incoming().flatten().enumerate() {
+            let (request_tx, close_tx, held) = (request_tx.clone(), close_tx.clone(), held.clone());
+            let script = scripts[i.min(scripts.len() - 1)].clone();
+            thread::spawn(move || play(conn, &script, &request_tx, &close_tx, &held));
+        }
+    });
+    Scripted { addr, requests, closes, release }
+}
+
+impl Scripted {
+    /// `http://H` + `path`.
+    pub fn url(&self, path: &str) -> String {
+        format!("http://{}{}", self.addr, path)
+    }
+
+    /// The next request, within 5 s.
+    pub fn request(&self) -> Request {
+        self.requests.recv_timeout(Duration::from_secs(5)).expect("no request within 5 s")
+    }
+
+    /// No request arrived within 300 ms.
+    pub fn no_request(&self) -> bool {
+        self.requests.recv_timeout(Duration::from_millis(300)).is_err()
+    }
+
+    /// A held connection saw its client close within `ms`.
+    pub fn sees_close_within(&self, ms: u64) -> bool {
+        self.closes.recv_timeout(Duration::from_millis(ms)).is_ok()
+    }
+
+    /// Let a `Hold` go on.
+    pub fn release(&self) {
+        self.release.send(()).unwrap();
+    }
+}
+
+/// The head of a 200 event stream; the body ends at the close.
+pub fn sse_head() -> Step {
+    Step::Send(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nConnection: close\r\n\r\n".to_vec())
+}
+
+/// One SSE event.
+pub fn event(json: &str) -> Step {
+    let ty = json.split("\"type\":\"").nth(1).and_then(|t| t.split('"').next()).unwrap_or("");
+    Step::Send(format!("event: {}\ndata: {}\n\n", ty, json).into_bytes())
+}
+
+/// A text delta event.
+pub fn text(t: &str) -> Step {
+    event(&format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{}}}}}"#, json_string(t)))
+}
+
+/// The events before the first text: message_start and a text block's start.
+pub fn sse_start() -> Vec<Step> {
+    vec![
+        sse_head(),
+        event(r#"{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[]}}"#),
+        event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#),
+    ]
+}
+
+/// The end: the block's stop, message_delta with `stop_reason`, message_stop.
+pub fn sse_stop(stop_reason: &str) -> Vec<Step> {
+    vec![
+        event(r#"{"type":"content_block_stop","index":0}"#),
+        event(&format!(r#"{{"type":"message_delta","delta":{{"stop_reason":"{}"}},"usage":{{"output_tokens":1}}}}"#, stop_reason)),
+        event(r#"{"type":"message_stop"}"#),
+    ]
+}
+
+/// A whole reply: one text delta per element of `texts`, then `stop_reason`.
+pub fn sse(texts: &[&str], stop_reason: &str) -> Vec<Step> {
+    let mut steps = sse_start();
+    steps.extend(texts.iter().map(|t| text(t)));
+    steps.extend(sse_stop(stop_reason));
+    steps
+}
+
+/// An HTTP error status with an API error body.
+pub fn status(code: u16) -> Vec<Step> {
+    let body = r#"{"type":"error","error":{"type":"api_error","message":"test"}}"#;
+    vec![Step::Send(format!("HTTP/1.1 {} Error\r\ncontent-type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        code, body.len(), body).into_bytes())]
+}
+
+/// `t` as a JSON string, quotes included.
+fn json_string(t: &str) -> String {
+    let mut s = String::from("\"");
+    for c in t.chars() {
+        match c {
+            '"' => s += "\\\"",
+            '\\' => s += "\\\\",
+            c if (c as u32) < 0x20 => s += &format!("\\u{:04x}", c as u32),
+            c => s.push(c),
+        }
+    }
+    s + "\""
+}
+
+fn play(mut conn: TcpStream, script: &[Step], requests: &Sender<Request>, closes: &Sender<()>, held: &Mutex<Receiver<()>>) {
+    let Some(request) = read_request(&mut conn) else { return };
+    let _ = requests.send(request);
+    for step in script {
+        match step {
+            // Write errors are the client's business (it may be gone): ignore them.
+            Step::Send(bytes) => {
+                let _ = conn.write_all(bytes).and_then(|()| conn.flush());
+            }
+            Step::Hold => {
+                let held = held.lock().unwrap();
+                conn.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+                let mut buf = [0u8; 256];
+                loop {
+                    match held.recv_timeout(Duration::from_millis(20)) {
+                        Ok(()) => break,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                    match conn.read(&mut buf) {
+                        Ok(0) => {
+                            let _ = closes.send(());
+                            break;
+                        }
+                        Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+                        Ok(_) => {}
+                        Err(_) => {
+                            let _ = closes.send(());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The request line, the headers and a Content-Length body; None if the client closed first.
+fn read_request(conn: &mut TcpStream) -> Option<Request> {
+    let mut data = Vec::new();
+    let mut buf = [0u8; 4096];
+    let head_end = loop {
+        if let Some(i) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+            break i;
+        }
+        match conn.read(&mut buf) {
+            Ok(n @ 1..) => data.extend(&buf[..n]),
+            _ => return None,
+        }
+    };
+    let head = String::from_utf8_lossy(&data[..head_end]).to_string();
+    let mut lines = head.split("\r\n");
+    let mut first = lines.next()?.split(' ');
+    let (method, path) = (first.next()?.to_string(), first.next()?.to_string());
+    let headers: Vec<(String, String)> = lines
+        .filter_map(|l| l.split_once(':'))
+        .map(|(n, v)| (n.trim().to_ascii_lowercase(), v.trim().to_string()))
+        .collect();
+    let len: usize = headers.iter().find(|(n, _)| n == "content-length").map_or(0, |(_, v)| v.parse().unwrap());
+    let mut body = data[head_end + 4..].to_vec();
+    while body.len() < len {
+        match conn.read(&mut buf) {
+            Ok(n @ 1..) => body.extend(&buf[..n]),
+            _ => return None,
+        }
+    }
+    Some(Request { method, path, headers, body })
 }

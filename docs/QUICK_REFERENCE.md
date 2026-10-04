@@ -29,6 +29,7 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 | M | `M src dst cnt` | Move memory; overlap-safe (memmove) |
 | N | `N url [> file]` | HTTP GET (to the console, or to a storage file); `Service error` on any failure (mailbox `GET`) |
 | O | `O port val` | Output to port |
+| Q | `Q text` | Ask Claude; the answer in plain ASCII lines of at most 79 characters; `Service error` on any failure (mailbox `ASK`) |
 | S | `S start end b1 [.. b8]` | Search for 1-8 bytes |
 | T | `T` | Show time (mailbox `TIME`); `Service error` on a mailbox failure |
 | U | `U addr [cnt]` | Unassemble `cnt` instructions, default 8 (mailbox `DIS`) |
@@ -56,7 +57,6 @@ Detail: [MONITOR_SPEC.md](MONITOR_SPEC.md) (Commands, Intel HEX Loader).
 
 | Cmd | Phase | Description |
 |-----|-------|-------------|
-| Q | 9 | Ask Claude (mailbox `ASK`) |
 | R | 10 | Registers |
 
 Until a letter ships it prints `Unknown command. Type ? for help.`
@@ -145,6 +145,7 @@ Detail: [DEVICE_SPECS.md](DEVICE_SPECS.md).
 - `TIME` returns 19 bytes, `YYYY-MM-DD HH:MM:SS`, Pi local time, no line ending.
 - `ASM` returns 1-3 binary bytes of machine code. `DIS` returns a length byte, the instruction line and CR LF. Both give 82 on a bad argument, never 83 (DEVICE_SPECS 8).
 - `GET url` streams the body unchanged (BUSY between bytes); `GET url > FILE` writes it to `FILE` in the storage directory and returns the length as 6 hex digits. 83 on a network failure, an HTTP status of 400+, more than 5 redirects, a 10 s connect or a 30 s stall (DEVICE_SPECS 8, GET).
+- `ASK prompt` streams Claude's reply as ASCII lines of at most 79 characters, CR LF between them and none after the last. 82 for an empty prompt or a byte outside 20-7E; 83 with no API key on the Pi, on a network or API failure, a refusal, or after 120 s (DEVICE_SPECS 8, ASK).
 
 ### System Control (FE-FF)
 

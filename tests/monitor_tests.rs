@@ -41,6 +41,7 @@ use intel8080_emu::cpu::Transfer;
 use intel8080_emu::debugger::Debugger;
 use intel8080_emu::io::build_bus;
 use intel8080_emu::io::devices::console::Console;
+use intel8080_emu::io::devices::ask::AskConfig;
 use intel8080_emu::io::devices::mailbox::{self, Mailbox};
 use intel8080_emu::io::{IoBus, IoDevice};
 use intel8080_emu::pi;
@@ -82,7 +83,7 @@ struct Mon {
 /// monitor and what boot printed up to the first prompt.
 fn power_on(overlay: bool) -> (Mon, Result<Vec<u8>, String>) {
     let dir = tempfile::tempdir().unwrap();
-    let (bus, con) = build_bus(dir.path(), mailbox::local_time);
+    let (bus, con) = build_bus(dir.path(), mailbox::local_time, AskConfig::default());
     start(bus, Side::Local(con), dir, overlay)
 }
 
@@ -386,7 +387,7 @@ fn every_transcript_through_the_daemon() {
             std::thread::spawn(move || {
                 let fsel2 = pi::setup_pins(&board)?;
                 let trace = std::fs::File::create(trace).unwrap();
-                pi::serve(board, fsel2, &storage, mailbox::local_time, listener, Some(trace), &stop)
+                pi::serve(board, fsel2, &storage, mailbox::local_time, AskConfig::default(), listener, Some(trace), &stop)
             })
         };
         let mut bus = IoBus::new();
@@ -473,7 +474,9 @@ fn sim_mode_plays_transcripts_over_tcp() {
         };
         let dir = tempfile::tempdir().unwrap();
         let trace = dir.path().join("trace.txt");
+        // No key, whatever the developer exported: cargo test never reaches the API (PI_DAEMON 13.2).
         let mut child = Command::new(env!("CARGO_BIN_EXE_pi8080d"))
+            .env_remove("ANTHROPIC_API_KEY")
             .args(["--sim", "rom/monitor.bin", "--listen", "127.0.0.1:0", "--storage"])
             .arg(dir.path().join("storage"))
             .arg("--trace")
@@ -493,7 +496,7 @@ fn sim_mode_plays_transcripts_over_tcp() {
         });
         let addr = line.strip_prefix("pi8080d: console on ").and_then(|l| l.split(',').next())
             .unwrap_or_else(|| panic!("startup line: {:?}", line));
-        assert!(line.trim_end().ends_with("board simulated, ROM rom/monitor.bin"), "{:?}", line);
+        assert!(line.trim_end().ends_with(", ask off, board simulated, ROM rom/monitor.bin"), "{:?}", line);
         let mut client = TcpStream::connect(addr).unwrap();
         client.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
         client.write_all(b"H 0 0\r").unwrap();
@@ -955,7 +958,7 @@ fn t_with_the_pi_clock_not_set_prints_service_error() {
     // DEVICE_SPECS 8, TIME: "If the clock is not set, the result is 83." 6.15 step 4:
     // 80h-FFh prints Service error.
     let mut m = boot();
-    let mb = Rc::new(RefCell::new(Mailbox::new(|| None, m.dir.path().to_path_buf())));
+    let mb = Rc::new(RefCell::new(Mailbox::new(|| None, m.dir.path().to_path_buf(), AskConfig::default())));
     m.map_mailbox(mb);
     assert_eq!(m.run("T"), "Service error\\r\\n");
     assert_eq!(m.run("I 12"), "83\\r\\n");
@@ -1047,6 +1050,71 @@ fn n_handles_every_status_the_reference_client_does() {
     assert_eq!(scripted(&[0x00], b"").run("N x"), "Service error\\r\\n");
     assert_eq!(scripted(&[0x02, 0x02, 0x01, 0x83], b"ab").run("N x"), "abService error\\r\\n");
     assert_eq!(scripted(&[0x02, 0x03], b"\n").run("N x"), "\\r\\n\\r\\n");
+}
+
+// ---------- Q (MONITOR_SPEC 6.19, 6.19.1) ----------
+//
+// Server rows map a real Mailbox with a test key and the scripted side of H as its
+// endpoint (DEVICE_SPECS 8, ASK vectors); nothing here reaches the API.
+
+/// Boot for Q server rows: a mailbox with the test key and H's endpoint.
+fn ask_net(h: &http::Scripted) -> Mon {
+    let mut m = net();
+    let ask = AskConfig { key: Some("sk-ant-test".to_string()), url: h.url("/v1/messages"), total_secs: 120 };
+    let mb = Rc::new(RefCell::new(Mailbox::new(mailbox::local_time, m.dir.path().to_path_buf(), ask)));
+    m.map_mailbox(mb);
+    m
+}
+
+#[test]
+fn q_runs_the_mailbox_client() {
+    // 6.19.1 ports row: "Q hi, reply Hello LF world | Hello 0D 0D 0A world 0D 0A | OUT 11 02;
+    // OUT 10 ASK then  hi; OUT 11 01; IN 12 01 any number of times; IN 12 02 / IN 13 pairs;
+    // IN 12 03". Step 1: "Q checks nothing; the device trims the spaces."
+    use Transfer::{In, Out};
+    let h = http::scripted(vec![http::sse(&["Hello
+world"], "end_turn")]);
+    let mut m = ask_net(&h);
+    let n = m.ports.len();
+    assert_eq!(m.run("Q hi"), "Hello\\r\\r\\nworld\\r\\n");
+    let seen: Vec<Transfer> = m.mailbox_ports(n).into_iter().filter(|&t| t != In(0x12, 0x01)).collect();
+    let mut want = vec![Out(0x11, 0x02)];
+    want.extend(b"ASK  hi".iter().map(|&b| Out(0x10, b)));
+    want.push(Out(0x11, 0x01));
+    for &b in b"Hello\r\nworld" {
+        want.extend([In(0x12, 0x02), In(0x13, b)]);
+    }
+    want.push(In(0x12, 0x03));
+    assert_eq!(seen, want);
+    let body: serde_json::Value = serde_json::from_slice(&h.request().body).unwrap();
+    assert_eq!(body["messages"][0]["content"], "hi");
+}
+
+#[test]
+fn q_failure_after_part_of_a_reply() {
+    // 6.19.1: "Q hi, reply Hel, then the connection closes | HelService error". Step 4:
+    // "Bytes already printed stay on their line, with no <CR><LF> before the message".
+    let mut script = http::sse_start();
+    script.push(http::text("Hel"));
+    let h = http::scripted(vec![script]);
+    let mut m = ask_net(&h);
+    assert_eq!(m.run("Q hi"), "HelService error\\r\\n");
+    assert_eq!(m.run("I 12"), "83\\r\\n");
+}
+
+#[test]
+fn q_without_a_question() {
+    // 6.19.1: "Q, Q   , q (ask.txt) | Service error (each) | mailbox ports written; no
+    // request". Here with a key and a server, so "no request" is checked too.
+    let h = http::scripted(vec![http::sse(&["no"], "end_turn")]);
+    let mut m = ask_net(&h);
+    for line in ["Q", "Q   ", "q"] {
+        let n = m.ports.len();
+        assert_eq!(m.run(line), "Service error\\r\\n", "{:?}", line);
+        assert!(m.mailbox_ports(n).contains(&Transfer::Out(0x11, 0x01)), "{:?}: no execute", line);
+    }
+    assert!(h.no_request());
+    boot().play("ask");
 }
 
 // ---------- A and U (MONITOR_SPEC 6.16, 6.17, 6.17.1) ----------

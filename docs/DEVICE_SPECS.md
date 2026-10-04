@@ -6,7 +6,7 @@ Normative. Every I/O port the 8080 can see, at register level. Where the emulato
 - This file covers the port map, what every register returns and does, and the READY contract as software sees it.
 - `ARCHITECTURE.md` covers port-range ownership, the memory map, reset and boot, CPU behavior (including interrupts), the circuits (WAIT flip-flop and handshake, Pi data path, overlay 74HCT74, decode, reset wiring, level translation, clock, power) and host-side emulator conveniences, including the host key map.
 - `MONITOR_SPEC.md` covers monitor commands, messages, line input and the HEX loader. This file names a ROM routine only where it is the reference client of a protocol.
-- `PI_DAEMON.md` covers the Pi software that serves 00-6F: the bus loop, RESET handling, the console transport, the TIME clock source, the `GET` worker's cores and lifetime, build and deployment. It meets the contracts in this file and does not restate them.
+- `PI_DAEMON.md` covers the Pi software that serves 00-6F: the bus loop, RESET handling, the console transport, the TIME clock source, the `GET` and `ASK` worker's cores and lifetime, the API key, build and deployment. It meets the contracts in this file and does not restate them.
 
 **Conventions:** Port numbers and values are hex. "R" means `IN` and "W" means `OUT`. "Ignored" means no state changes. All decisions in this file were made by Mike (COLLABORATION_LOG Key Decisions) and are binding.
 
@@ -77,7 +77,7 @@ The circuit is in `ARCHITECTURE.md` (Pi Window and READY). This section is the c
    - After raising ACK, read it back high and wait at least 500 ns before treating REQ as a new access. Never wait for REQ to go low.
    - Separate dependent GPIO steps (drive data, LATCH, ACK) with a read-back of the GPIO level register.
    - On RESET, drop any request in flight without raising ACK, and never ACK across a RESET (rule 2.8). The check before each ACK is in `ARCHITECTURE.md` 6.6 (Reset). It relies on the reset source holding RESET for at least 150 ms (a DS1813, decision RESET-SOURCE), which lets the latched-edge part of the check run at most once per millisecond.
-   - Do only bounded local work under READY: console byte transfer, storage address, data and control operations (including fsync and filling a past-EOF gap), mount commands (open, create, fsync or close a local file), the mailbox commands that complete within the execute access (`TIME`, `ASM`, `DIS`; section 8), and for a background mailbox command, starting, checking and stopping its worker: spawning the process, a non-blocking pipe read, a non-blocking wait for its exit, killing and reaping it, and the file fsync, rename and directory fsync that finish a `GET > FILE`. "Bounded" means the operation always finishes. It does not mean it is fast: an fsync, or a write at FFFFFF in an empty file, can hold READY for seconds.
+   - Do only bounded local work under READY: console byte transfer, storage address, data and control operations (including fsync and filling a past-EOF gap), mount commands (open, create, fsync or close a local file), the mailbox commands that complete within the execute access (`TIME`, `ASM`, `DIS`; section 8), and for a background mailbox command, starting, checking and stopping its worker: spawning the process, a non-blocking pipe read, a non-blocking wait for its exit, killing and reaping it, and the file fsync, rename and directory fsync that finish a `GET > FILE`. For `ASK`, that work also includes writing its request to the worker's stdin at execute, and parsing what one pipe read returned (SSE lines, JSON, mapping and wrapping of at most 4096 bytes). "Bounded" means the operation always finishes. It does not mean it is fast: an fsync, or a write at FFFFFF in an empty file, can hold READY for seconds.
    - Never wait on the network, an external service or user input while holding READY. Every other mailbox command is unbounded work: it runs in the background and reports through mailbox status (section 8).
 4. **No timeout.** The 8080 waits as long as the access is pending. A dead Pi stalls the 8080 until RESET. Until the Pi's device service is running, the first Pi-window access stalls and then completes once the Pi services it. At boot that access is the banner's first `OUT 00`. The stalled access MUST NOT complete with a floating bus (`ARCHITECTURE.md`, Pi Window and READY, rule 3 and Power and boot independence). No ROM code handles the stall.
 5. **Timing:** on hardware every Pi-window access costs 10 T-states plus at least one wait state. T3 starts 0.4-0.9 us after the Pi's ACK, and the Pi's service time comes on top (on the order of microseconds on a busy-polling Pi 4, est). Software MUST NOT depend on how long an `IN` or `OUT` takes. The emulator models no wait states: `IN` and `OUT` take 10 T-states, and device effects are applied within the instruction.
@@ -311,7 +311,7 @@ The monitor's `X name` follows this sequence and prints `Invalid filename` for 0
 
 ## 8. Service Mailbox (Ports 10-13)
 
-One device carries every Pi service. The 8080 writes a text command and reads back a byte stream. The Pi handles TLS, DNS, JSON, NTP and the API key. The device logic is Rust behind `IoDevice`: the emulator bus calls it, and on the Pi a GPIO front end calls the same code. Phase 6 brought `TIME`, Phase 7 `ASM` and `DIS`, and Phase 8 `GET`, the first background command.
+One device carries every Pi service. The 8080 writes a text command and reads back a byte stream. The Pi handles TLS, DNS, JSON, NTP and the API key. The device logic is Rust behind `IoDevice`: the emulator bus calls it, and on the Pi a GPIO front end calls the same code. Phase 6 brought `TIME`, Phase 7 `ASM` and `DIS`, Phase 8 `GET`, the first background command, and Phase 9 `ASK`.
 
 ### Registers
 
@@ -341,10 +341,10 @@ One device carries every Pi service. The 8080 writes a text command and reads ba
 | The request produces a byte | BUSY | AVAIL |
 | `IN 13` | AVAIL | AVAIL if another byte is ready; otherwise BUSY if the request is still running; otherwise DONE |
 | The request completes with nothing left to read | BUSY | DONE |
-| The request fails (including mid-response) | BUSY, AVAIL | ERROR. Unread response bytes are discarded |
+| The request fails (including mid-response) | BUSY, AVAIL | ERROR. Unread response bytes are discarded. `ASK` reports its failure only after its last byte has been read (ASK, below) |
 | `OUT 11` = 02 (clear) | any | IDLE. Abort any running request, discard the response and empty the command buffer |
 
-- BUSY can follow AVAIL in the middle of a response, for streamed results (`GET`). One polling loop handles every case.
+- BUSY can follow AVAIL in the middle of a response, for streamed results (`GET`, `ASK`). One polling loop handles every case.
 - DONE and ERROR persist until the next execute or clear.
 - A response may be empty.
 - Response bytes can be any value 00-FF. The end is marked by status, not by a terminator.
@@ -368,10 +368,10 @@ One device carries every Pi service. The 8080 writes a text command and reads ba
 
 ### Command format
 
-- The **command word** is the bytes before the first 20h, or the whole buffer when it contains no 20h. It is matched exactly and case-sensitively against the uppercase names below. An empty word, a lowercase word or an unknown word gives 80. A placeholder word in the Commands table (`ASK`) is unknown until its phase ships, so it gives 80, with or without arguments.
+- The **command word** is the bytes before the first 20h, or the whole buffer when it contains no 20h. It is matched exactly and case-sensitively against the uppercase names below. An empty word, a lowercase word or an unknown word gives 80.
 - The **argument string** is everything after the first 20h, passed verbatim and possibly empty. URLs are case-sensitive.
 - There is no terminator: execute ends the command.
-- Text responses use CR LF (0D 0A) between lines and after each line. The exceptions are `TIME` (no line ending), `ASM` (binary machine code), the first byte of a `DIS` response (a binary length), and `GET` (the stream form is the body's bytes unchanged; the file form is a length with no line ending). Each is specified below.
+- Text responses use CR LF (0D 0A) between lines and after each line. The exceptions are `TIME` (no line ending), `ASM` (binary machine code), the first byte of a `DIS` response (a binary length), `GET` (the stream form is the body's bytes unchanged; the file form is a length with no line ending), and `ASK` (no line ending after its last line). Each is specified below.
 
 ### Error codes
 
@@ -393,9 +393,9 @@ One device carries every Pi service. The 8080 writes a text command and reads ba
 | `ASM <line>` | 7 | `ASM`, one 20h, then one instruction in the notation `DIS` prints. Grammar: ASM, below | The instruction's 1-3 bytes of machine code, binary, opcode first, then the operand (a word low byte first). No line ending |
 | `DIS AAAA B0 B1 B2` | 7 | `DIS`, one 20h, then exactly `AAAA B0 B1 B2`. Grammar: DIS, below | One length byte (binary 01-03), then the instruction line, then CR LF |
 | `GET <url>` or `GET <url> > <FILE>` | 8 | `GET`, one 20h, then the arguments. Grammar: GET, below | `GET <url>`: the response body, bytes unchanged. `GET <url> > <FILE>`: the body goes to `FILE` in the storage directory, and the response is its length as 6 uppercase hex digits, with no line ending. Background command |
-| `ASK <prompt>` | 9 | Placeholder. Gives 80 until Phase 9 ships it | Designed in Phase 9 |
+| `ASK <prompt>` | 9 | `ASK`, one 20h, then the prompt. Rules: ASK, below | Claude's reply as ASCII lines of at most 79 characters, CR LF between lines and none after the last. Background command |
 
-Large results go to storage files, and the 8080 reads them through section 6 (`GET <url> > <FILE>`). `TIME`, `ASM` and `DIS` cannot hang. A background command ends by itself under its own time limits (GET, Time limits); a client can also abort it.
+Large results go to storage files, and the 8080 reads them through section 6 (`GET <url> > <FILE>`). `TIME`, `ASM` and `DIS` cannot hang. A background command ends by itself under its own time limits (GET, Time limits; ASK, Limits); a client can also abort it.
 
 ### TIME clock
 
@@ -502,7 +502,7 @@ Device-level tests MUST cover every row. Responses are shown as hex bytes; for D
 
 ### Background commands
 
-A background command (`GET`) runs in a **worker**, a process on the Pi apart from the device service's bus thread. The device and its state stay on the bus thread (`PI_DAEMON.md` 1). The worker does the network I/O. The device starts it, checks on it and stops it, each as bounded local work (section 3.3).
+A background command (`GET`, `ASK`) runs in a **worker**, a process on the Pi apart from the device service's bus thread. The device and its state stay on the bus thread (`PI_DAEMON.md` 1). The worker does the network I/O. The device starts it, checks on it and stops it, each as bounded local work (section 3.3).
 
 - **Execute** validates the request (80, 81, 82 at once, as for every command), then starts the worker and goes to BUSY. A worker that cannot be started gives 83 at once. Right after execute, `IN 12` reads 01, 81, 82 or 83, or 00 after a Pi service restart (rule 2.9).
 - **Progress is seen at `IN 12`.** The device checks the worker when the 8080 reads `IN 12` in BUSY, and at no other time. A check is one non-blocking read of the worker's output (at most 4096 bytes) or one non-blocking wait for its exit. BUSY becomes AVAIL, DONE or ERROR at the read that sees it. `IN 13` behaves as in every command: in BUSY it reads 00 with no side effect, and in AVAIL it pops a byte. When it pops the last byte read so far, the status goes back to BUSY without a check. A client that wants the result polls `IN 12` until DONE or ERROR, as MB_GET does.
@@ -602,9 +602,118 @@ Device-level tests MUST cover every row. `H` is the test HTTP server in `tests/s
 | `get http://H/hello` | none | 80 | unchanged |
 | `GET ` followed by 125 bytes (129 in all) | none | 81 | unchanged |
 
+### ASK
+
+`ASK <prompt>` sends one question to Claude and streams the answer back. The Pi holds the API key, the system prompt, the JSON and the HTTPS connection; the 8080 sends ASCII and reads ASCII. ASK is a background command (Background commands, above).
+
+- **Prompt:** the argument string, 1-124 bytes (a longer command gives 81), only 20h-7Eh, at least one byte that is not a space. Leading and trailing spaces are removed before it is sent. `ASK` with no 20h, an empty or all-space prompt, or any byte outside 20h-7Eh (Tab, CR, LF, 00, 7F, 80-FF) gives 82. These checks come first, so they give 82 with or without a key.
+- **No API key:** when the service has none, a valid `ASK` gives 83 at execute, with no worker and no network.
+- **Single turn:** each ASK is an independent request. The device keeps nothing between requests.
+- **Response:** the reply text after mapping and wrapping (below), as bytes 20h-7Eh and CR LF only, with no CR LF after the last line. It may be empty (BUSY straight to DONE). The first byte comes when the model starts its answer; the wait before it (connecting, the model thinking) can be many seconds.
+- **The end comes after the last byte.** ASK reports DONE or 83 only after every reply byte produced so far has been read: a failure after part of a reply delivers that part, then 83. So the bytes read never depend on how the stream was split into pipe reads.
+- **Mapping,** applied to the reply text as Claude writes it:
+
+  | Reply character | Becomes |
+  |-----------------|---------|
+  | 20h-7Eh | itself |
+  | LF | a line break |
+  | Tab, U+00A0, U+2002-U+200A, U+202F | one space |
+  | CR, every other 00h-1Fh, 7Fh, U+200B-U+200D, U+FEFF | nothing |
+  | U+2018, U+2019, U+201A, U+2032 | `'` |
+  | U+201C, U+201D, U+201E, U+2033 | `"` |
+  | U+2010, U+2011, U+2013, U+2014, U+2212 | `-` |
+  | U+2026 | `...` |
+  | U+2022, U+00B7 | `*` |
+  | U+00D7 | `x` |
+  | U+2192 | `->` |
+  | U+2190 | `<-` |
+  | any other character from U+0080 up | `?` |
+
+  Nothing a terminal could take as a control sequence reaches the 8080: Esc and every other control byte are dropped. Markdown is not touched; the system prompt asks for none.
+- **Wrapping,** applied to the mapped text:
+  1. Split it at each line break into input lines. Remove trailing spaces from each.
+  2. Remove empty input lines at the start and at the end.
+  3. An input line of at most 79 characters is one output line. A longer one is cut at the last space at index 1-79 that has a non-space character before it, removing that space and the spaces next to it on both sides; if there is no such space, after its 79th character, removing spaces at the start of the rest. Repeat on the rest. Spaces at the start of an input line (indentation) are kept.
+  4. Output lines are joined with CR LF; none after the last.
+- **Delivery is incremental.** A byte is delivered as soon as no later text can change it, and is never taken back. Held back at any moment: the current line from the start of its last run of spaces (at most 80 characters), and line breaks not yet followed by text.
+- **DONE** when the stream ends normally (`message_stop`), including when the reply reached the output cap: it is then cut where the cap fell, with nothing added.
+- **83** (Service failed): no key (above); the worker cannot start; DNS, connect or TLS failure; an HTTP status of 400 or above; an `error` event; a data line that is not JSON; a stream that ends without `message_stop`; stop reason `refusal`; a time limit (Limits). No retries: a 429 or 529 gives 83 and the user asks again.
+- **Never reaches the 8080:** the key, the system prompt, the model name, HTTP headers, JSON, the text of an API error.
+
+### ASK service
+
+How the device produces the reply. None of it is visible to the 8080 except as the reply text and its timing.
+
+- **Key:** `ANTHROPIC_API_KEY` in the environment of the emulator or the daemon, read once at startup; unset or empty means no key. Test harnesses never read the environment: they pass the key and endpoint themselves.
+- **Request:** `POST https://api.anthropic.com/v1/messages`, headers `x-api-key: <key>`, `anthropic-version: 2023-06-01`, `content-type: application/json`. Body:
+
+  ```json
+  {"model":"claude-opus-5-5","max_tokens":2048,"stream":true,
+   "output_config":{"effort":"low"},
+   "system":"<system prompt>",
+   "messages":[{"role":"user","content":"<prompt>"}]}
+  ```
+
+  The model is a constant in `ask.rs` (Key Decisions, Q-MODEL); a model that rejects this shape gets a 400, so ASK gives 83. `thinking` is omitted: the model thinks adaptively and effort is the control. `max_tokens` counts thinking and text together, so it caps each request's cost. The system prompt is `src/io/devices/ask_system.txt`, compiled in (Q-CONTEXT).
+- **Stream:** lines split at LF (a trailing CR removed). Each line starting `data:` holds one JSON object, read by its `type`. `content_block_delta` whose `delta.type` is `text_delta` feeds `delta.text` to the mapping. `message_delta` records `delta.stop_reason`. `message_stop` ends the reply: `refusal` gives 83, every other stop reason DONE. `error` gives 83. Every other line, event and delta type (`event:` lines, `message_start`, `content_block_start`/`_stop` of any block type, thinking and signature deltas, `ping`, types added later) is ignored. Text from consecutive text blocks is one reply.
+- **Limits:** connect (DNS, TCP, TLS) 10 s; the whole request 120 s from execute; no stall limit. Either gives 83.
+- **ASK client** (as GET client): the worker is `/usr/bin/curl` 8.4.0 or later, run without a shell, with the same spawn as GET's (affinity, an empty environment, so no `ANTHROPIC_API_KEY` either). The argument list, pinned by a unit test in `ask.rs` (section 10):
+
+  ```
+  curl -q -s -N -f --proto =http,https --connect-timeout 10 --max-time 120
+       -H "anthropic-version: 2023-06-01" -H "content-type: application/json" -H "Expect:"
+       --url <endpoint> -K -
+  ```
+
+  - `-N`: no output buffering, so text reaches the pipe as it arrives. `-f`: a status of 400 or above is an exit status with no body. `-H "Expect:"`: no `100-continue` wait on the POST. No `-L`: the API does not redirect, and a redirect has no `message_stop`, so it gives 83.
+  - stdin is a pipe. At execute the device writes curl's config to it and closes it: `header = "x-api-key: <key>"` and `data-binary = "<body>"`, each value with `\` and `"` escaped by a backslash. The key and the body are never on the command line. The config is under 16 KiB (the smallest pipe buffer, macOS), so the write never waits. A write error is ignored; curl's exit status decides.
+  - stdout is a pipe, set non-blocking, as GET's stream form. stderr is `/dev/null`.
+  - Exit status 0 after `message_stop` (not `refusal`) is DONE; anything else is 83 (the end comes after the last byte, above).
+  - Emulator and Pi: `/usr/bin/curl`, as GET. If it is missing, every ASK with a key gives 83.
+- **Pi:** `PI_DAEMON.md` 10 (the key) and 11 (installing it).
+
+### ASK vectors
+
+Device-level tests MUST cover every row, against the test HTTP server `H` (`tests/support/http.rs`), with a test key and `H`'s endpoint. "Stream" is what `H` sends after `HTTP/1.1 200` and `content-type: text/event-stream`, as text deltas; every stream not marked otherwise ends with `message_delta` (stop reason `end_turn`) and `message_stop`. "Response" is every byte read by a client that polls as MB_GET does (reads `IN 13` at each 02). `<CRLF>` is 0D 0A.
+
+| Command buffer | Key | Server | After execute | Final | Response |
+|----------------|-----|--------|---------------|-------|----------|
+| `ASK`; `ASK `; `ASK    ` | any | no request | 82 | 82 | none |
+| `ASK hi` Tab `x`; `ASK caf` C3 A9; `ASK hi` 7F | any | no request | 82 | 82 | none |
+| `ask hi` | any | no request | 80 | 80 | none |
+| `ASK ` then 125 bytes `x` (129 in all) | any | no request | 81 | 81 | none |
+| `ASK hi` | none | no request | 83 | 83 | none |
+| `ASK ` then 124 bytes `x` (128 in all) | yes | `ok` | 01 | 03 | `ok` |
+| `ASK hi` | yes | `Hello`, `, world` | 01 | 03 | `Hello, world` |
+| `ASK   hi  ` | yes | `ok` | 01 | 03 | `ok`; the request's user content is `hi` |
+| `ASK say "a\b"` | yes | `ok` | 01 | 03 | `ok`; the body `H` receives is valid JSON whose user content is `say "a\b"` |
+| `ASK hi` | yes | a thinking block (thinking and signature deltas), then `ok` | 01 | 03 | `ok` |
+| `ASK hi` | yes | `ping`, an event of unknown type, a delta of unknown type, then `ok` | 01 | 03 | `ok` |
+| `ASK hi` | yes | `\n\n  a  \n\nb\n\n` | 01 | 03 | `  a<CRLF><CRLF>b` |
+| `ASK hi` | yes | U+201C `x` U+201D U+2014 U+2019 U+2026 U+1F600 Tab Esc `[2J` | 01 | 03 | `"x"-'...? [2J` |
+| `ASK hi` | yes | 100 `x` | 01 | 03 | 79 `x` `<CRLF>` 21 `x` |
+| `ASK hi` | yes | 20 times `word ` (100 characters) | 01 | 03 | 16 times `word` joined by spaces (79 characters; the cut is at the space at index 79) `<CRLF>` 4 times `word` joined by spaces |
+| `ASK hi` | yes | 79 `x`, ` `, `y` | 01 | 03 | 79 `x` `<CRLF>` `y` |
+| `ASK hi` | yes | `    ` then 80 `x` | 01 | 03 | `    ` then 75 `x` `<CRLF>` 5 `x` |
+| `ASK hi` | yes | `cut`, then stop reason `max_tokens` | 01 | 03 | `cut` |
+| `ASK hi` | yes | `abc`, then stop reason `refusal` | 01 | 83 | `abc` |
+| `ASK hi` | yes | `Hel`, then an `error` event (`overloaded_error`) | 01 | 83 | `Hel` |
+| `ASK hi` | yes | `Hel`, then the connection closes | 01 | 83 | `Hel` |
+| `ASK hi` | yes | `data: not json` | 01 | 83 | none |
+| `ASK hi` | yes | HTTP 401, 429, 500, 529, each with an error JSON body | 01 | 83 | none |
+| `ASK hi` | yes | accepts, never answers; the test's total limit is 1 s | 01 | 83 within 3 s | none |
+| `ASK hi` | yes | a closed port | 01 | 83 | none |
+
+Beyond the table:
+- **Request shape:** `POST /v1/messages`; `x-api-key` exactly the test key, `anthropic-version: 2023-06-01`, `content-type: application/json`, no `Expect` header; the body parsed as JSON equals the expected value (model, `max_tokens` 2048, `stream` true, effort `low`, `system` equal to `ask_system.txt`, one user message).
+- **Streaming:** `H` sends `first line\n`, then holds. `IN 13` reads every byte of `first line` before `H` continues, and status is then 01. `H` sends `second` and ends; the rest reads `<CRLF>second`, then 03.
+- **Read while BUSY:** `IN 13` returns 00 and changes nothing.
+- **Abort:** `H` holds after `Hel`; the test writes clear without reading: status 00 at once, `H` sees the connection close within 1 s, and status is still 00 after `H` tries to send more. A new `ASK hi` then answers normally. The same with a second `ASK hi` instead of clear (only the second reply is read), and with the device dropped (RESET).
+- **Live** (`#[ignore]`, `ask_live_answers_in_plain_ascii`; returns early with a note on stderr when `ANTHROPIC_API_KEY` is unset): the real endpoint and key; `ASK What is 2+2? Reply with the digit only.` ends 03 within 120 s; every byte is 20h-7Eh or part of a CR LF pair; no line is over 79; no CR LF after the last line; the reply contains `4`. Run: `ANTHROPIC_API_KEY=... cargo test --test mailbox_tests ask_live -- --ignored`.
+
 ### Reference client
 
-This is the monitor's mailbox client (`MONITOR_SPEC.md` 9: MB_SEND, MB_PUT and MB_GET in `rom/monitor.asm`), used by T, A, U and N. MB_SEND clears the mailbox (the resync) and sends a NUL-terminated string, and MB_PUT appends one without the clear. The caller executes. MB_GET then waits for the next result and returns one of three outcomes: a response byte, done (03), or failed with the status (00 after execute, meaning the Pi restarted, or 80-FF). Each monitor command's sink and messages: `MONITOR_SPEC.md` 6.15-6.18.
+This is the monitor's mailbox client (`MONITOR_SPEC.md` 9: MB_SEND, MB_PUT and MB_GET in `rom/monitor.asm`), used by T, A, U, N and Q. MB_SEND clears the mailbox (the resync) and sends a NUL-terminated string, and MB_PUT appends one without the clear. The caller executes. MB_GET then waits for the next result and returns one of three outcomes: a response byte, done (03), or failed with the status (00 after execute, meaning the Pi restarted, or 80-FF). Each monitor command's sink and messages: `MONITOR_SPEC.md` 6.15-6.19.
 
 ```asm
 ; HL -> NUL-terminated command text
@@ -653,8 +762,8 @@ Superseded on 2026-10-02 (see COLLABORATION_LOG Key Decisions):
 
 | Device | Emulator | Hardware |
 |--------|----------|----------|
-| Port map 00-6F | `build_bus` (`src/io/mod.rs`), used by `main.rs` and every test harness. It takes the TIME clock as a parameter, `build_bus(storage_dir, clock)`, and the emulator's callers pass `mailbox::local_time` | Pi daemon (`src/pi/`): the same function, with its own clock, `ntp_local_time` (`PI_DAEMON.md` 6, 8) |
+| Port map 00-6F | `build_bus` (`src/io/mod.rs`), used by `main.rs` and every test harness. It takes the TIME clock and the ASK settings as parameters, `build_bus(storage_dir, clock, ask)`, and the emulator's callers pass `mailbox::local_time` | Pi daemon (`src/pi/`): the same function, with its own clock, `ntp_local_time` (`PI_DAEMON.md` 6, 8) |
 | Console 00-02 | `src/io/devices/console.rs` (input FIFO and output buffer, no terminal code); the terminal side is `src/main.rs` | Pi: the same Rust code, with the terminal connected to the Pi over TCP (`PI_DAEMON.md` 7) |
 | Storage 08-0C, Mount 0D-0F | `src/io/devices/storage.rs`, one device (std::fs) | Pi: the same Rust code, files on its SD card |
-| Service Mailbox 10-13 | `src/io/devices/mailbox.rs`. `TIME` reads a clock passed to `Mailbox::new` (a plain fn returning the date and time fields, or None for "not set"). The device formats the 19 bytes, so the emulator and the Pi daemon share the formatter. `build_bus` passes the host's local time (`mailbox::local_time`, `localtime_r` through the `libc` crate); tests pass a fixed or a failing one. `ASM` and `DIS` call `src/disasm.rs`: `assemble` reads the opcode table backwards, and `line` formats the DIS line, which the debugger reuses. `GET` (section 8, GET client) spawns `/usr/bin/curl` with `std::process::Command` (`env_clear`) and keeps the `Child`: stream form, its stdout made non-blocking with `fcntl` (`libc`); file form, `-o` the `~FILE` temporary. The curl argument list and the reason for each flag are in the `mailbox.rs` header; a unit test asserts the list. `Mailbox::new(clock, storage_dir)`: `build_bus` passes its storage directory. Abort is `kill` and `wait`; `Drop` aborts. The mount name rule is one function in `storage.rs`, called by mount and by `GET` (a move, not a new abstraction) | Pi: the same Rust code and formatter behind GPIO, with a clock that reports "not set" (83) unless the kernel is NTP-synchronized (section 8, TIME clock; `PI_DAEMON.md` 8). `ASM` and `DIS` are the same code. `GET` is the same code; the worker's cores and lifetime: `PI_DAEMON.md` 1 |
+| Service Mailbox 10-13 | `src/io/devices/mailbox.rs`. `TIME` reads a clock passed to `Mailbox::new` (a plain fn returning the date and time fields, or None for "not set"). The device formats the 19 bytes, so the emulator and the Pi daemon share the formatter. `build_bus` passes the host's local time (`mailbox::local_time`, `localtime_r` through the `libc` crate); tests pass a fixed or a failing one. `ASM` and `DIS` call `src/disasm.rs`: `assemble` reads the opcode table backwards, and `line` formats the DIS line, which the debugger reuses. `GET` (section 8, GET client) spawns `/usr/bin/curl` with `std::process::Command` (`env_clear`) and keeps the `Child`: stream form, its stdout made non-blocking with `fcntl` (`libc`); file form, `-o` the `~FILE` temporary. The curl argument list and the reason for each flag are in the `mailbox.rs` header; a unit test asserts the list. `Mailbox::new(clock, storage_dir, ask)`: `build_bus` passes its storage directory and the ASK settings. Abort is `kill` and `wait`; `Drop` aborts. The mount name rule is one function in `storage.rs`, called by mount and by `GET` (a move, not a new abstraction). `ASK` is `src/io/devices/ask.rs`: validation, the curl argv and stdin, the SSE reader, the mapping and the wrapping. The mailbox runs it as GET's worker. Its settings (`AskConfig`: key, endpoint, total limit) come through `build_bus(storage_dir, clock, ask)`; `main.rs` fills the key from `ANTHROPIC_API_KEY`, the harnesses pass none | Pi: the same Rust code and formatter behind GPIO, with a clock that reports "not set" (83) unless the kernel is NTP-synchronized (section 8, TIME clock; `PI_DAEMON.md` 8). `ASM` and `DIS` are the same code. `GET` is the same code; the worker's cores and lifetime: `PI_DAEMON.md` 1. `ASK` is the same code; the daemon fills the key the same way (`PI_DAEMON.md` 10) |
 | System control FE-FF | `src/cpu.rs` | 74HCT74 and decode (`ARCHITECTURE.md`, Overlay Glue) |

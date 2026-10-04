@@ -12,6 +12,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 use intel8080_emu::debugger::{Debugger, Flow};
 use intel8080_emu::io::build_bus;
+use intel8080_emu::io::devices::ask::AskConfig;
 use intel8080_emu::io::devices::mailbox;
 use intel8080_emu::io::devices::console::Console;
 use intel8080_emu::Intel8080;
@@ -76,7 +77,9 @@ fn main() {
 
     // new() leaves the CPU in its RESET state: PC=0000, ROM overlay set.
     let mut cpu = Intel8080::new();
-    let (bus, console) = build_bus(Path::new("storage"), mailbox::local_time);
+    // ASK's key (DEVICE_SPECS 8, ASK service): read once; unset or empty is no key.
+    let key = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty());
+    let (bus, console) = build_bus(Path::new("storage"), mailbox::local_time, AskConfig { key, ..AskConfig::default() });
     *cpu.io_bus_mut() = bus;
     cpu.load_rom_from_file(Path::new("rom/monitor.bin")).expect("Failed to load ROM");
     let mut dbg = Debugger::new();
@@ -381,7 +384,7 @@ mod tests {
     fn machine(program: &[u8]) -> (Intel8080, std::rc::Rc<RefCell<Console>>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let mut cpu = Intel8080::new();
-        let (bus, console) = build_bus(dir.path(), mailbox::local_time);
+        let (bus, console) = build_bus(dir.path(), mailbox::local_time, AskConfig::default());
         *cpu.io_bus_mut() = bus;
         cpu.load_program(program, 0x0000);
         (cpu, console, dir)

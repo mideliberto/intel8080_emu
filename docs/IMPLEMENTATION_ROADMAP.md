@@ -12,7 +12,7 @@
 | 6 | Time | ✅ Complete |
 | 7 | Development Tools | ✅ Complete |
 | 8 | Internet Services | ✅ Complete |
-| 9 | Claude Integration | 🔲 Future |
+| 9 | Claude Integration | ✅ Complete |
 | 10 | R command (debugger done early) | 🔲 Future |
 | 11 | Polish | 🔲 Future |
 | - | Pi daemon track (parallel) | 🟡 Code done 2026-10-03, bench pending |
@@ -185,9 +185,30 @@ No timer in v1. The Pi keeps wall-clock time via NTP. A periodic interrupt sourc
 
 ---
 
-## Phase 9: Claude Integration 🎯
+## Phase 9: Claude Integration ✅ COMPLETE (2026-10-03)
 
-The 8080 talks to Claude via mailbox `ASK`; Q command. The API key lives on the coprocessor, never in ROM. Designed when the phase starts.
+**Goal:** The 8080 talks to Claude: mailbox `ASK`, the second background command, and the `Q` command. The API key lives on the coprocessor, never in ROM.
+
+**Specified 2026-10-03** (decisions: COLLABORATION_LOG Key Decisions, "Phase 9 Specified"): `ASK`, ASK service and the ASK vectors in `DEVICE_SPECS.md` 8; `Q` in `MONITOR_SPEC.md` 6.19, with the vectors in 6.19.1; the key in `PI_DAEMON.md` 10 and 11.
+
+**Tasks:**
+- [x] `ask.rs` and `ask_system.txt`: the prompt rules (82), `MODEL`, `URL`, `AskConfig`, the curl argv and stdin (key and body on stdin, never argv), the body (`serde_json::json!`), the SSE reader, the mapping and the wrapping
+- [x] `AskConfig` through `build_bus`, `serve`, `main.rs`, `pi_main.rs` (the key from `ANTHROPIC_API_KEY`, read once); the harnesses pass `AskConfig::default()`; clear keeps it
+- [x] `mailbox.rs`: `ASK` beside `GET`, on the same `/usr/bin/curl` spawn (`env_clear`); stdin piped and closed at execute; pipe reads through the reader; DONE or 83 only after the last reply byte
+- [x] `serde_json` (the first new crate since `libc`)
+- [x] The shared test server's scripted SSE side (`tests/support/http.rs`: recorded requests, `Hold`, `sse`)
+- [x] ROM `Q` (dispatch, `CMD_ASK` into N's tail at `CN_SEND`, `STR_ASK`), help line, banner v0.8
+- [x] `env_remove("ANTHROPIC_API_KEY")` at every spawn of a built binary (four sites), `ask off` checked in the `--sim` startup line
+- [x] `placeholder_commands_are_unknown` deleted (ASK is no longer a placeholder)
+
+**Done:** +50 bytes (2960 -> 3010, 1086 free), as the sketch measured: dispatch 5, `CMD_ASK` 7, `STR_ASK` 5, help line 33. Tests: 5 `ask.rs` unit tests, 8 ASK device tests and 1 `#[ignore]` live test in `mailbox_tests.rs`, 3 Q tests and `ask.txt` in `monitor_tests.rs` (also through the daemon and on the RAM build). `serve` takes eight arguments as PI_DAEMON 2 gives them, under `#[allow(clippy::too_many_arguments)]`.
+
+**Success criteria:**
+- [x] Every ASK vector and the five `ask.rs` unit tests pass with no network, with or without `ANTHROPIC_API_KEY` exported.
+- [x] Every 6.19.1 row.
+- [ ] `ask_live_answers_in_plain_ascii` passes once by hand (`ANTHROPIC_API_KEY=... cargo test --test mailbox_tests ask_live -- --ignored`).
+- [x] ROM within 4096 (3010).
+- [ ] The PI_DAEMON 14 Q row on the bench.
 
 ---
 

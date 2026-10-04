@@ -185,6 +185,8 @@ NOT_LOWER:
         JZ      CMD_NET
         CPI     'O'
         JZ      CMD_OUTPUT
+        CPI     'Q'
+        JZ      CMD_ASK
         CPI     'S'
         JZ      CMD_SEARCH
         CPI     'T'
@@ -563,7 +565,7 @@ RANGE:
 
 ; ============================================
 ; MAILBOX CLIENT (DEVICE_SPECS 8 reference client, MONITOR_SPEC 9)
-; Used by T, A, U and N. The caller sends with MB_SEND (and MB_PUT, MB_HEX),
+; Used by T, A, U, N and Q. The caller sends with MB_SEND (and MB_PUT, MB_HEX),
 ; executes (OUT 11 <- 01), then calls MB_GET until it returns done or failed.
 ; ============================================
 
@@ -1133,8 +1135,8 @@ CS_NEXT:
 
 ; CMD_TIME - T (arguments ignored, MONITOR_SPEC 6.15). Mailbox TIME: each
 ; response byte is printed as it arrives, an LF as CR LF; done prints CR LF; a
-; failure prints Service error, after any bytes already printed. N shares the
-; loop from CT_EXEC.
+; failure prints Service error, after any bytes already printed. N and Q share
+; the loop from CT_EXEC.
 CMD_TIME:
         LXI     H,STR_TIME
         CALL    MB_SEND             ; clear, "TIME"
@@ -1159,14 +1161,23 @@ CT_END:
 
 ; CMD_NET - N text (MONITOR_SPEC 6.18). Mailbox GET with the rest of the line,
 ; verbatim (the device parses it); the response prints as T's does.
+; Q (CMD_ASK) enters at CN_SEND with HL = its verb string and DE = the text.
 CMD_NET:
         XCHG                        ; DE = the text after N (MB_SEND keeps DE)
         LXI     H,STR_GET
 CN_SEND:
-        CALL    MB_SEND             ; clear, "GET "
+        CALL    MB_SEND             ; clear, the verb ("GET " or "ASK ")
         XCHG
         CALL    MB_PUT              ; the rest of the line, as stored
         JMP     CT_EXEC
+
+; CMD_ASK - Q text (MONITOR_SPEC 6.19). Mailbox ASK with the rest of the line,
+; verbatim (the device trims and checks it), through N's tail; the reply prints
+; as T's does.
+CMD_ASK:
+        XCHG                        ; DE = the text after Q
+        LXI     H,STR_ASK
+        JMP     CN_SEND             ; clear, "ASK ", the text, execute, print
 
 ; CMD_UNASM - U addr [count] (MONITOR_SPEC 6.17). count instructions, default 8,
 ; 0 is Invalid range. For each: mailbox DIS AAAA B0 B1 B2 (the 3 bytes at the
@@ -1526,7 +1537,7 @@ CW_LOOP:
 
 MSG_BANNER:
         DB      CR,LF
-        DB      "8080 Monitor v0.7"
+        DB      "8080 Monitor v0.8"
         IFDEF   RAMBUILD
         DB      " RAM"
         ENDIF
@@ -1549,6 +1560,7 @@ MSG_HELP:
         DB      "  M src dst cnt    - Move memory",CR,LF
         DB      "  N url [> file]   - HTTP GET",CR,LF
         DB      "  O port value     - Output to port",CR,LF
+        DB      "  Q text           - Ask Claude",CR,LF
         DB      "  S start end pat  - Search memory",CR,LF
         DB      "  T                - Show time",CR,LF
         DB      "  U addr [cnt]     - Unassemble",CR,LF
@@ -1608,6 +1620,8 @@ STR_DIS:
         DB      "DIS ",0
 STR_GET:
         DB      "GET ",0
+STR_ASK:
+        DB      "ASK ",0
 
 ; ROM_END - first byte after the ROM contents. make size: ROM_END - F000.
 ; The RAM build ends far below the stack page: D000 + 4096 + its few extra bytes.

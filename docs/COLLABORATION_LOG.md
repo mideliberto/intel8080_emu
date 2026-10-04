@@ -63,6 +63,24 @@ The "memory" that maintains continuity between Claude instances. Full historical
 
 Ordered newest to oldest. Never delete—only add.
 
+### 2026-10-03: Phase 9 Specified: ASK, Q
+**Decision:** Mike accepted every Phase 9 recommendation, and the Phases 8-11 cross-check fixes that apply to Phase 9. Homes: DEVICE_SPECS 8 (ASK, ASK service, ASK vectors), MONITOR_SPEC 6.19 (Q, 6.19.1 vectors), PI_DAEMON 10 and 11 (the key), `src/io/devices/ask_system.txt` (the system prompt).
+- **Q-MODEL:** `claude-opus-5-5`, a constant in `ask.rs`; changing it is one edit and a rebuild. A model flag goes to Someday.
+- **Q-FALLBACK:** no server-side refusal fallback and no beta header; a refusal is 83.
+- **Q-MEMORY:** single turn; the device keeps nothing between requests. Conversation memory to Someday.
+- **Q-PROMPT-LEN:** one line: 77 characters from Q, 124 from a program. Prompts from a storage file to Someday.
+- **Q-ABORT:** no keyboard abort (one decision with Phase 8's Q-HUNG; MB_GET is shared by T, A, U, N and Q). Q ends within 120 s, about 10 s with no connection. Esc abort to Someday.
+- **Q-EOL:** ASK sends no CR LF after its last line; Q prints the final CR LF on DONE, through T's shared loop (so CR LF arrives as CR CR LF on the console).
+- **Q-JSON:** `serde_json` (Value and `json!`, no derive): pure Rust, the musl cross check unchanged. The first crate since `libc`.
+- **Q-CONTEXT:** the built-in system prompt only (`ask_system.txt`, about 700 tokens), compiled in; a unit test keeps its command list in step with the help text.
+- **Q-KEY:** `ANTHROPIC_API_KEY`, read once at startup by the emulator and the daemon; on the Pi from a root-only `EnvironmentFile` (0600, optional). Never on curl's argv or in its environment: the key and the body go on curl's stdin.
+- **Q-NONASCII:** a small transliteration table (quotes, dashes, ellipsis, spaces, bullet, times, arrows), everything else from U+0080 up is `?`, control characters dropped.
+- **The end comes after the last byte:** ASK reports DONE or 83 only after every reply byte produced so far has been read, so what the 8080 reads never depends on how the stream was split into pipe reads.
+- **Cross-check fixes taken into Phase 9:** checks at `IN 12` only (C1); `/usr/bin/curl` with GET's spawn, so no PATH and an empty environment (C2, C4: no separate `env_remove` on curl); the CR LF exceptions sentence and the `ASK` placeholder sentence and test (C6, C7); `Service error` then CR LF (C8); clear keeps `AskConfig` (C13); Q in README's command block (C14).
+
+**Rationale:** Q is N with another verb: the Pi already runs curl for GET, so ASK is a POST, a JSON body and an SSE reader on the same worker, and the ROM pays 50 bytes. The key never leaves the Pi.
+**Mantra check:** declined: an HTTP or Anthropic crate, a worker thread, conversation state, prompt caching, a context file, a model flag, a keyboard abort, a refusal fallback, an ASK log line.
+
 ### 2026-10-03: Phase 8 Specified: GET, the Background Worker, N
 **Decision:** Mike accepted every Phase 8 recommendation, and the Phases 8-11 cross-check fixes that apply to Phase 8. Homes: DEVICE_SPECS 8 (Background commands, GET, vectors), MONITOR_SPEC 6.18 (N, 6.18.1 vectors), PI_DAEMON 1 and 11 (the worker process, its cores and lifetime), the `mailbox.rs` header (the curl argument list).
 - **Q-CLIENT:** the `GET` worker is a `/usr/bin/curl` (8.4.0+) child process, empty environment, that the mailbox device spawns, checks non-blocking at `IN 12` only and kills on abort. No thread, no channel, no crate, no proxy support. ureq + rustls declined: ring breaks the musl cross check on the Mac.
@@ -545,44 +563,47 @@ Console I/O debugging session:
 
 **CPU Core:** All 256 opcodes (5 undocumented aliases decoded), flags match ARCHITECTURE 5.1-5.3 including AC, 8080A interrupt input (EI delay, HLT wake), reset() = RESET pin. All four exercisers pass, 8080EXM included
 
-**Monitor ROM v0.7:**
-- 18 commands: A, C, D, E, F, G, H, I, L, M, N, O, S, T, U, W, X, ?, to MONITOR_SPEC sections 1-6, 8, 9, 11 (strict arguments, WARM, G return, memmove, Storage error, Mount failed)
+**Monitor ROM v0.8:**
+- 19 commands: A, C, D, E, F, G, H, I, L, M, N, O, Q, S, T, U, W, X, ?, to MONITOR_SPEC sections 1-6, 8, 9, 11 (strict arguments, WARM, G return, memmove, Storage error, Mount failed)
 - Intel HEX loader (Phase 5, MONITOR_SPEC 7): a `:` line is one record, validated in full (pass 1: steps 1-4) before the type, the guard and the write (pass 2)
 - T (Phase 6, MONITOR_SPEC 6.15): mailbox `TIME`, `Service error` on 00 after execute or 80-FF
-- A and U (Phase 7, MONITOR_SPEC 6.16-6.17): mailbox `ASM` and `DIS`; only `.` ends A. T, A, U and N share MB_SEND/MB_PUT/MB_GET, the DEVICE_SPECS 8 reference client
+- A and U (Phase 7, MONITOR_SPEC 6.16-6.17): mailbox `ASM` and `DIS`; only `.` ends A. T, A, U, N and Q share MB_SEND/MB_PUT/MB_GET, the DEVICE_SPECS 8 reference client
 - N (Phase 8, MONITOR_SPEC 6.18): mailbox `GET` with the rest of the line verbatim; shares T's print loop, which prints LF as CR LF
+- Q (Phase 9, MONITOR_SPEC 6.19): mailbox `ASK` with the rest of the line verbatim, entering N's tail at `CN_SEND`
 - ROM overlay boot mechanism; CONOUT is OUT 00 / RET, so the first Pi access after reset is the banner's OUT 00
-- 2960 of 4096 bytes used (1136 free; `make size`)
+- 3010 of 4096 bytes used (1086 free; `make size`)
 - RAM test build (ARCHITECTURE 2.1): `rom/monitor_ram.hex`, the same source at D000 (guard top D000, F/M/L refuse the image, ` RAM` banner), loaded through the resident HEX loader and run with `G D000`, in the harness and over TCP on `pi8080d --sim`. Reviewed and fixed 2026-10-03
 
 **Debugger (host-side, ARCHITECTURE 7.4):** Ctrl-E / `--debug` / `--script`, break, step, registers, memory, disassembly with ROM symbols (`rom/monitor.sym`), watchpoints, I/O breaks, port trace, 256-step trace ring
 
 **Devices:**
-- Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), Service Mailbox (0x10-0x13, `TIME`, `ASM`, `DIS`, and `GET`, the background command whose worker is a `/usr/bin/curl` child process checked at `IN 12`; the clock is a plain fn passed to `Mailbox::new`; `ASM`/`DIS` read the one opcode table in `src/disasm.rs`, which the debugger shares), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
+- Console (0x00-0x02), Storage + Mount as one device (0x08-0x0F, 24-bit / 16MB), Service Mailbox (0x10-0x13, `TIME`, `ASM`, `DIS`, `GET` and `ASK`, the background commands whose worker is a `/usr/bin/curl` child process checked at `IN 12` (ASK: a POST to the Messages API, its SSE stream mapped and wrapped to ASCII lines of at most 79 by `src/io/devices/ask.rs`, the key from `ANTHROPIC_API_KEY`); the clock is a plain fn passed to `Mailbox::new`; `ASM`/`DIS` read the one opcode table in `src/disasm.rs`, which the debugger shares), System Control (0xFE-0xFF). One port map (`build_bus`) for main.rs and every harness. Device code has no terminal code; the host run loop (key map, input pump, Ctrl-C, halt) is in main.rs
 
 **Pi daemon `pi8080d` (code, 2026-10-03; PI_DAEMON.md):** `src/pi/mod.rs` (the `Gpio` seam, `setup_pins`, `serve`: the bus loop, RESET handling, TCP console, trace), `src/pi/linux.rs` (`GpioMem`, the RESET line by raw v2 ioctl, `ntp_local_time`), `src/pi_main.rs`. Every transcript passes through it on the simulated board (`src/pi/sim.rs`). `--sim FILE` runs the same board with the CPU model, so the whole Pi stack runs before the board exists (PI_DAEMON 16). The static aarch64 musl binary cross-builds on the Mac with `rust-lld`. Reviewed and fixed 2026-10-03; the simulator gaps left are listed in `TODO.md`. Not yet run on a Pi (PI_DAEMON 14)
 
 **Testing (verified 2026-10-03):**
-- 1 library + 13 host + 130 CPU + 37 device + 49 mailbox + 49 monitor + 18 Pi daemon + 16 debugger + 8 terminal = 321, all passing (the GET and N tests run curl against a local test server, never the internet) (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
+- 6 library + 13 host + 130 CPU + 37 device + 56 mailbox + 52 monitor + 18 Pi daemon + 16 debugger + 8 terminal = 336, all passing (the GET, N, ASK and Q tests run curl against a local test server, never the internet or the API, key or no key) (real-binary pty tests on Unix, strict transcript harness with a `\d` digit escape, reference-model CPU tests, port-level device tests)
 - 4 `#[ignore]` exercisers (TST8080, 8080PRE, CPUTEST, 8080EXM) all pass: `scripts/fetch_exercisers.sh`, then `cargo test --release --test exerciser -- --ignored`
 - 3 `#[ignore]` GET time-limit tests (connect 10 s, stall 30 s twice) pass: `cargo test --test mailbox_tests -- --ignored`
+- 1 `#[ignore]` live ASK test, not yet run with a key: `ANTHROPIC_API_KEY=... cargo test --test mailbox_tests ask_live -- --ignored`
 
 ### In Progress
 
 - **Phase 6:** done 2026-10-03 (Service Mailbox, `TIME`, T, v0.5).
 - **Phase 7:** done 2026-10-03 (mailbox `ASM`/`DIS`, A, U, v0.6).
 - **Phase 8:** done 2026-10-03 (mailbox `GET`, N, v0.7). The by-hand Gutenberg fetch and the Pi bench rows remain (`TODO.md`).
+- **Phase 9:** done 2026-10-03 (mailbox `ASK`, Q, v0.8), reviewed and fixed the same day. The live ASK test by hand and the Pi bench row remain (`TODO.md`).
 - **Pi daemon:** specified and built 2026-10-03 (`docs/PI_DAEMON.md`); the bench checks (PI_DAEMON 14) wait for the board.
 - **Review findings:** 2026-10-02 review found CPU flag bugs, ROM range and parse bugs, and vacuous tests. All fixed by 2026-10-03 (steps A-E); `TODO.md` keeps the repros.
 
 ### Open Decisions
 
-None open. The choices flagged while building `--sim`, the RAM test build and the board debug aids, and the halted 8080's floating buses (10 kohm pull-ups, ARCHITECTURE 6.13), closed 2026-10-03; see Key Decisions. The MONITOR_SPEC 6.17 U cost figure was corrected to the measurement 2026-10-03. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon, Phase 7 and Phase 8 sets closed 2026-10-03 too. Left to Mike: the CLAUDE.md Build line for curl (`TODO.md`). The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
+None open. The choices flagged while building `--sim`, the RAM test build and the board debug aids, and the halted 8080's floating buses (10 kohm pull-ups, ARCHITECTURE 6.13), closed 2026-10-03; see Key Decisions. The MONITOR_SPEC 6.17 U cost figure was corrected to the measurement 2026-10-03. The Phase 6 items (the 6.15 test bullet vs the injected clock, Pi "clock not set" detection and TZ, and the six literal spec readings) closed 2026-10-03; see Key Decisions. The four Phase 5 spec-wording items (the HEX guard wording, what 7.2's "nothing is written" covers, 7.1 vs the control characters READ_LINE drops, `Line too long` on short lines) closed 2026-10-03, as did the 2026-10-03 set and the two host-only follow-ups; see Key Decisions. The Pi daemon, Phase 7, Phase 8 and Phase 9 sets closed 2026-10-03 too. Left to Mike: the CLAUDE.md Build line for curl (`TODO.md`). The spec is the four normative docs: `docs/ARCHITECTURE.md`, `docs/DEVICE_SPECS.md`, `docs/MONITOR_SPEC.md`, `docs/PI_DAEMON.md`.
 
 ### Blocked/Deferred
 
 - **R command:** Needs return mechanism (Phase 10). The debugger itself shipped 2026-10-03
-- **Pi services:** one Service Mailbox at 0x10-0x13. Phase 6 `TIME`, 7 `ASM`/`DIS` and 8 `GET` (the background worker and BUSY) done; 9 `ASK` next
+- **Pi services:** one Service Mailbox at 0x10-0x13. Phase 6 `TIME`, 7 `ASM`/`DIS`, 8 `GET` (the background worker and BUSY) and 9 `ASK` (Claude) done
 - **8253 timer / interrupts:** Someday
 
 ### Future Vision (Documented, Not Started)
@@ -593,6 +614,20 @@ None open. The choices flagged while building `--sim`, the RAM test build and th
 ---
 
 ## Recent Sessions
+
+### 2026-10-03: Phase 9 Review Fixes
+- Delivery was lazier than DEVICE_SPECS 8: a word followed by a space stayed held until the next word's first character. `Wrap::push` now releases after a space too. The split test asserts the exact held-back amount after every feed instead of `<= 80`; the three surviving delivery-timing mutants die.
+- New row: `Hel`, an `error` event, then `lo` and `message_stop` gives `Hel` and 83, so the `error` arm is tested on its own (its mutant survived because every error row closed right after).
+- `AskConfig` no longer derives Debug: it holds the key, nothing used it, and a stray `{:?}` would have printed it (PI_DAEMON 10).
+- Accepted, commented, not coded: for ASK, a pipe read error other than WouldBlock/Interrupted, or a `try_wait` error, goes through `fail()` and drops the held-back text. Neither happens on a pipe in practice.
+- cargo-mutants on `ask.rs` (lib tests): 67 of 72 caught; the 5 missed are 3 `validate` mutants (covered by the mailbox tests, not run in that pass) and 2 equivalent `>=` mutants. 336 tests, exercisers 4/4, clippy clean on the host and aarch64 musl.
+
+### 2026-10-03: Phase 9 - Claude Integration
+- Specs integrated: DEVICE_SPECS 3/8/10 (ASK, ASK service, ASK vectors; the placeholder sentence gone), MONITOR_SPEC 6.19/6.19.1 (Q) and the cross-references, PI_DAEMON 1/2/6/10/11/13.2/14/16.5 (the key, `ask on|off`, `EnvironmentFile`), ARCHITECTURE 8; Key Decision "Phase 9 Specified" with the cross-check fixes (C1, C2, C4, C6-C8, C13, C14).
+- Built: `ask.rs` (prompt rules, curl argv and stdin, body, SSE reader, mapping, incremental wrap), `ask_system.txt`, ASK in `mailbox.rs` on GET's spawn, `AskConfig` through `build_bus`/`serve`/both binaries, `serde_json`; ROM v0.8 with Q at +50 bytes (3010), exactly the sketch.
+- Tests 321 -> 336 (+1 ignored live): every ASK vector against a scripted SSE server, five `ask.rs` unit tests (one splits every vector at every offset), every 6.19.1 row, `ask.txt` through the daemon and on the RAM build. Release exercisers 4/4; clippy clean on the host and aarch64 musl.
+- What bit us: the spec's failure rows (`abc` refusal, `Hel` then close) deliver every byte before the end, so "the end comes after the last byte" had no test that could fail; a hand mutant survived. Held-back variants (`abc def`, `Hel lo`) fixed that. Also: four spawn sites of built binaries, not three (Phase 8 added one).
+- PI_DAEMON 13.2's cost line re-measured: 19 transcripts, 160,000-200,000 accesses (it varies with `IN 02` polling), about 2.3 s.
 
 ### 2026-10-03: Phase 8 Review Fixes
 - `execute_kills_the_worker` used `command()`, which clears first, so it tested clear twice and execute never. It now sends TIME and executes with no clear; deleting the abort in `Mailbox::execute` fails it.

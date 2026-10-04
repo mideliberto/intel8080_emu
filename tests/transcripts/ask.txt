@@ -1,0 +1,19 @@
+# Q: Ask Claude (MONITOR_SPEC 6.19). Format: tests/monitor_tests.rs header.
+# Never an answer: every line here gives 82 in the device (an empty or all-space
+# question), so no request leaves the Pi, with or without an API key, on the bench too.
+# Answers and the port sequence are Rust-side in monitor_tests.rs (Q).
+
+# Nothing after Q, only spaces, and lowercase q (the letter folds): ASK with an
+# empty question is 82, which Q prints as Service error.
+> Q
+Service error
+> I 12
+82
+> Q\x20\x20\x20
+Service error
+> I 12
+82
+> q
+Service error
+> I 12
+82

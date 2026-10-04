@@ -1,11 +1,14 @@
 // mailbox.rs - Service Mailbox (ports 10-13), DEVICE_SPECS 8.
 //
 // The 8080 writes a text command, executes it, polls status and pops the response.
-// TIME, ASM and DIS complete within the execute access. GET is a background command
-// (DEVICE_SPECS 8, Background commands): its worker is a `curl` child process that the
-// device spawns at execute, checks only when the 8080 reads IN 12 in BUSY (one
+// TIME, ASM and DIS complete within the execute access. GET and ASK are background
+// commands (DEVICE_SPECS 8, Background commands): the worker is a `curl` child process
+// that the device spawns at execute, checks only when the 8080 reads IN 12 in BUSY (one
 // non-blocking pipe read or one non-blocking wait), and kills and reaps on execute,
 // clear and Drop (RESET). No thread: the device stays on the bus thread (PI_DAEMON 1).
+// ASK's own parts (its prompt rules, argument list, stdin and the SSE reader) are in
+// ask.rs; its worker is spawned here as GET's is (`curl`), and its pipe reads go
+// through the reader, which holds text back while a later byte could change it.
 //
 // The GET worker (DEVICE_SPECS 8, GET client), pinned by `curl_argument_list` below:
 //
@@ -35,17 +38,19 @@
 //   --url <url>     the 82 check guarantees <url> starts with http, so it is never an option.
 //
 // stdin and stderr are /dev/null; stdout is a pipe (stream form, made non-blocking) or
-// /dev/null (file form). The environment is empty (env_clear): no proxy variables, no
-// CURL_CA_BUNDLE or SSL_CERT_FILE, no HOME. On Linux a pre_exec sets the worker's cores
-// and PR_SET_PDEATHSIG (PI_DAEMON 1).
+// /dev/null (file form). For ASK, stdin is a pipe that carries curl's config (the key and
+// the body) and is closed at execute. Every worker's environment is empty (env_clear): no
+// proxy variables, no CURL_CA_BUNDLE or SSL_CERT_FILE, no HOME, no ANTHROPIC_API_KEY. On
+// Linux a pre_exec sets the worker's cores and PR_SET_PDEATHSIG (PI_DAEMON 1).
 
 use crate::disasm;
+use crate::io::devices::ask::{self, AskConfig};
 use crate::io::devices::storage;
 use crate::io::IoDevice;
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
-use std::io::{ErrorKind, Read};
+use std::io::{ErrorKind, Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -62,7 +67,7 @@ const ERR_SERVICE: u8 = 0x83;
 /// The command buffer holds at most this many bytes; exactly this many is accepted.
 const COMMAND_MAX: usize = 128;
 
-/// The GET worker (DEVICE_SPECS 8, GET client).
+/// The GET and ASK worker (DEVICE_SPECS 8, GET client, ASK service).
 const CURL: &str = "/usr/bin/curl";
 
 /// One check reads at most this many bytes of the worker's output.
@@ -84,22 +89,30 @@ pub struct Mailbox {
     dir: PathBuf,
     /// The running background request, if any.
     request: Option<Request>,
+    /// The status after the last response byte is popped once the request has ended:
+    /// DONE, or for ASK 83 (the end comes after the last byte, DEVICE_SPECS 8, ASK).
+    end: u8,
+    /// ASK's key, endpoint and total limit.
+    ask: AskConfig,
 }
 
-/// A running GET: its worker and where its output goes.
+/// A running GET or ASK: its worker and where its output goes.
 struct Request {
     child: Child,
-    /// Stream form: the worker's stdout, non-blocking; None once it reached EOF.
+    /// Stream form and ASK: the worker's stdout, non-blocking; None once it reached EOF.
     out: Option<ChildStdout>,
     /// File form: (`~FILE`, `FILE`), both in the storage directory.
     file: Option<(PathBuf, PathBuf)>,
+    /// ASK: the stream goes through the reader, not straight to the response.
+    reader: Option<ask::Reader>,
 }
 
 impl Mailbox {
     /// Power-on state: IDLE, command buffer and response empty, overflow flag clear,
     /// no request running.
-    pub fn new(clock: Clock, dir: PathBuf) -> Self {
-        Mailbox { command: Vec::new(), overflow: false, status: IDLE, response: VecDeque::new(), clock, dir, request: None }
+    pub fn new(clock: Clock, dir: PathBuf, ask: AskConfig) -> Self {
+        Mailbox { command: Vec::new(), overflow: false, status: IDLE, response: VecDeque::new(), clock, dir,
+            request: None, end: DONE, ask }
     }
 
     /// Aborts any running request, then takes the buffer as the new request; the old
@@ -109,6 +122,7 @@ impl Mailbox {
         let command = std::mem::take(&mut self.command);
         let result = if std::mem::take(&mut self.overflow) { Err(ERR_OVERFLOW) } else { self.run(&command) };
         self.response.clear();
+        self.end = DONE;
         match result {
             Ok(Some(bytes)) => {
                 self.status = if bytes.is_empty() { DONE } else { AVAIL };
@@ -135,7 +149,8 @@ impl Mailbox {
             (b"ASM", Some(args)) => std::str::from_utf8(args).ok().and_then(disasm::assemble).ok_or(ERR_ARGS).map(Some),
             (b"DIS", Some(args)) => dis(args).ok_or(ERR_ARGS).map(Some),
             (b"GET", Some(args)) => self.get(args).map(|()| None),
-            (b"TIME" | b"ASM" | b"DIS" | b"GET", _) => Err(ERR_ARGS),
+            (b"ASK", Some(args)) => self.ask(args).map(|()| None),
+            (b"TIME" | b"ASM" | b"DIS" | b"GET" | b"ASK", _) => Err(ERR_ARGS),
             _ => Err(ERR_UNKNOWN),
         }
     }
@@ -158,17 +173,31 @@ impl Mailbox {
         if let Some((tmp, _)) = &file {
             let _ = std::fs::remove_file(tmp); // a leftover from a restart or power loss
         }
-        let mut cmd = Command::new(CURL);
-        cmd.args(curl_args(url, file.as_ref().map(|(tmp, _)| tmp.as_path())))
-            .env_clear()
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .stdout(if file.is_some() { Stdio::null() } else { Stdio::piped() });
-        #[cfg(target_os = "linux")]
-        worker_cores_and_lifetime(&mut cmd);
+        let mut cmd = curl(curl_args(url, file.as_ref().map(|(tmp, _)| tmp.as_path())));
+        cmd.stdin(Stdio::null()).stdout(if file.is_some() { Stdio::null() } else { Stdio::piped() });
         let mut child = cmd.spawn().map_err(|_| ERR_SERVICE)?;
         let out = child.stdout.take();
-        let mut request = Request { child, out, file };
+        self.start(Request { child, out, file, reader: None })
+    }
+
+    /// ASK: the prompt rules (82), the key (83 with no worker), then the worker, with its
+    /// config written to its stdin and the pipe closed.
+    fn ask(&mut self, args: &[u8]) -> Result<(), u8> {
+        let prompt = ask::validate(args)?;
+        let key = self.ask.key.as_deref().ok_or(ERR_SERVICE)?;
+        let mut cmd = curl(ask::argv(&self.ask));
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
+        let mut child = cmd.spawn().map_err(|_| ERR_SERVICE)?;
+        if let Some(mut input) = child.stdin.take() {
+            // Under 16 KiB, so it never waits on an empty pipe; an error is curl's exit status's business.
+            let _ = input.write_all(ask::stdin(key, &ask::body(&prompt)).as_bytes());
+        }
+        let out = child.stdout.take();
+        self.start(Request { child, out, file: None, reader: Some(ask::Reader::default()) })
+    }
+
+    /// The worker is running: make its pipe non-blocking and go to BUSY.
+    fn start(&mut self, mut request: Request) -> Result<(), u8> {
         if request.out.as_ref().is_some_and(|out| !nonblocking(out)) {
             request.kill();
             return Err(ERR_SERVICE);
@@ -186,21 +215,45 @@ impl Mailbox {
             match out.read(&mut buf) {
                 Ok(0) => request.out = None, // EOF: wait for the exit below
                 Ok(n) => {
-                    self.response.extend(&buf[..n]);
-                    self.status = AVAIL;
+                    match &mut request.reader {
+                        Some(reader) => {
+                            let mut text = Vec::new();
+                            reader.feed(&buf[..n], &mut text);
+                            self.response.extend(text);
+                        }
+                        None => self.response.extend(&buf[..n]),
+                    }
+                    if !self.response.is_empty() {
+                        self.status = AVAIL;
+                    }
                     return;
                 }
                 Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => return,
+                // For ASK this drops the held-back text; a pipe read doesn't fail this way in practice.
                 Err(_) => return self.fail(),
             }
         }
         match request.child.try_wait() {
             Ok(None) => {}
+            Ok(Some(exit)) if request.reader.is_some() => {
+                // ASK: the held-back text, then DONE or 83 after its last byte.
+                let mut reader = request.reader.take().unwrap();
+                self.request = None;
+                let mut text = Vec::new();
+                let end = if reader.finish(&mut text) && exit.success() { DONE } else { ERR_SERVICE };
+                self.response.extend(text);
+                if self.response.is_empty() {
+                    self.status = end;
+                } else {
+                    self.status = AVAIL;
+                    self.end = end;
+                }
+            }
             Ok(Some(exit)) if exit.success() => {
                 let file = self.request.take().and_then(|r| r.file);
                 self.finish(file);
             }
-            _ => self.fail(),
+            _ => self.fail(), // try_wait errors: as above, not seen in practice
         }
     }
 
@@ -264,7 +317,17 @@ impl Drop for Mailbox {
     }
 }
 
-/// The worker's argument list (module header).
+/// A worker: `/usr/bin/curl` with `args`, an empty environment, stderr /dev/null, and on
+/// Linux its cores and lifetime. The caller sets stdin and stdout.
+fn curl(args: Vec<OsString>) -> Command {
+    let mut cmd = Command::new(CURL);
+    cmd.args(args).env_clear().stderr(Stdio::null());
+    #[cfg(target_os = "linux")]
+    worker_cores_and_lifetime(&mut cmd);
+    cmd
+}
+
+/// The GET worker's argument list (module header).
 fn curl_args(url: &str, tmp: Option<&Path>) -> Vec<OsString> {
     let mut args: Vec<OsString> = ["-q", "-s", "-f", "-L", "--max-redirs", "5", "--proto", "=http,https",
         "--proto-redir", "=http,https", "-g", "--connect-timeout", "10", "--speed-limit", "1", "--speed-time", "30"]
@@ -334,7 +397,7 @@ impl IoDevice for Mailbox {
                 let byte = self.response.pop_front().unwrap_or(0x00);
                 if self.response.is_empty() {
                     // Still running: back to BUSY, without a check (only IN 12 checks).
-                    self.status = if self.request.is_some() { BUSY } else { DONE };
+                    self.status = if self.request.is_some() { BUSY } else { self.end };
                 }
                 byte
             }
@@ -349,7 +412,7 @@ impl IoDevice for Mailbox {
             (0x10, _) => self.overflow = true,
             (0x11, 0x01) => self.execute(),
             // The old value's Drop aborts a running request.
-            (0x11, 0x02) => *self = Mailbox::new(self.clock, self.dir.clone()),
+            (0x11, 0x02) => *self = Mailbox::new(self.clock, self.dir.clone(), self.ask.clone()),
             _ => {}
         }
     }

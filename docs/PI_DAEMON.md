@@ -4,7 +4,7 @@ Normative: the fourth normative spec, with `ARCHITECTURE.md`, `DEVICE_SPECS.md` 
 
 **Scope (one fact, one home):**
 - `ARCHITECTURE.md` 6.4 owns the circuit, the 20-GPIO pin map, the IN/OUT handshake and the power and boot rules. `ARCHITECTURE.md` 6.6 owns RESET. `ARCHITECTURE.md` 7.3 owns the port-trace line format and 7.4 the trace diff recipe. This file says how the daemon meets them and cites them; it does not restate them.
-- `DEVICE_SPECS.md` owns every port's behavior, rule 2.8 (RESET), rule 2.9 (service restart), section 3 (the READY contract and the Pi obligations), section 4 (console) and section 8 (mailbox, TIME clock, `GET`).
+- `DEVICE_SPECS.md` owns every port's behavior, rule 2.8 (RESET), rule 2.9 (service restart), section 3 (the READY contract and the Pi obligations), section 4 (console) and section 8 (mailbox, TIME clock, `GET`, `ASK`).
 - `HARDWARE_BUILD.md` owns the bring-up steps and the platform decisions (PI-PLATFORM, CONSOLE-TRANSPORT, CONSOLE-OUTPUT, RESET-TIMING, RESET-SOURCE, DEV-RESET, TRACE-FORMAT). Its section 5 keeps the decisions and points here for the service model.
 
 **Conventions:** "MUST" binds the daemon. **[bench]** marks something only a measurement on the built board can close; section 14 is the one list of them. BCM numbers are GPIO numbers as in `ARCHITECTURE.md` 6.4. Hex is uppercase. A bare section number ("5.2") is a section of this file; every other reference names its document ("`DEVICE_SPECS.md` 3.3", meaning section 3 item 3).
@@ -16,7 +16,7 @@ The rule behind every section: **the daemon is the emulator's port map behind GP
 ## 1. Shape
 
 - One process, **one thread**. The thread owns the IoBus, busy-polls GPLEV0, serves each request inline, and in the gaps runs the console's TCP socket and the trace file. The IoBus and devices stay `Rc<RefCell<..>>` and are never shared across threads (devices are not `Send`: COLLABORATION_LOG Key Decisions, 2026-10-03, Pi Daemon). Under `--sim` (16) a second thread plays the 8080 on the simulated board; this thread does not change.
-- No interrupts, no async runtime, no worker threads. `TIME`, `ASM` and `DIS` complete within the execute access, inline on this thread (`DEVICE_SPECS.md` 3.3, 8). A background mailbox command (`GET`) runs as a **child process** (`curl`) that the mailbox device spawns. This thread only spawns it, reads its pipe non-blocking, waits for its exit non-blocking and kills it (`DEVICE_SPECS.md` 8, Background commands). The IoBus and the devices never leave this thread.
+- No interrupts, no async runtime, no worker threads. `TIME`, `ASM` and `DIS` complete within the execute access, inline on this thread (`DEVICE_SPECS.md` 3.3, 8). A background mailbox command (`GET`) runs as a **child process** (`curl`); `ASK` (Phase 9) is a background command too, its worker a `curl` process as GET's. The mailbox device spawns it. This thread only spawns it, reads its pipe non-blocking, waits for its exit non-blocking and kills it (`DEVICE_SPECS.md` 8, Background commands). The IoBus and the devices never leave this thread.
 - **The worker's cores and lifetime.** On Linux the device spawns the worker with a `pre_exec` (`libc`) that does two things:
   - **Affinity.** A child inherits the affinity of the thread that forks it, which is core 3 under the unit (11), and with `isolcpus=3` the kernel never moves it off. The device reads this thread's mask (`sched_getaffinity`) before the fork, and the `pre_exec` sets the worker's affinity to the online CPUs not in it (`sched_setaffinity`). If that set is empty (an unpinned process, as under `--sim` or in tests), the affinity is left alone.
   - **Lifetime.** `prctl(PR_SET_PDEATHSIG, SIGKILL)`: the worker dies with the thread that spawned it, which is this thread, the process's main thread. That covers a crash and a hand-run `--sim`, where systemd's cleanup (11) does not apply.
@@ -27,7 +27,7 @@ The rule behind every section: **the daemon is the emulator's port map behind GP
 
 ## 2. Crate Layout and Build
 
-One crate, a second binary (`HARDWARE_BUILD.md` 5, Code). No new crate dependencies: `libc` is already a direct dependency. One runtime dependency: `/usr/bin/curl` 8.4.0 or later, the `GET` worker (11).
+One crate, a second binary (`HARDWARE_BUILD.md` 5, Code). One crate dependency beyond `crossterm` and `libc`: `serde_json` (Phase 9, ASK), pure Rust, so the cross build is unchanged. One runtime dependency: `/usr/bin/curl` 8.4.0 or later, the `GET` and `ASK` worker (11).
 
 | Path | Contents | Compiled on |
 |------|----------|-------------|
@@ -56,12 +56,12 @@ path = "src/pi_main.rs"
 The entry point, so tests and `pi_main` call the same thing:
 
 ```rust
-pub fn serve<G: Gpio>(gpio: G, fsel2: Fsel2, storage: &Path, clock: mailbox::Clock,
+pub fn serve<G: Gpio>(gpio: G, fsel2: Fsel2, storage: &Path, clock: mailbox::Clock, ask: AskConfig,
                       listener: TcpListener, trace: Option<File>, stop: &AtomicBool)
                       -> Result<(), String>
 ```
 
-`serve` builds the bus inside the calling thread, so the `Rc` devices never cross threads. `fsel2` comes from `setup_pins` (3.3). `pi_main` passes a static stop flag set by its signal handler; each test passes its own. `serve` returns `Ok(())` when `stop` is set and `Err` only for an error that ends service. Nothing in `src/pi/` calls `exit`: only `pi_main` turns an `Err` into exit 1.
+`serve` builds the bus inside the calling thread, so the `Rc` devices never cross threads. `fsel2` comes from `setup_pins` (3.3). `ask` is the ASK settings with the key read at startup (10). `pi_main` passes a static stop flag set by its signal handler; each test passes its own. `serve` returns `Ok(())` when `stop` is set and `Err` only for an error that ends service. Nothing in `src/pi/` calls `exit`: only `pi_main` turns an `Err` into exit 1.
 
 **cfg rule.** Only the code that touches Linux interfaces is behind `cfg(target_os = "linux")`: the mmap, the GPIO character-device ioctls, `adjtimex`. Not `target_arch`: the code compiles on any Linux, and on anything but a BCM2711 it refuses to start (3.3). Everything the tests need (the loop, RESET handling, console, trace) is portable, so `cargo test` on macOS exercises it through the simulated board.
 
@@ -241,7 +241,7 @@ The one race `ARCHITECTURE.md` 6.6 accepts remains: descheduled between step 5 a
 ## 6. Devices
 
 - Exactly `build_bus`, the function `main.rs` and every harness use (`DEVICE_SPECS.md` 10). No device is wrapped, subclassed or re-mapped. Device code is reused unchanged.
-- The daemon passes its own TIME clock (8): `build_bus(storage_dir, clock)`, with `main.rs` and the harnesses passing `mailbox::local_time` and the daemon `ntp_local_time` (decided 2026-10-03).
+- The daemon passes its own TIME clock (8): `build_bus(storage_dir, clock, ask)`, with `main.rs` and the harnesses passing `mailbox::local_time` and the daemon `ntp_local_time` (decided 2026-10-03). `ask` carries the API key: the daemon passes the key it read at startup (10), `main.rs` likewise, the harnesses `AskConfig::default()` (no key).
 - Storage directory: `--storage` (10), created by `Storage::new` if missing.
 - Device reset = drop and `build_bus` again (5.2). Daemon restart = fresh devices, and the 8080 is not told (`DEVICE_SPECS.md` 2.9).
 
@@ -312,7 +312,7 @@ pub fn ntp_local_time() -> Option<(u16, u8, u8, u8, u8, u8)> {
 
 ## 10. Configuration
 
-Command-line flags only. No config file.
+Command-line flags, plus `ANTHROPIC_API_KEY` from the environment (Phase 9). The daemon reads no config file.
 
 | Flag | Default | Meaning |
 |------|---------|---------|
@@ -321,11 +321,12 @@ Command-line flags only. No config file.
 | `--trace FILE` | none | Port trace (9) |
 | `--sim FILE` | none | Simulated board (16): runs the 8080 model with the 4096-byte ROM image FILE instead of opening the GPIO |
 
+- **API key:** `ANTHROPIC_API_KEY`, read once at startup (`DEVICE_SPECS.md` 8, ASK service). Unset or empty: every `ASK` gives 83. The daemon never writes the key anywhere: not to a log, the trace, a file, a child's arguments or environment, or the 8080. Changing it needs a restart.
 - A bad or missing argument prints the usage line and exits 2, like the emulator: `usage: pi8080d --storage DIR [--listen ADDR:PORT] [--trace FILE] [--sim FILE]`.
 - **CPU core:** not a flag. systemd `CPUAffinity=` (11) or `taskset -c 3` for a manual run pins the process.
 - **Signals:** SIGTERM and SIGINT set a static `AtomicBool` (handler via `libc::signal`), which `pi_main` passes to `serve` as `stop` (4.1).
-- **Startup order** (`pi_main`): parse arguments; `GpioMem::open()`; `pi::setup_pins` (3.3); `gpio.request_reset()` (5.1); bind the listener; open the trace; `serve`. Under `--sim`: parse arguments; read the ROM image (16.4); `SimBoard::new` (16.2); `pi::setup_pins`; bind the listener; open the trace; start the 8080 thread (16.2); `serve`. Any `Err` prints `pi8080d: ` and the message to stderr and exits 1.
-- Logging is stderr only (journald under systemd): startup settings, client connect, input EOF and disconnect, each RESET, errors. Nothing per access. The startup line gives the listener's bound address, so `--listen 127.0.0.1:0` reports its port: `pi8080d: console on ADDR:PORT, storage DIR, trace FILE|off`, plus `, board simulated, ROM FILE` under `--sim`.
+- **Startup order** (`pi_main`): parse arguments and read `ANTHROPIC_API_KEY`; `GpioMem::open()`; `pi::setup_pins` (3.3); `gpio.request_reset()` (5.1); bind the listener; open the trace; `serve`. Under `--sim`: parse arguments and read the key; read the ROM image (16.4); `SimBoard::new` (16.2); `pi::setup_pins`; bind the listener; open the trace; start the 8080 thread (16.2); `serve`. Any `Err` prints `pi8080d: ` and the message to stderr and exits 1.
+- Logging is stderr only (journald under systemd): startup settings, client connect, input EOF and disconnect, each RESET, errors. Nothing per access. The startup line gives the listener's bound address, so `--listen 127.0.0.1:0` reports its port: `pi8080d: console on ADDR:PORT, storage DIR, trace FILE|off, ask on|off`, plus `, board simulated, ROM FILE` under `--sim`. Nothing is logged per `ASK`.
 
 ---
 
@@ -338,6 +339,7 @@ Command-line flags only. No config file.
 - **User:** a system user `pi8080` in group `gpio`. Raspberry Pi OS gives `/dev/gpiomem` and `/dev/gpiochip*` to `root:gpio` mode 0660 through udev, so the daemon needs no root and no capabilities.
 - **Time zone:** set at install (8).
 - **curl:** `GET`'s worker (`DEVICE_SPECS.md` 8, GET client): `/usr/bin/curl` 8.4.0 or later, which is the Trixie-based Raspberry Pi OS (Bookworm's 7.88.1 does not stop an oversized chunked body). Install it if the image lacks it: `sudo apt install curl`. The unit's default `KillMode=control-group` stops a running worker with the daemon, on stop, restart and crash alike.
+- **API key** (Phase 9, optional): `sudo install -d -m 0700 /etc/pi8080d && sudo sh -c 'umask 077; cat > /etc/pi8080d/env'`, then type `ANTHROPIC_API_KEY=sk-ant-...`, Enter, Ctrl-D. The key goes through the terminal only, never a command line or shell history. The file is root's, mode 0600: systemd reads it before dropping to `pi8080`, so the daemon gets the variable but cannot read the file. Without the file the daemon starts anyway (the `-` below) with `ask off`. A spend limit on the key's workspace in the Anthropic Console caps cost; the daemon keeps no count.
 - **Unit** `/etc/systemd/system/pi8080d.service` (the repo copy is `scripts/pi8080d.service`):
 
 ```ini
@@ -349,6 +351,7 @@ StartLimitIntervalSec=0
 User=pi8080
 Group=gpio
 ExecStart=/usr/local/bin/pi8080d --storage /var/lib/pi8080d
+EnvironmentFile=-/etc/pi8080d/env
 StateDirectory=pi8080d
 CPUAffinity=3
 Restart=always
@@ -358,7 +361,7 @@ RestartSec=1
 WantedBy=multi-user.target
 ```
 
-  No `After=network-online.target`: the listener binds without a network, and the 8080 is stalled until the daemon runs, so the daemon starts as early as it can. `StartLimitIntervalSec=0` keeps it retrying every second through a transient early-boot failure (udev not yet done with `/dev/gpiomem` or the gpiochip); without it systemd gives up after 5 starts in 10 s and the 8080 stalls until someone logs in. A configuration refusal (ALT function, wrong SoC) then only repeats in the journal. A crash restarts it in a second; the 8080 waits under READY meanwhile (`DEVICE_SPECS.md` 3.4) and its devices come back fresh (`DEVICE_SPECS.md` 2.9).
+  No `After=network-online.target`: the listener binds without a network, and the 8080 is stalled until the daemon runs, so the daemon starts as early as it can. An `ASK` before the network is up gives 83, like `T` before NTP. `StartLimitIntervalSec=0` keeps it retrying every second through a transient early-boot failure (udev not yet done with `/dev/gpiomem` or the gpiochip); without it systemd gives up after 5 starts in 10 s and the 8080 stalls until someone logs in. A configuration refusal (ALT function, wrong SoC) then only repeats in the journal. A crash restarts it in a second; the 8080 waits under READY meanwhile (`DEVICE_SPECS.md` 3.4) and its devices come back fresh (`DEVICE_SPECS.md` 2.9).
 - **Reaching the console from the Mac** with the loopback default: `ssh -L 8080:localhost:8080 pi`, then `socat -,rawer,escape=0x1d TCP:localhost:8080`.
 - **Simulated board:** with the 16.4 drop-in installed, the same unit runs `--sim`. Remove it to go back to the board.
 
@@ -442,7 +445,9 @@ Intel8080 --IN/OUT 00-6F--> Bridge (IoDevice) --begin/wait--> SimBoard <--Gpio--
 - The daemon thread runs `setup_pins` and `pi::serve` on the `SimBoard` with a temporary storage directory, `mailbox::local_time`, a listener on `127.0.0.1:0`, a trace file and its own stop flag. The test connects its client **before** starting the daemon, so the banner is never discarded for want of a client.
 - Same files, same parser, same `play`. `Mon.con: Rc<RefCell<Console>>` becomes `Mon.side: Side`, with `enum Side { Local(Rc<RefCell<Console>>), Daemon(TcpStream) }`. The only per-mode difference is where input goes (`push_input` or the socket) and where output is read (`take_output`, or the socket until it has as many bytes as the 8080 sent with `OUT 00`). Both modes use one at-prompt rule, read from `Mon.ports`: the 8080 has done at least as many `IN 01` since the step began as bytes were typed, its `OUT 00` bytes since the step began end with `> `, and it stays quiet for 2,000 cycles. The local harness switches to this rule too, so there are not two.
 - After the last step: set the stop flag, join the daemon thread, then assert the daemon's trace file equals `Mon.ports` restricted to 00-6F and collapsed by the `ARCHITECTURE.md` 7.3 repeat rule, line for line, `; xN` counts included. With no RESET in the run the two sequences are the same accesses, so they must match exactly.
-- Cost: measured 2026-10-03, the 18 transcripts make 122,215 Pi-window accesses, each two cross-thread handoffs, in about 2.4 s in a debug `cargo test` (about 20 us an access), inside the 10 s budget. If it grows past the budget, run fewer transcripts through the daemon rather than add machinery.
+- Cost: re-measured 2026-10-03 with Phase 9's `ask.txt`: the 19 transcripts make 160,000-200,000 Pi-window accesses over three runs (the count varies with the `IN 02` polls made while typed input crosses TCP), each two cross-thread handoffs, in about 2.3 s in a debug `cargo test` (about 13 us an access), inside the 10 s budget. `ask.txt` adds about 1,100-1,700. If it grows past the budget, run fewer transcripts through the daemon rather than add machinery.
+
+Every test that starts a built binary (`CARGO_BIN_EXE_*`) removes `ANTHROPIC_API_KEY` from its environment, so `cargo test` never reaches the API with a developer's key. `sim_mode_plays_transcripts_over_tcp` checks `ask off` in the startup line. (The spawn sites: `tests/monitor_tests.rs` `sim_mode_plays_transcripts_over_tcp`, `tests/terminal_tests.rs` `spawn`, `tests/debugger_tests.rs` the script runner, `tests/mailbox_tests.rs` `the_worker_gets_an_empty_environment`.)
 
 This proves, for every behavior the transcripts cover: one access per instruction, nothing lost, merged or repeated (`DEVICE_SPECS.md` 3.1), the handshake order, the shared devices, the TCP console both ways, and the trace format.
 
@@ -498,6 +503,7 @@ The one list. Each closes on the built board, at the bring-up step given (`HARDW
 | The service time of a `GET` execute and of a BUSY `IN 12` against 12.1 (12.2 method 1) | 6 |
 | During a long `GET > FILE` the worker runs on cores 0-2 (`ps -o psr= -C curl`) and the 12.2 method 1 service times do not move | 6 |
 | `systemctl restart pi8080d` during a `GET`, and `kill -9` of a hand-run `--sim` during a `GET`, leave no `curl` behind (`pgrep curl`) | 6 |
+| `Q` prints an answer with the key installed; `Service error` within about 10 s with the network down; with the env file removed the startup line says `ask off` and `Q hi` prints `Service error`; during a `Q`, `ps -ef` shows no key and `journalctl -u pi8080d` never does | 6 |
 | Tick jitter on the isolated core; `nohz_full` support; no thermal throttling over an 8080EXM run (about 3.2 h) | 5, 8 |
 
 ---
@@ -582,12 +588,14 @@ The rule: **only the `Gpio` implementation differs.** `serve` gets a `SimBoard` 
 
 - `every_transcript_through_the_daemon` (13.2) is the `--sim` wiring with the CPU on the test thread, and uses the same `SimBoard` and `Bridge`.
 - `sim_mode_plays_transcripts_over_tcp` (`tests/monitor_tests.rs`, Unix) runs the built binary (`CARGO_BIN_EXE_pi8080d`) four times, for the transcripts `hex_math`, `storage` and `assemble` and one RAM-image run, with `--sim rom/monitor.bin --listen 127.0.0.1:0 --storage TMP --trace TMP/trace.txt`. For each:
-  1. read the bound address from the startup line on stderr, check its `board simulated` suffix, and connect;
+  1. read the bound address from the startup line on stderr, check its `ask off, board simulated` suffix, and connect;
   2. type `H 0 0` and skip the output up to its answer and prompt (the client may connect mid-banner or after the banner was discarded, 16.3);
   3. play the transcript: type each step, read exactly the expected bytes plus the `> ` prompt, and compare as the harness does. The RAM-image run instead pastes `rom/monitor_ram.hex` a line at a time, types `G D000` and `F CFFF D000 00`, and expects what the same steps print on the local path (the ` RAM` banner, `Address out of range`; `ARCHITECTURE.md` 2.1);
   4. send SIGTERM, then assert exit status 0, a trace whose first line is `OUT 00 0D` (the banner's first byte; FE is outside the window) and an `IN 01` line in it.
 
   If the console closes, a read times out or the exit status is not 0, the test kills the daemon and fails with everything it wrote to stderr (a board violation panics the daemon).
+
+  Every test that starts a built binary (`CARGO_BIN_EXE_*`) removes `ANTHROPIC_API_KEY` from its environment, so `cargo test` never reaches the API with a developer's key. `sim_mode_plays_transcripts_over_tcp` checks `ask off` in the startup line.
 
   This covers the flags, the RAM-build load workflow, the ROM image, the startup order, the 8080 thread, the TCP console, storage, the mailbox, the trace and the stop path.
 - Nothing in 14 closes under `--sim`. It shows that the deployment works, not that the board does.

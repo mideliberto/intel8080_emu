@@ -36,6 +36,7 @@ fn spawn(run: &str) -> Option<Run> {
     let sh = format!(r#"stty -g; {}; echo "exit=$?"; stty -g"#, run);
     cmd.args(["-c", &sh, env!("CARGO_BIN_EXE_intel8080")]);
     cmd.current_dir(dir.path());
+    cmd.env_remove("ANTHROPIC_API_KEY"); // cargo test never reaches the API (PI_DAEMON 13.2)
     let mut p = match spawn_command(cmd, Some(TIMEOUT_MS)) {
         Ok(p) => p,
         Err(e) => {

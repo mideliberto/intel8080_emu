@@ -18,6 +18,7 @@ fn main() {
 
 #[cfg(unix)]
 mod daemon {
+    use intel8080_emu::io::devices::ask::AskConfig;
     use intel8080_emu::io::devices::mailbox;
     use intel8080_emu::pi::{self, sim::{Bridge, Knobs, SimBoard}};
     use intel8080_emu::Intel8080;
@@ -53,6 +54,8 @@ mod daemon {
         storage: PathBuf,
         trace: Option<PathBuf>,
         sim: Option<PathBuf>,
+        /// The key from `ANTHROPIC_API_KEY`, read once at startup (PI_DAEMON 10).
+        ask: AskConfig,
     }
 
     pub fn run() -> Result<(), String> {
@@ -69,7 +72,9 @@ mod daemon {
                 _ => usage(),
             }
         }
-        let a = Args { listen, storage: storage.unwrap_or_else(|| usage()), trace, sim };
+        let key = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty());
+        let ask = AskConfig { key, ..AskConfig::default() };
+        let a = Args { listen, storage: storage.unwrap_or_else(|| usage()), trace, sim, ask };
         match &a.sim {
             Some(rom) => simulated(&a, rom),
             None => board(&a),
@@ -83,7 +88,7 @@ mod daemon {
         let fsel2 = pi::setup_pins(&gpio)?;
         gpio.request_reset()?;
         let (listener, trace) = open(a, "")?;
-        pi::serve(gpio, fsel2, &a.storage, CLOCK, listener, trace, &STOP)
+        pi::serve(gpio, fsel2, &a.storage, CLOCK, a.ask.clone(), listener, trace, &STOP)
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -104,7 +109,7 @@ mod daemon {
         let (listener, trace) = open(a, &format!(", board simulated, ROM {}", path.display()))?;
         let cpu_board = board.clone();
         std::thread::spawn(move || run_8080(cpu_board, rom));
-        pi::serve(board, fsel2, &a.storage, CLOCK, listener, trace, &STOP)
+        pi::serve(board, fsel2, &a.storage, CLOCK, a.ask.clone(), listener, trace, &STOP)
     }
 
     /// The 8080 thread (PI_DAEMON 16.2): power-on as main.rs does, the Pi window through
@@ -140,8 +145,9 @@ mod daemon {
             libc::signal(libc::SIGINT, handler);
         }
         let addr = listener.local_addr().map_err(|e| format!("--listen {}: {}", a.listen, e))?;
-        eprintln!("pi8080d: console on {}, storage {}, trace {}{}", addr, a.storage.display(),
-                  a.trace.as_ref().map_or("off".to_string(), |p| p.display().to_string()), board);
+        eprintln!("pi8080d: console on {}, storage {}, trace {}, ask {}{}", addr, a.storage.display(),
+                  a.trace.as_ref().map_or("off".to_string(), |p| p.display().to_string()),
+                  if a.ask.key.is_some() { "on" } else { "off" }, board);
         Ok((listener, trace))
     }
 }

@@ -684,6 +684,6 @@ A bad command or argument prints one line `? message` and changes nothing. At th
 - **Phase 6 (done 2026-10-03):** Service Mailbox device (ports 10-13), mailbox `TIME`, and the `T` command. Protocol: `DEVICE_SPECS.md` (Service Mailbox). Command: `MONITOR_SPEC.md`. No memory-map or circuit change.
 - **Phase 7 (done 2026-10-03):** mailbox `ASM` and `DIS`, and the `A` and `U` commands (`DEVICE_SPECS.md` 8, `MONITOR_SPEC.md` 6.16-6.17). No memory-map or circuit change.
 - **Phase 8 (done 2026-10-03):** mailbox `GET` and the `N` command (`DEVICE_SPECS.md` 8, `MONITOR_SPEC.md` 6.18). The first background command, its worker a `curl` process. No memory-map or circuit change.
-- **Phase 9:** mailbox `ASK`. No architecture change.
+- **Phase 9 (done 2026-10-03):** mailbox `ASK` and the `Q` command (`DEVICE_SPECS.md` 8, `MONITOR_SPEC.md` 6.19). A second background command on the same `curl` worker; the API key lives on the Pi, never in ROM. No memory-map or circuit change.
 - **Phase 10:** what is left after the debugger (7.4): the monitor's `R` command, which needs the `G` return contract to capture registers.
 - **Someday:** a periodic interrupt source (tick from a Pi GPIO or an 8254, decided when a consumer appears) and its ISR placement; then the hardware build (section 6); a monitor routine that reprograms the ROM through JP-WE (6.10 rules), with its emulator model.

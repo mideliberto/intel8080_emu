@@ -5,6 +5,7 @@
 // are Linux code (linux.rs).
 
 use crate::debugger::Trace;
+use crate::io::devices::ask::AskConfig;
 use crate::io::devices::console::Console;
 use crate::io::devices::mailbox;
 use crate::io::{build_bus, IoBus};
@@ -107,14 +108,16 @@ pub fn setup_pins<G: Gpio>(gpio: &G) -> Result<Fsel2, String> {
 /// Serves the board until `stop` is set (PI_DAEMON 4): the bus loop, RESET handling, the
 /// console pass and the trace, all on the calling thread, which owns the IoBus. Returns
 /// Ok(()) on stop, Err only for an error that ends service.
-pub fn serve<G: Gpio>(gpio: G, fsel2: Fsel2, storage: &Path, clock: mailbox::Clock,
+/// The argument list is PI_DAEMON 2's, one per thing the caller supplies.
+#[allow(clippy::too_many_arguments)]
+pub fn serve<G: Gpio>(gpio: G, fsel2: Fsel2, storage: &Path, clock: mailbox::Clock, ask: AskConfig,
                       listener: TcpListener, trace: Option<File>, stop: &AtomicBool)
                       -> Result<(), String> {
     listener.set_nonblocking(true).map_err(|e| format!("console listener: {}", e))?;
-    let (bus, console) = build_bus(storage, clock);
+    let (bus, console) = build_bus(storage, clock, ask.clone());
     let now = Instant::now();
     let mut s = Service {
-        gpio, fsel2, storage, clock, bus, console, listener,
+        gpio, fsel2, storage, clock, ask, bus, console, listener,
         client: None,
         pending: Vec::new(),
         sent: 0,
@@ -147,6 +150,8 @@ struct Service<'a, G: Gpio> {
     fsel2: Fsel2,
     storage: &'a Path,
     clock: mailbox::Clock,
+    /// ASK's settings, for every rebuild of the bus.
+    ask: AskConfig,
     bus: IoBus,
     console: Rc<RefCell<Console>>,
     listener: TcpListener,
@@ -291,7 +296,7 @@ impl<G: Gpio> Service<'_, G> {
         // This reset's edges, a late release edge included, are now from before the previous call.
         self.reset_edge();
         self.bus = IoBus::new(); // drops the old devices first: Storage's Drop flushes and closes
-        (self.bus, self.console) = build_bus(self.storage, self.clock);
+        (self.bus, self.console) = build_bus(self.storage, self.clock, self.ask.clone());
         self.pending.clear();
         self.sent = 0;
         // DEVICE_SPECS 4: bytes still buffered in the transport are discarded.

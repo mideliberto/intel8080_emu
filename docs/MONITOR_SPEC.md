@@ -2,14 +2,14 @@
 
 Normative. This is the contract for everything the monitor ROM shows the user: the banner, the prompt, line input, the argument grammar, every command, the messages, the Intel HEX loader, the `G` return contract and the ROM routine contracts. It replaces the deleted `MONITOR_IMPLEMENTATION_STATUS.md`.
 
-**Scope.** Monitor ROM v0.7 (v0.3 plus Phase 5, the HEX loader, Phase 6, the `T` command, Phase 7, the `A` and `U` commands, and Phase 8, the `N` command) and the 2026-10-02 decisions. Phases 9-10 get one-line placeholders (Future Commands).
+**Scope.** Monitor ROM v0.8 (v0.3 plus Phase 5, the HEX loader, Phase 6, the `T` command, Phase 7, the `A` and `U` commands, Phase 8, the `N` command, and Phase 9, the `Q` command) and the 2026-10-02 decisions. Phase 10 gets a one-line placeholder (Future Commands).
 
 **Elsewhere (one fact, one home):**
 - `ARCHITECTURE.md`: the memory map, workspace layout, stack page, reset and boot sequence, WARM entry code, the ROM overlay, the hardware interface (READY, the Pi window), and Host-Side Conveniences (the host key map, Ctrl-C quit, the Ctrl-E debugger hotkey).
 - `DEVICE_SPECS.md`: every port protocol (console, storage, mount, Service Mailbox, system control) and the READY contract as software sees it.
 - `TODO.md`: the work queue and every known difference between the code and this spec.
 
-**Status of this spec.** All decisions are made (2026-10-02 and 2026-10-03; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6, v0.5) is implemented (2026-10-03). 6.16 and 6.17 (`A` and `U`, Phase 7, v0.6) and the section 9 mailbox client are implemented (2026-10-03). 6.18 (`N`, Phase 8, v0.7) is specified (2026-10-03); implemented (2026-10-03).
+**Status of this spec.** All decisions are made (2026-10-02 and 2026-10-03; COLLABORATION_LOG Key Decisions). Where the code differs from this spec, the code is wrong, and the difference goes in `TODO.md`. Sections 1-6, 8, 9 and 11 are implemented (2026-10-03), and section 7 (the HEX loader, Phase 5, v0.4) too. 6.15 (`T`, Phase 6, v0.5) is implemented (2026-10-03). 6.16 and 6.17 (`A` and `U`, Phase 7, v0.6) and the section 9 mailbox client are implemented (2026-10-03). 6.18 (`N`, Phase 8, v0.7) is specified (2026-10-03); implemented (2026-10-03). 6.19 (`Q`, Phase 9, v0.8) is specified (2026-10-03); implemented (2026-10-03).
 
 ---
 
@@ -37,7 +37,7 @@ Built: <date> <time><CR><LF>
 Ready.<CR><LF>
 ```
 
-- `<version>` is `0.7` today (`MSG_BANNER` in `rom/monitor.asm`; Phase 8). A phase that changes the command set bumps it in the same commit.
+- `<version>` is `0.8` today (`MSG_BANNER` in `rom/monitor.asm`; Phase 9). A phase that changes the command set bumps it in the same commit.
 - The RAM test build (`ARCHITECTURE.md` 2.1) prints `8080 Monitor v<version> RAM` on that line; nothing else in the banner differs. A test MAY check the ` RAM` marker, but still MUST NOT match the version, date or time.
 - `<date>` and `<time>` are the assembler's `DATE` and `TIME` at build time.
 - Tests MUST NOT match on the version, date or time. A banner check matches only `8080 Monitor v`.
@@ -66,7 +66,7 @@ Requirements:
 - Characters after the 79th are discarded silently. There is no bell and no overflow message, and the truncated line is processed as it stands.
 - READ_LINE does not fold case. Case folding happens per field (Command Dispatch, Argument Grammar).
 - **CR and LF.** `<CR>` and `<LF>` each end a line. READ_LINE keeps no state between lines, so a `<CR><LF>` pair produces the line plus one empty line, and the empty line re-prompts (Command Dispatch). A pasted file with CRLF line ends therefore shows an extra `> ` after each line.
-- **Host-reserved keys.** In the emulator the host consumes Ctrl-C (quit) and Ctrl-E (debugger hotkey), maps Enter to `<CR>`, and maps the other keys per the key map in `ARCHITECTURE.md` (Host-Side Conveniences). On hardware the Pi delivers every byte, and READ_LINE and E ignore 03h and 05h like any other control byte. No monitor command can be aborted from the keyboard, `N` included: a hung `GET` ends by the device's time limits (`DEVICE_SPECS.md` 8, GET). Reset is the only way out of a running command or a `G` program.
+- **Host-reserved keys.** In the emulator the host consumes Ctrl-C (quit) and Ctrl-E (debugger hotkey), maps Enter to `<CR>`, and maps the other keys per the key map in `ARCHITECTURE.md` (Host-Side Conveniences). On hardware the Pi delivers every byte, and READ_LINE and E ignore 03h and 05h like any other control byte. No monitor command can be aborted from the keyboard, `N` and `Q` included: a hung `GET` or `ASK` ends by the device's time limits (`DEVICE_SPECS.md` 8, GET and ASK). Reset is the only way out of a running command or a `G` program.
 - READ_LINE MUST NOT depend on input timing. Nothing paces the sender: the console is a Pi FIFO behind READY (`DEVICE_SPECS.md`, Console), so a paste of any length arrives intact.
 
 ---
@@ -79,7 +79,7 @@ After READ_LINE returns:
 2. An empty line (nothing, or only spaces) prints the prompt again, with no message.
 3. The first non-space character selects the command. `a`-`z` fold to `A`-`Z`.
 4. `:` selects the Intel HEX loader (Intel HEX Loader). It is not a command letter. Leading spaces before `:` are allowed.
-5. The recognized characters are `A C D E F G H I L M N O S T U W X ?` and `:`. `T` came with Phase 6, `A` and `U` with Phase 7, and `N` with Phase 8.
+5. The recognized characters are `A C D E F G H I L M N O Q S T U W X ?` and `:`. `T` came with Phase 6, `A` and `U` with Phase 7, `N` with Phase 8, and `Q` with Phase 9.
 6. Anything else prints `Unknown command. Type ? for help.` This includes the letters reserved for later phases (Future Commands) until they are implemented.
 
 Arguments start right after the command character. The space between the letter and the first argument is optional, so `D0200` is the same as `D 0200`.
@@ -147,7 +147,7 @@ These are the exact strings. Each is printed with a trailing `<CR><LF>`.
 | `Checksum error` | HEX: checksum mismatch |
 | `Bad record type` | HEX: type other than 00 or 01 |
 | `Address out of range` | HEX: a type 00 record would write outside 0100-EEFF |
-| `Service error` | T, U, N: mailbox status 00 after execute, or 80-FF (for N, 82 too: a bad URL or file name). U: also DONE before the length byte. A: status 00 after execute, or 80-FF except 82; A then prompts the same address again |
+| `Service error` | T, U, N, Q: mailbox status 00 after execute, or 80-FF (for N and Q, 82 too: a bad URL or file name, or an empty or invalid question). U: also DONE before the length byte. A: status 00 after execute, or 80-FF except 82; A then prompts the same address again |
 | `Invalid instruction` | A (Phase 7): mailbox status 82, so the line does not assemble; A prompts the same address again |
 
 - The ROM MUST NOT contain `File not found`. Mount creates missing files, so that message can never be true.
@@ -341,6 +341,7 @@ Commands:
   M src dst cnt    - Move memory
   N url [> file]   - HTTP GET
   O port value     - Output to port
+  Q text           - Ask Claude
   S start end pat  - Search memory
   T                - Show time
   U addr [cnt]     - Unassemble
@@ -350,7 +351,7 @@ Commands:
   ?                - Help
 ```
 
-- The `:LLAAAATT..CC` line shipped with Phase 5, the `T` line with Phase 6, the `A` and `U` lines with Phase 7, and the `N` line with Phase 8. Each line ships in the same commit as its feature.
+- The `:LLAAAATT..CC` line shipped with Phase 5, the `T` line with Phase 6, the `A` and `U` lines with Phase 7, the `N` line with Phase 8, and the `Q` line with Phase 9. Each line ships in the same commit as its feature.
 - Arguments after `?` are ignored.
 
 ### 6.15 T: Time
@@ -358,7 +359,7 @@ Commands:
 `T`
 
 1. Runs the mailbox command `TIME` through the mailbox client (section 9; `DEVICE_SPECS.md`, Service Mailbox, Reference client): clear (OUT 11h ← 02h), send `T` `I` `M` `E` to OUT 10h, execute (OUT 11h ← 01h), then poll IN 12h.
-2. Each response byte read from IN 13h is printed to the console as it arrives, except that an LF (0Ah) prints as `<CR><LF>`. TIME's response has no LF, so T's output does not change. The loop is shared with N (6.18).
+2. Each response byte read from IN 13h is printed to the console as it arrives, except that an LF (0Ah) prints as `<CR><LF>`. TIME's response has no LF, so T's output does not change. The loop is shared with N (6.18) and Q (6.19).
 3. On status 03h (DONE), prints `<CR><LF>`.
 4. On status 00h after execute (Pi service restarted) or 80h-FFh, prints `Service error` then `<CR><LF>`. Any response bytes already printed stay on the same line, with no `<CR><LF>` before the message: an error after `2026-` prints `2026-Service error`.
 
@@ -535,6 +536,48 @@ Phase 8 tests MUST cover every row. *ports* and *scripted* as in 6.17.1. *server
 | `T` (6.15 rows) | unchanged; `t_runs_the_reference_client` passes unchanged | — |
 | `?` | the help text with the `N` line | — |
 
+### 6.19 Q: Ask Claude
+
+`Q text`
+
+Asks Claude one question through the mailbox `ASK` (`DEVICE_SPECS.md` 8, ASK) and prints the answer.
+
+1. Run the mailbox command `ASK <text>`, where `<text>` is the stored line after the `Q`, verbatim. The sequence is: clear (OUT 11h <- 02h); `A` `S` `K` `<SP>`, then each byte of `<text>`, to OUT 10h; execute (OUT 11h <- 01h); then poll IN 12h. Q checks nothing; the device trims the spaces.
+2. Print each response byte as it arrives, as T does (6.15). ASK ends lines with CR LF, which the shared loop prints as `<CR><CR><LF>`: one line break on a terminal.
+3. On DONE, print `<CR><LF>`.
+4. On status 00 after execute (the Pi restarted) or 80h-FFh, print `Service error` then `<CR><LF>`. Bytes already printed stay on their line, with no `<CR><LF>` before the message, as T. This covers 82 (nothing after `Q`, only spaces, or a byte 80h-FFh in the line, which READ_LINE stores: section 2) and 83 (no API key on the Pi, no network, an API error, a refusal, the time limits).
+
+- **Text:** READ_LINE stores 79 characters, so the question has 77 after `Q `. A program that drives the mailbox itself has 124. Case is kept. The space after `Q` is optional (section 3): `Qhello` asks `hello`, and `quit` asks `uit`.
+- **The answer** is plain ASCII in lines of at most 79 characters, wrapped by the Pi. Claude is told about this machine and these commands, and to write code as lines the `A` command accepts.
+- **No keyboard abort.** Q ends within 120 s, and within about 10 s when the Pi cannot connect.
+- Each Q is independent: Claude does not see earlier questions.
+- Q keeps no state, writes no memory, and uses ports 10h-13h.
+
+Example (the answer varies):
+
+```
+> Q how do I print a star from a program at 0200?
+At A 0200:
+MVI A,2A
+OUT 00
+RET
+Then G 0200.
+> Q
+Service error
+>
+```
+
+### 6.19.1 Q conformance vectors
+
+Phase 9 tests MUST cover every row. *ports* and *server* as in 6.18.1; *server* rows give the bus a test key and the test server's endpoint. Transcripts never contain an answer: `ask.txt` holds only lines that never leave the device, so it passes with or without a key, on the bench too.
+
+| Input | Expected output | Effect |
+|---|---|---|
+| *ports, server:* `Q hi`, reply `Hello` LF `world` | `Hello` 0D 0D 0A `world` 0D 0A | OUT 11 02; OUT 10 `ASK ` then ` hi`; OUT 11 01; IN 12 01 any number of times; IN 12 02 / IN 13 pairs; IN 12 03 |
+| *server:* `Q hi`, reply `Hel`, then the connection closes | `HelService error` | — |
+| `Q`, `Q   `, `q` (`ask.txt`) | `Service error` (each) | mailbox ports written; no request |
+| `?` | the help text with the `Q` line | — |
+
 ---
 
 ## 7. Intel HEX Loader
@@ -664,17 +707,16 @@ The header comment above each routine in `rom/monitor.asm` is that routine's con
 - There is no public API and no jump table. User programs MUST NOT call ROM addresses, because they move between builds.
 - READ_HEX_WORD and READ_HEX_ADDR24 implement section 4, and READ_HEX_BYTE (a word whose value is at most FF) builds on READ_HEX_WORD. Their headers MUST state the error cases (no digits, too many digits, a token not ended by a space or NUL) and that they skip leading spaces on entry.
 - CMD_COMPARE relies on B surviving PRINT_ADDR, PRINT_HEX_BYTE, PRINT_SPACE, CONOUT and PRINT_CRLF.
-- MB_SEND, MB_PUT and MB_GET implement the `DEVICE_SPECS.md` reference client (Service Mailbox), which T, A, U and N use. MB_GET's header MUST state its three outcomes (a byte, done, failed with the status in A) and that callers test CY before Z.
+- MB_SEND, MB_PUT and MB_GET implement the `DEVICE_SPECS.md` reference client (Service Mailbox), which T, A, U, N and Q use. MB_GET's header MUST state its three outcomes (a byte, done, failed with the status in A) and that callers test CY before Z. CMD_NET's header MUST say that Q (CMD_ASK) enters it at `CN_SEND` with HL = its verb string and DE = the text.
 
 ---
 
 ## 10. Future Commands (Placeholders)
 
-These are placeholders, not designs. Each phase writes its own section here when it starts. Until a letter is implemented, it prints `Unknown command. Type ? for help.` A and U (Phase 7) are now 6.16 and 6.17, and N (Phase 8) is 6.18.
+These are placeholders, not designs. Each phase writes its own section here when it starts. Until a letter is implemented, it prints `Unknown command. Type ? for help.` A and U (Phase 7) are now 6.16 and 6.17, N (Phase 8) is 6.18, and Q (Phase 9) is 6.19.
 
 | Cmd | Phase | Purpose |
 |---|---|---|
-| Q | 9 | Ask Claude: mailbox `ASK` |
 | R | 10 | Registers. Blocked on capturing registers at return |
 
 Quitting the emulator (Ctrl-C) and the debugger (Ctrl-E) are host-side, not monitor commands (`ARCHITECTURE.md`, Host-Side Conveniences).
@@ -683,10 +725,10 @@ Quitting the emulator (Ctrl-C) and the debugger (Ctrl-E) are host-side, not moni
 
 ## 11. Hardware Constraints on the ROM
 
-- Ports the monitor uses on its own: 00h-02h (console), 08h-0Ch (storage), 0Dh-0Fh (mount), 10h-13h (Service Mailbox: `T`, `A`, `U`, `N`), and FEh (overlay off at boot). I and O can reach any port. The protocols are in `DEVICE_SPECS.md`.
+- Ports the monitor uses on its own: 00h-02h (console), 08h-0Ch (storage), 0Dh-0Fh (mount), 10h-13h (Service Mailbox: `T`, `A`, `U`, `N`, `Q`), and FEh (overlay off at boot). I and O can reach any port. The protocols are in `DEVICE_SPECS.md`.
 - The ROM does no console chip initialization. The console is a Pi FIFO device behind READY.
 - **CONOUT is `OUT 00h` followed by `RET`.** It MUST NOT poll TX-ready: status bit 1 always reads 1, and OUT 00 never waits on the terminal (`DEVICE_SPECS.md`, Console).
-- The only polling loops in the ROM wait for a person or a background service, never for a byte transfer: CONIN and E poll RX-ready (port 02h, bit 0), and MB_GET (T, A, U, N) polls mailbox status (port 12h). Every other device access assumes an instant answer, which READY provides on hardware.
+- The only polling loops in the ROM wait for a person or a background service, never for a byte transfer: CONIN and E poll RX-ready (port 02h, bit 0), and MB_GET (T, A, U, N, Q) polls mailbox status (port 12h). Every other device access assumes an instant answer, which READY provides on hardware.
 - The boot's first Pi-window access is the banner's first `OUT 00h`. If the Pi's device service is not running yet, that access waits under READY with no timeout (`DEVICE_SPECS.md`, READY Contract). No ROM code handles the stall.
 - The I and O commands run self-modified `IN` and `OUT` stubs in workspace RAM. That works on any 8080 and needs no special hardware.
 - `rom/monitor.bin` MUST be at most 4096 bytes and run at F000h.

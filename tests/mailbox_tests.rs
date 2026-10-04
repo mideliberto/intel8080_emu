@@ -8,9 +8,10 @@
 // named.
 //
 // API used (only `rig_with_clock` names the device):
-//   - build_bus(dir, mailbox::local_time) maps one Service Mailbox device at 10, 11, 12, 13, using the host clock.
+//   - build_bus(dir, mailbox::local_time, AskConfig::default()) maps one Service Mailbox
+//     device at 10, 11, 12, 13, using the host clock and no API key.
 //   - intel8080_emu::io::devices::mailbox::Mailbox implements IoDevice.
-//   - Mailbox::new(clock, storage_dir), clock a plain fn returning Some((year, month, day, hour, minute,
+//   - Mailbox::new(clock, storage_dir, ask), clock a plain fn returning Some((year, month, day, hour, minute,
 //     second)) of local time, or None for "not set" (TIME gives 83). A plain fn can't
 //     capture, so the test clock reads a thread-local (each test runs on its own
 //     thread) that `set_clock` changes.
@@ -19,6 +20,10 @@
 // (tests/support/http.rs) through the real `/usr/bin/curl` worker; no test touches the
 // internet. The three time-limit rows take 10 s or more and are #[ignore] (run with
 // `cargo test -- --ignored`).
+//
+// ASK (Phase 9) runs its vectors the same way, against the scripted side of H with a test
+// key and H's endpoint (`ask_rig`). Nothing reads ANTHROPIC_API_KEY except the #[ignore]
+// live test, so `cargo test` never reaches the API, key or no key.
 //
 // Not testable at port level: interrupts (rule 2.7); rule 2.9 (Pi service restart) only
 // as "a fresh device reads 00"; the Linux pre_exec (affinity, PDEATHSIG: bench, PI_DAEMON
@@ -33,6 +38,7 @@ mod support;
 use support::http;
 
 use intel8080_emu::io::build_bus;
+use intel8080_emu::io::devices::ask::AskConfig;
 use intel8080_emu::io::devices::mailbox::{self, Mailbox};
 use intel8080_emu::io::IoBus;
 
@@ -75,14 +81,14 @@ struct Rig {
 
 fn rig() -> Rig {
     let dir = tempfile::tempdir().unwrap();
-    let (bus, _con) = build_bus(dir.path(), mailbox::local_time);
+    let (bus, _con) = build_bus(dir.path(), mailbox::local_time, AskConfig::default());
     Rig { _dir: dir, bus }
 }
 
 /// build_bus, then ports 10-13 replaced by a mailbox whose clock reads NOW (set_clock).
 fn rig_with_clock() -> Rig {
     let mut r = rig();
-    let mb = Rc::new(RefCell::new(Mailbox::new(test_clock, r._dir.path().to_path_buf())));
+    let mb = Rc::new(RefCell::new(Mailbox::new(test_clock, r._dir.path().to_path_buf(), AskConfig::default())));
     for port in 0x10..=0x13 {
         r.bus.map_port(port, mb.clone());
     }
@@ -603,16 +609,6 @@ fn command_bytes_are_any_value() {
     assert_eq!(r.command(&over), E_OVERFLOW, "a 129th byte of 00 still overflows");
 }
 
-#[test]
-fn placeholder_commands_are_unknown() {
-    // Command format: "A placeholder word in the Commands table (ASK) is unknown until
-    // its phase ships, so it gives 80, with or without arguments."
-    let mut r = rig();
-    for command in [&b"ASK"[..], b"ASK hi"] {
-        assert_eq!(r.command(command), E_UNKNOWN, "{:?}", String::from_utf8_lossy(command));
-    }
-}
-
 // ---------- TIME ----------
 
 #[test]
@@ -931,7 +927,7 @@ fn reset_is_rebuilding_the_bus() {
     // which is the same rebuild).
     let dir = tempfile::tempdir().unwrap();
     for leave in ["avail", "done", "error", "half", "overflow"] {
-        let (mut bus, _con) = build_bus(dir.path(), mailbox::local_time);
+        let (mut bus, _con) = build_bus(dir.path(), mailbox::local_time, AskConfig::default());
         for b in b"TIME" {
             bus.write(CMD, *b);
         }
@@ -959,7 +955,7 @@ fn reset_is_rebuilding_the_bus() {
             }
         }
         // RESET: build_bus again.
-        let (bus, _con) = build_bus(dir.path(), mailbox::local_time);
+        let (bus, _con) = build_bus(dir.path(), mailbox::local_time, AskConfig::default());
         let mut r = Rig { _dir: tempfile::tempdir().unwrap(), bus };
         assert_eq!(r.status(), IDLE, "after {}", leave);
         assert_eq!(r.inp(RESP), 0x00, "after {}: a response byte survived", leave);
@@ -1274,6 +1270,7 @@ fn the_worker_gets_an_empty_environment() {
         std::fs::copy(Path::new("rom").join(f), dir.path().join("rom").join(f)).unwrap();
     }
     let mut child = Command::new(env!("CARGO_BIN_EXE_intel8080"))
+        .env_remove("ANTHROPIC_API_KEY") // cargo test never reaches the API (PI_DAEMON 13.2)
         .current_dir(dir.path())
         .envs([("http_proxy", &proxy), ("HTTP_PROXY", &proxy), ("ALL_PROXY", &proxy), ("all_proxy", &proxy)])
         .stdin(Stdio::piped())
@@ -1298,7 +1295,7 @@ fn reset_kills_the_worker() {
     let mut r = rig();
     r.start(format!("GET {} > D.BIN", h.url("/hang")).as_bytes());
     assert!(h.sees_request());
-    let (bus, _con) = build_bus(r.dir(), mailbox::local_time);
+    let (bus, _con) = build_bus(r.dir(), mailbox::local_time, AskConfig::default());
     r.bus = bus;
     assert!(h.sees_close());
     assert_eq!(r.listing(), Vec::<String>::new());
@@ -1384,4 +1381,302 @@ fn get_grammar_errors_are_82() {
     let mut long = b"GET ".to_vec();
     long.extend([b'a'; 125]);
     assert_eq!(r.start(&long), E_OVERFLOW);
+}
+
+// ---------- ASK (Phase 9) ----------
+
+const KEY: &str = "sk-ant-test-0123";
+
+/// A rig whose mailbox has the test key (or none), `url` as the endpoint and `total_secs`
+/// as the total limit.
+fn ask_rig(key: bool, url: &str, total_secs: u32) -> Rig {
+    let dir = tempfile::tempdir().unwrap();
+    let ask = AskConfig { key: key.then(|| KEY.to_string()), url: url.to_string(), total_secs };
+    let (bus, _con) = build_bus(dir.path(), mailbox::local_time, ask);
+    Rig { _dir: dir, bus }
+}
+
+/// One ASK against a server playing `script`: (status after execute, final status,
+/// response, the request H received).
+fn ask_row(command: &[u8], script: Vec<http::Step>) -> (u8, u8, Vec<u8>, http::Request) {
+    let h = http::scripted(vec![script]);
+    let mut r = ask_rig(true, &h.url("/v1/messages"), 120);
+    let first = r.start(command);
+    let (end, got) = r.finish(&String::from_utf8_lossy(command));
+    (first, end, got, h.request())
+}
+
+/// The request body's single user message.
+fn user_content(req: &http::Request) -> String {
+    let body: serde_json::Value = serde_json::from_slice(&req.body).expect("the body is JSON");
+    body["messages"][0]["content"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn ask_bad_commands_never_leave_the_device() {
+    // ASK, Prompt: "ASK with no 20h, an empty or all-space prompt, or any byte outside
+    // 20h-7Eh (Tab, CR, LF, 00, 7F, 80-FF) gives 82. These checks come first, so they give
+    // 82 with or without a key." Rows: ASK; ASK ; ASK    | 82. ASK hi Tab x; ASK caf C3 A9;
+    // ASK hi 7F | 82. ask hi | 80. ASK then 125 bytes | 81. "No API key: when the service
+    // has none, a valid ASK gives 83 at execute, with no worker and no network."
+    let h = http::scripted(vec![http::sse(&["ok"], "end_turn")]);
+    let mut long = b"ASK ".to_vec();
+    long.extend([b'x'; 125]);
+    let rows: [(&[u8], u8); 10] = [
+        (b"ASK", E_ARGS), (b"ASK ", E_ARGS), (b"ASK    ", E_ARGS), (b"ASK hi\tx", E_ARGS),
+        (b"ASK caf\xC3\xA9", E_ARGS), (b"ASK hi\x7F", E_ARGS), (b"ASK hi\r", E_ARGS), (b"ASK \x00hi", E_ARGS),
+        (b"ask hi", E_UNKNOWN), (&long, E_OVERFLOW),
+    ];
+    for key in [false, true] {
+        let mut r = ask_rig(key, &h.url("/v1/messages"), 120);
+        for (command, code) in rows {
+            let row = format!("key {}: {:?}", key, String::from_utf8_lossy(command));
+            assert_eq!(r.start(command), code, "{}", row);
+            assert_eq!((r.inp(STATUS), r.inp(RESP)), (code, 0x00), "{}: final", row);
+        }
+    }
+    let mut r = ask_rig(false, &h.url("/v1/messages"), 120);
+    assert_eq!(r.start(b"ASK hi"), E_SERVICE, "no key: 83 at execute");
+    assert_eq!(r.inp(STATUS), E_SERVICE);
+    assert!(h.no_request(), "a request reached the server");
+}
+
+#[test]
+fn ask_request_shape() {
+    // ASK service, Request: "POST https://api.anthropic.com/v1/messages, headers x-api-key:
+    // <key>, anthropic-version: 2023-06-01, content-type: application/json." The body, its
+    // model (Key Decisions, Q-MODEL), max_tokens 2048, stream, effort low, the system
+    // prompt and one user message. ASK client: -H "Expect:", so no Expect header.
+    let (first, end, got, req) = ask_row(b"ASK hi", http::sse(&["ok"], "end_turn"));
+    assert_eq!((first, end, &got[..]), (BUSY, DONE, &b"ok"[..]));
+    assert_eq!((req.method.as_str(), req.path.as_str()), ("POST", "/v1/messages"));
+    assert_eq!(req.header("x-api-key"), Some(KEY));
+    assert_eq!(req.header("anthropic-version"), Some("2023-06-01"));
+    assert_eq!(req.header("content-type"), Some("application/json"));
+    assert_eq!(req.header("expect"), None);
+    let system = std::fs::read_to_string("src/io/devices/ask_system.txt").unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(body, serde_json::json!({
+        "model": "claude-opus-5-5",
+        "max_tokens": 2048,
+        "stream": true,
+        "output_config": {"effort": "low"},
+        "system": system,
+        "messages": [{"role": "user", "content": "hi"}],
+    }));
+}
+
+#[test]
+fn ask_prompts_arrive_trimmed_and_intact() {
+    // Rows: ASK then 124 bytes x (128 in all) | ok. ASK   hi   | ok; the user content is
+    // hi. ASK say "a\b" | ok; the body H receives is valid JSON whose user content is
+    // say "a\b". Prompt: "Leading and trailing spaces are removed before it is sent."
+    let mut long = b"ASK ".to_vec();
+    long.extend([b'x'; 124]);
+    for (command, content) in [(&long[..], "x".repeat(124)), (b"ASK   hi  ", "hi".into()), (br#"ASK say "a\b""#, r#"say "a\b""#.into())] {
+        let (first, end, got, req) = ask_row(command, http::sse(&["ok"], "end_turn"));
+        let row = String::from_utf8_lossy(command);
+        assert_eq!((first, end, &got[..]), (BUSY, DONE, &b"ok"[..]), "{}", row);
+        assert_eq!(user_content(&req), content, "{}", row);
+    }
+}
+
+#[test]
+fn ask_reply_vectors() {
+    // ASK vectors, the rows that end 03: the reply after mapping and wrapping, "CR LF
+    // between lines and none after the last". Stream: "every other line, event and delta
+    // type ... is ignored."
+    use http::{event, sse, text, Step};
+    let x = |n| "x".repeat(n);
+    let words = |n| vec!["word"; n].join(" ");
+    let thinking = {
+        let mut s = vec![http::sse_head(),
+            event(r#"{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[]}}"#),
+            event(r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#),
+            event(r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Two and two."}}"#),
+            event(r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"c2ln"}}"#),
+            event(r#"{"type":"content_block_stop","index":0}"#),
+            event(r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#),
+            text("ok")];
+        s.extend(http::sse_stop("end_turn"));
+        s
+    };
+    let unknown = {
+        let mut s = http::sse_start();
+        s.extend([event(r#"{"type":"ping"}"#), event(r#"{"type":"brand_new_event","x":1}"#),
+            event(r#"{"type":"content_block_delta","index":0,"delta":{"type":"brand_new_delta","text":"no"}}"#),
+            Step::Send(b": a comment\nid: 7\n\n".to_vec()), text("ok")]);
+        s.extend(http::sse_stop("end_turn"));
+        s
+    };
+    let rows: Vec<(&str, Vec<Step>, String)> = vec![
+        ("two deltas", sse(&["Hello", ", world"], "end_turn"), "Hello, world".into()),
+        ("thinking block", thinking, "ok".into()),
+        ("ping and unknown types", unknown, "ok".into()),
+        ("blank lines and spaces", sse(&["\n\n  a  \n\nb\n\n"], "end_turn"), "  a\r\n\r\nb".into()),
+        ("mapping", sse(&["\u{201C}x\u{201D}\u{2014}\u{2019}\u{2026}\u{1F600}\t\u{1B}[2J"], "end_turn"), "\"x\"-'...? [2J".into()),
+        ("100 x", sse(&[&x(100)], "end_turn"), format!("{}\r\n{}", x(79), x(21))),
+        ("20 words", sse(&[&"word ".repeat(20)], "end_turn"), format!("{}\r\n{}", words(16), words(4))),
+        ("79 x, space, y", sse(&[&x(79), " ", "y"], "end_turn"), format!("{}\r\ny", x(79))),
+        ("indent and 80 x", sse(&["    ", &x(80)], "end_turn"), format!("    {}\r\n{}", x(75), x(5))),
+        ("max_tokens", sse(&["cut"], "max_tokens"), "cut".into()),
+    ];
+    for (row, script, want) in rows {
+        let (first, end, got, _) = ask_row(b"ASK hi", script);
+        assert_eq!((first, end, String::from_utf8_lossy(&got).to_string()), (BUSY, DONE, want), "{}", row);
+    }
+}
+
+#[test]
+fn ask_failures_deliver_what_came_then_83() {
+    // "The end comes after the last byte. ASK reports DONE or 83 only after every reply byte
+    // produced so far has been read: a failure after part of a reply delivers that part,
+    // then 83." Rows: abc, refusal | abc, 83. Hel, an error event | Hel, 83. Hel, the
+    // connection closes | Hel, 83. data: not json | 83, none. HTTP 401, 429, 500, 529 | 83, none.
+    use http::{event, text, Step};
+    // The rows with a space hold their last word back until the stream ends, so the 83
+    // comes after bytes that only the end released.
+    let partial = |t: &str, tail: Vec<Step>| {
+        let mut s = http::sse_start();
+        s.push(text(t));
+        s.extend(tail);
+        s
+    };
+    let error = || vec![event(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#)];
+    let mut rows: Vec<(String, Vec<Step>, &[u8])> = vec![
+        ("refusal".into(), http::sse(&["abc"], "refusal"), b"abc"),
+        ("refusal, held back".into(), http::sse(&["abc def"], "refusal"), b"abc def"),
+        ("error event".into(), partial("Hel", error()), b"Hel"),
+        ("error event, held back".into(), partial("Hel lo", error()), b"Hel lo"),
+        ("closed mid-reply".into(), partial("Hel", vec![]), b"Hel"),
+        ("closed mid-reply, held back".into(), partial("Hel lo", vec![]), b"Hel lo"),
+        ("not json".into(), vec![http::sse_head(), Step::Send(b"data: not json\n\n".to_vec())], b""),
+    ];
+    for code in [401, 429, 500, 529] {
+        rows.push((format!("HTTP {}", code), http::status(code), b""));
+    }
+    for (row, script, want) in rows {
+        let (first, end, got, _) = ask_row(b"ASK hi", script);
+        assert_eq!((first, end, &got[..]), (BUSY, E_SERVICE, want), "{}", row);
+    }
+}
+
+#[test]
+fn ask_time_limit_and_closed_port() {
+    // Limits: "the whole request 120 s from execute ... gives 83." Row: accepts, never
+    // answers; the test's total limit is 1 s | 83 within 3 s. Row: a closed port | 83.
+    let h = http::scripted(vec![vec![http::Step::Hold]]);
+    let mut r = ask_rig(true, &h.url("/v1/messages"), 1);
+    let t = Instant::now();
+    assert_eq!(r.start(b"ASK hi"), BUSY);
+    assert_eq!(r.finish_within("never answers", 3), (E_SERVICE, vec![]));
+    assert!(t.elapsed() >= Duration::from_millis(900), "{:?}: before the limit", t.elapsed());
+    let mut r = ask_rig(true, &format!("http://127.0.0.1:{}/v1/messages", closed_port()), 120);
+    assert_eq!(r.start(b"ASK hi"), BUSY);
+    assert_eq!(r.finish("closed port"), (E_SERVICE, vec![]));
+}
+
+/// Read IN 13 at each 02 until `n` bytes came; fails after 10 s or on any other status.
+fn read_n(r: &mut Rig, n: usize) -> Vec<u8> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut got = Vec::new();
+    while got.len() < n {
+        match r.inp(STATUS) {
+            BUSY => assert!(Instant::now() < deadline, "only {:?} within 10 s", String::from_utf8_lossy(&got)),
+            AVAIL => got.push(r.inp(RESP)),
+            s => panic!("status {:02X} after {:?}", s, String::from_utf8_lossy(&got)),
+        }
+    }
+    got
+}
+
+#[test]
+fn ask_streams_and_reads_while_busy_are_00() {
+    // Streaming: "H sends `first line\n`, then holds. IN 13 reads every byte of `first line`
+    // before H continues, and status is then 01. H sends `second` and ends; the rest reads
+    // <CRLF>second, then 03." Read while BUSY: "IN 13 returns 00 and changes nothing."
+    let mut script = http::sse_start();
+    script.extend([http::text("first line\n"), http::Step::Hold, http::text("second")]);
+    script.extend(http::sse_stop("end_turn"));
+    let h = http::scripted(vec![script]);
+    let mut r = ask_rig(true, &h.url("/v1/messages"), 120);
+    assert_eq!(r.start(b"ASK hi"), BUSY);
+    assert_eq!(read_n(&mut r, 10), b"first line");
+    assert_eq!(r.inp(STATUS), BUSY);
+    assert_eq!(r.inp(RESP), 0x00);
+    assert_eq!(r.inp(STATUS), BUSY);
+    h.release();
+    assert_eq!(r.finish("second"), (DONE, b"\r\nsecond".to_vec()));
+}
+
+#[test]
+fn ask_abort() {
+    // Abort: "H holds after Hel; the test writes clear without reading: status 00 at once,
+    // H sees the connection close within 1 s, and status is still 00 after H tries to send
+    // more. A new ASK hi then answers normally. The same with a second ASK hi instead of
+    // clear (only the second reply is read), and with the device dropped (RESET)."
+    let held = || {
+        let mut s = http::sse_start();
+        s.extend([http::text("Hel"), http::Step::Hold, http::text("lo")]);
+        s.extend(http::sse_stop("end_turn"));
+        s
+    };
+    // Clear.
+    let h = http::scripted(vec![held(), http::sse(&["ok"], "end_turn")]);
+    let mut r = ask_rig(true, &h.url("/v1/messages"), 120);
+    assert_eq!(r.start(b"ASK hi"), BUSY);
+    h.request();
+    r.clear();
+    assert_eq!(r.inp(STATUS), IDLE, "status 00 at once");
+    assert!(h.sees_close_within(1000), "clear: the worker was not killed");
+    h.release();
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!((r.inp(STATUS), r.inp(RESP)), (IDLE, 0x00), "the aborted request delivered");
+    assert_eq!(r.start(b"ASK hi"), BUSY);
+    assert_eq!(r.finish("after clear"), (DONE, b"ok".to_vec()));
+
+    // A second ASK, no clear.
+    let h = http::scripted(vec![held(), http::sse(&["ok"], "end_turn")]);
+    let mut r = ask_rig(true, &h.url("/v1/messages"), 120);
+    assert_eq!(r.start(b"ASK hi"), BUSY);
+    h.request();
+    std::thread::sleep(Duration::from_millis(200)); // Hel is in the pipe, unread
+    r.send(b"ASK hi");
+    r.out(CTL, EXECUTE);
+    assert!(h.sees_close_within(1000), "execute: the worker was not killed");
+    h.release();
+    assert_eq!(r.finish("second ASK"), (DONE, b"ok".to_vec()));
+
+    // RESET: the device dropped.
+    let h = http::scripted(vec![held()]);
+    let mut r = ask_rig(true, &h.url("/v1/messages"), 120);
+    assert_eq!(r.start(b"ASK hi"), BUSY);
+    h.request();
+    let (bus, _con) = build_bus(r.dir(), mailbox::local_time, AskConfig::default());
+    r.bus = bus;
+    assert!(h.sees_close_within(1000), "drop: the worker was not killed");
+    assert_eq!(r.inp(STATUS), IDLE);
+}
+
+#[test]
+#[ignore = "needs the network and ANTHROPIC_API_KEY: cargo test --test mailbox_tests ask_live -- --ignored"]
+fn ask_live_answers_in_plain_ascii() {
+    // Live: "the real endpoint and key; ASK What is 2+2? Reply with the digit only. ends 03
+    // within 120 s; every byte is 20h-7Eh or part of a CR LF pair; no line is over 79; no
+    // CR LF after the last line; the reply contains 4."
+    let Some(key) = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty()) else {
+        eprintln!("ask_live_answers_in_plain_ascii: ANTHROPIC_API_KEY is unset; skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let (bus, _con) = build_bus(dir.path(), mailbox::local_time, AskConfig { key: Some(key), ..AskConfig::default() });
+    let mut r = Rig { _dir: dir, bus };
+    assert_eq!(r.start(b"ASK What is 2+2? Reply with the digit only."), BUSY);
+    let (end, got) = r.finish_within("live", 120);
+    let text = String::from_utf8_lossy(&got).to_string();
+    assert_eq!(end, DONE, "{:?}", text);
+    assert!(got.iter().all(|&b| (0x20..=0x7E).contains(&b) || b == b'\r' || b == b'\n'), "{:?}", text);
+    assert!(!text.replace("\r\n", "").contains(['\r', '\n']), "a CR or LF outside a pair: {:?}", text);
+    assert!(text.split("\r\n").all(|l| l.len() <= 79), "{:?}", text);
+    assert!(!text.ends_with("\r\n") && text.contains('4'), "{:?}", text);
 }
