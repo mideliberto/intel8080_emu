@@ -69,7 +69,7 @@ Checked 2026-10-04. Distributors: Mouser primary, Pololu direct for the boost mo
 | J5 | DC power jack, PCB, right angle | Same Sky PJ-002AH | 490-PJ-002AH (confirm) | 1 | 1 | Same Sky datasheet dated 09/12/2024 (read 2026-10-04) | 2.0 mm centre pin, 5.0 A. Check the fit of the adapter's 5.5 x 2.1 mm plug and the footprint before fab (`HARDWARE_BUILD.md` 2.2, fab gate). |
 | JP1, JP2 | 2-pin 0.1-inch header | Wurth 61300211121 | 710-61300211121 (confirm) | 2 | 4 | Unverified | JP-WE, JP-PD. |
 | - | Shunt, 0.1-inch | Wurth 60900213421 | 710-60900213421 (confirm) | 2 | 4 | Unverified | For JP1 (parked on one pin) and JP2. |
-| TP1-TP9 | 0.1-inch single-row breakaway header, 40 pins | Wurth 61304011121 | 710-61304011121 (confirm) | 9 | 40 | Unverified | One pin per test point; Order is in pins (one strip). |
+| TP1-TP7 | 0.1-inch single-row breakaway header, 40 pins | Wurth 61304011121 | 710-61304011121 (confirm) | 7 | 40 | Unverified | One pin per test point; Order is in pins (one strip). |
 | H1-H4 | M3 standoff, nylon, about 10 mm, with screws | any | - | 4 | 4 | Unverified | Feet at the four mounting holes. |
 | - | ZIF-40, 0.6 inch | Aries 40-6554-10 | 535-40-6554-10 (confirm) | 1 | 1 | Unverified | For U1 (the chip tester). Body and lever need clearance (`HARDWARE_BUILD.md` 2.3). |
 | - | Machined DIP socket, 8-pin 0.3 | Mill-Max 110-43-308-41-001000 | 575-11043308 (confirm) | 1 | 1 | Unverified | For U17. |

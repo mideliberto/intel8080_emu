@@ -773,7 +773,8 @@ part C21 C 100nF  # U18
   2 ~ GND
 
 # ---------------------------------------------------------------- test points (1-pin headers)
-# Rails for step 0 (TP6: step 5, the rail comes from the Pi). phi1/phi2 for step 1: never on a header.
+# Rails for step 0 (TP6: step 5, the rail comes from the Pi). phi1/phi2 have none (6.12 rule 1):
+# step 1 probes the 8224 pins directly.
 part TP1 TP GND
   1 ~ GND
 part TP2 TP GND
@@ -786,11 +787,7 @@ part TP5 TP -5V
   1 ~ -5V
 part TP6 TP 3V3
   1 ~ +3V3_PI
-part TP7 TP PHI1
-  1 ~ PHI1
-part TP8 TP PHI2
-  1 ~ PHI2
-part TP9 TP WSET
+part TP7 TP WSET
   1 ~ WSET_N            # step 4: STSTB pulse width at the 74HCT74 /PRE
 
 # ---------------------------------------------------------------- mounting holes
