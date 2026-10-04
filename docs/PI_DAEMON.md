@@ -510,7 +510,7 @@ The one list. Each closes on the built board, at the bring-up step given (`HARDW
 
 ## 15. Not in v1
 
-- TEST_RESET (BCM 18) driven by the daemon: for the unattended test rig only, designed with it (decision TEST-RESET).
+- TEST_RESET (BCM 18) driven by the daemon: for the unattended test rig only, designed with it (decision TEST-RESET). The board side is a 2N3904 on /RESIN (`ARCHITECTURE.md` 6.6). The rig MUST hold each pulse for at least the DS1813 tPB, at least 1 ms, or the 1 ms gate of 5.1 loses its premise.
 - A UART or USB-gadget console: bridge to TCP with `socat` (`HARDWARE_BUILD.md` 5).
 - Pi 5 (RP1 registers), Pi 3.
 - Hardware single-step (decision HW-STEP).

@@ -105,6 +105,16 @@ examples/
 ├── hello.asm / .hex     # Prints a line, returns to the monitor
 └── memtest.asm / .hex   # RAM test over a range
 
+hw/
+├── Makefile             # make: glue.jed from glue.pld (galette 0.3.0)
+├── glue.pld             # GAL source: the only home of the GAL pinout (ARCHITECTURE 6.2-6.5)
+├── glue.jed             # GAL fuse map: burned, and checked by tests/gal_tests.rs
+├── board.net.txt        # Board netlist: the only home of pin numbers (HARDWARE_BUILD 2.2)
+├── board.kicad.net      # KiCad netlist written from it by tests/netlist_tests.rs (Pcbnew imports this)
+├── board.kicad_pro      # KiCad project (minimal), so Pcbnew loads board.kicad_dru
+├── board.kicad_pcb      # The board: 160 x 120 mm outline; placement and routing are Mike's
+└── board.kicad_dru      # Design rules: fab minimums, rail widths
+
 scripts/
 ├── fetch_exercisers.sh  # Downloads the exercisers to tests/data/exercisers (pinned SHA-256)
 ├── pi8080d.service      # systemd unit for the Pi daemon
@@ -121,6 +131,7 @@ docs/
 ├── USER_GUIDE.md            # Operating the machine (non-normative)
 ├── QUICK_REFERENCE.md       # Cheat sheet
 ├── HARDWARE_BUILD.md         # Build plan: BOM, bring-up, Pi platform decisions
+├── PARTS_ORDER.md            # What to buy: order lines keyed to the netlist refdes
 ├── IMPLEMENTATION_ROADMAP.md
 ├── COLLABORATION_LOG.md
 ├── reference/               # 8080 instruction set, I/O references
@@ -132,6 +143,8 @@ tests/
 ├── device_tests.rs      # Console, storage and mount at port level
 ├── mailbox_tests.rs     # Service Mailbox at port level (DEVICE_SPECS 8), black-box from the spec
 ├── debugger_tests.rs   # Debugger: --script runs, breaks, watchpoints, trace (ARCHITECTURE 7.4)
+├── gal_tests.rs         # GAL: hw/glue.jed for every input against the emulator's decode and ARCHITECTURE 6.2-6.5
+├── netlist_tests.rs     # Board: hw/board.net.txt pad by pad against ARCHITECTURE 6; KiCad netlist, project files, routed board, parts order
 ├── exerciser.rs         # TST8080, 8080PRE, CPUTEST, 8080EXM under a CP/M shim (#[ignore])
 ├── monitor_tests.rs     # Strict transcript harness: junk RAM, exact output to each prompt; every transcript also through the Pi daemon, some through pi8080d --sim and the RAM test build
 ├── pi_daemon_tests.rs   # Pi daemon: RESET, faults, startup, stop, TCP console on the simulated board
@@ -172,6 +185,7 @@ Working docs:
 - [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — Operating the machine: emulator, Pi daemon, loading, saving, debugging, ROM changes
 - [`docs/QUICK_REFERENCE.md`](docs/QUICK_REFERENCE.md) — Cheat sheet
 - [`docs/HARDWARE_BUILD.md`](docs/HARDWARE_BUILD.md) — Hardware build plan: BOM, bring-up, sourcing, Pi platform decisions (non-normative)
+- [`docs/PARTS_ORDER.md`](docs/PARTS_ORDER.md) — Parts order: MPNs, distributor numbers, spares, lifecycle status, keyed to the netlist refdes (non-normative)
 - [`docs/reference/8080_HARDWARE.md`](docs/reference/8080_HARDWARE.md) — 8080A, 8224, 8228 hardware reference (MCS-80 User's Manual)
 - [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) — Phases and plans
 - [`docs/COLLABORATION_LOG.md`](docs/COLLABORATION_LOG.md) — History, decisions, lessons

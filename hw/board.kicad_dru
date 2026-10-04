@@ -1,0 +1,17 @@
+(version 1)
+# KiCad 7/8 custom design rules (HARDWARE_BUILD 2.2). Fab minimums for a hand-soldered
+# THT 2-layer board at any common fab, and rail widths. Placement and length guidance has no
+# spec source, so it lives in HARDWARE_BUILD 2.3 (est), not here.
+(rule "board minimums"
+  (constraint track_width (min 0.25mm))
+  (constraint clearance (min 0.2mm))
+  (constraint via_diameter (min 0.6mm))
+  (constraint hole_size (min 0.3mm))
+  (constraint edge_clearance (min 0.5mm)))
+# About 1 A on +5 V (ARCHITECTURE 6.9): wide for a low drop against the 4.85-5.15 V window.
+(rule "5V and GND width"
+  (condition "A.NetName == '+5V' || A.NetName == '+5V_IN' || A.NetName == 'GND'")
+  (constraint track_width (min 0.8mm)))
+(rule "other rails width"
+  (condition "A.NetName == '+12V' || A.NetName == '-5V' || A.NetName == '+3V3_PI'")
+  (constraint track_width (min 0.4mm)))

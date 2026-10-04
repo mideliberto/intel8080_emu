@@ -6,3 +6,11 @@ rom/*.p
 rom/*.noi
 .DS_Store
 /tests/data/exercisers
+hw/*.chp
+hw/*.fus
+hw/*.pin
+hw/*.kicad_prl
+hw/*-backups/
+hw/fp-info-cache
+hw/*.lck
+hw/_autosave-*

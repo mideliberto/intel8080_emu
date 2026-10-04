@@ -1,0 +1,801 @@
+# hw/board.net.txt - the 8080 board netlist: the only home of pin numbers (HARDWARE_BUILD 2.2).
+# ARCHITECTURE.md 6 is normative for the circuits and rules; tests/netlist_tests.rs checks this
+# file against it, pad by pad, and writes the KiCad netlist hw/board.kicad.net from it.
+#
+# Format: '#' to end of line is a comment. Blank lines are ignored.
+#   part <ref> <type> <value>      footprint and pin table come from the type (tests/netlist_tests.rs)
+#   <pad> <pinname> <net>          one line per pad, every pad of the footprint exactly once
+# <net> NC = explicitly unconnected. '~' as <pinname> only for types whose table has no names.
+# Rails: GND +5V +12V -5V +3V3_PI +5V_IN (the jack side of the reverse-polarity FET).
+# Active-low nets end in _N. Values are generic part names; order codes live in docs/PARTS_ORDER.md.
+
+# ---------------------------------------------------------------- CPU core (6.1, 6.7)
+part U1 8080A 8080A
+  1  A10   A10
+  2  VSS   GND
+  3  D4    D4
+  4  D5    D5
+  5  D6    D6
+  6  D7    D7
+  7  D3    D3
+  8  D2    D2
+  9  D1    D1
+  10 D0    D0
+  11 VBB   -5V
+  12 RESET RESET
+  13 HOLD  GND          # 6.7: HOLD to GND
+  14 INT   INT          # 6.7: 10k to GND (R4)
+  15 PHI2  PHI2
+  16 INTE  INTE
+  17 DBIN  DBIN
+  18 WR_N  WR_N
+  19 SYNC  SYNC
+  20 VCC   +5V
+  21 HLDA  HLDA
+  22 PHI1  PHI1
+  23 READY READY
+  24 WAIT  WAIT
+  25 A0    A0
+  26 A1    A1
+  27 A2    A2
+  28 VDD   +12V
+  29 A3    A3
+  30 A4    A4
+  31 A5    A5
+  32 A6    A6
+  33 A7    A7
+  34 A8    A8
+  35 A9    A9
+  36 A15   A15
+  37 A12   A12
+  38 A13   A13
+  39 A14   A14
+  40 A11   A11
+
+part U2 8224 8224
+  1  RESET    RESET
+  2  RESIN_N  RESIN_N
+  3  RDYIN    RDYIN
+  4  READY    READY
+  5  SYNC     SYNC
+  6  PHI2_TTL PHI2_TTL
+  7  STSTB_N  STSTB_N
+  8  GND      GND
+  9  VDD      +12V
+  10 PHI2     PHI2
+  11 PHI1     PHI1
+  12 OSC      NC         # 6.1: OSC unconnected
+  13 TANK     NC         # 6.1: TANK unconnected
+  14 XTAL2    XTAL2
+  15 XTAL1    XTAL1
+  16 VCC      +5V
+
+part Y1 Y 18.432MHz
+  1 ~ XTAL1
+  2 ~ XTAL2
+part R1 R 510R
+  1 ~ XTAL1
+  2 ~ GND
+part R2 R 510R
+  1 ~ XTAL2
+  2 ~ GND
+
+part U3 8228 8228
+  1  STSTB_N STSTB_N
+  2  HLDA    HLDA
+  3  WR_N    WR_N
+  4  DBIN    DBIN
+  5  DB4     DB4
+  6  D4      D4
+  7  DB7     DB7
+  8  D7      D7
+  9  DB3     DB3
+  10 D3      D3
+  11 DB2     DB2
+  12 D2      D2
+  13 DB0     DB0
+  14 GND     GND
+  15 D0      D0
+  16 DB1     DB1
+  17 D1      D1
+  18 DB5     DB5
+  19 D5      D5
+  20 DB6     DB6
+  21 D6      D6
+  22 BUSEN_N GND        # 6.7
+  23 INTA_N  INTA_N     # 6.7: 1k to +12V (R3), the RST 7 strap
+  24 MEMR_N  MEMR_N
+  25 IOR_N   IOR_N
+  26 MEMW_N  MEMW_N
+  27 IOW_N   IOW_N
+  28 VCC     +5V
+
+part R3 R 1k
+  1 ~ INTA_N
+  2 ~ +12V
+part R4 R 10k
+  1 ~ INT
+  2 ~ GND
+part D1 D SCHOTTKY      # 6.9: VBB clamp at the CPU socket
+  1 K GND
+  2 A -5V
+
+# ---------------------------------------------------------------- memory (6.2)
+part U4 AT28C64B AT28C64B
+  1  RDY_BSY NC         # RDY/BSY on some dies, NC on others; DATA polling instead (6.10)
+  2  A12     GND        # 6.2: chip A12 tied low
+  3  A7      A7
+  4  A6      A6
+  5  A5      A5
+  6  A4      A4
+  7  A3      A3
+  8  A2      A2
+  9  A1      A1
+  10 A0      A0
+  11 IO0     DB0
+  12 IO1     DB1
+  13 IO2     DB2
+  14 GND     GND
+  15 IO3     DB3
+  16 IO4     DB4
+  17 IO5     DB5
+  18 IO6     DB6
+  19 IO7     DB7
+  20 CE_N    GND        # 6.2: ROM /CE low
+  21 A10     A10
+  22 OE_N    ROMOE_N
+  23 A11     A11
+  24 A9      A9
+  25 A8      A8
+  26 NC      NC
+  27 WE_N    ROM_WE_N   # 6.10: through JP-WE, 10k pull-up R5
+  28 VCC     +5V
+
+part U5 AS6C62256 AS6C62256  # RAM low, 0000-7FFF
+  1  A14  A14
+  2  A12  A12
+  3  A7   A7
+  4  A6   A6
+  5  A5   A5
+  6  A4   A4
+  7  A3   A3
+  8  A2   A2
+  9  A1   A1
+  10 A0   A0
+  11 DQ0  DB0
+  12 DQ1  DB1
+  13 DQ2  DB2
+  14 VSS  GND
+  15 DQ3  DB3
+  16 DQ4  DB4
+  17 DQ5  DB5
+  18 DQ6  DB6
+  19 DQ7  DB7
+  20 CE_N A15
+  21 A10  A10
+  22 OE_N RAMOE_N
+  23 A11  A11
+  24 A9   A9
+  25 A8   A8
+  26 A13  A13
+  27 WE_N MEMW_N        # 6.2: RAM_WE = MEMW
+  28 VCC  +5V
+
+part U6 AS6C62256 AS6C62256  # RAM high, 8000-FFFF
+  1  A14  A14
+  2  A12  A12
+  3  A7   A7
+  4  A6   A6
+  5  A5   A5
+  6  A4   A4
+  7  A3   A3
+  8  A2   A2
+  9  A1   A1
+  10 A0   A0
+  11 DQ0  DB0
+  12 DQ1  DB1
+  13 DQ2  DB2
+  14 VSS  GND
+  15 DQ3  DB3
+  16 DQ4  DB4
+  17 DQ5  DB5
+  18 DQ6  DB6
+  19 DQ7  DB7
+  20 CE_N A15_N         # NOT A15 from U9
+  21 A10  A10
+  22 OE_N RAMOE_N
+  23 A11  A11
+  24 A9   A9
+  25 A8   A8
+  26 A13  A13
+  27 WE_N MEMW_N
+  28 VCC  +5V
+
+# ---------------------------------------------------------------- glue (6.2-6.6)
+# GAL pin names = the hw/glue.pld pin list, /X written X_N. The .pld is the one home of the GAL
+# pinout: move a pin there and here together, then rebuild the .jed (HARDWARE_BUILD 2.1).
+part U7 ATF22V10C ATF22V10C
+  1  STSTB_N  STSTB_N
+  2  A8       A8
+  3  A9       A9
+  4  A10      A10
+  5  A11      A11
+  6  A12      A12
+  7  A13      A13
+  8  A14      A14
+  9  A15      A15
+  10 MEMR_N   MEMR_N
+  11 D4       D4        # CPU side (6.2)
+  12 GND      GND
+  13 D6       D6
+  14 OVL      OVL
+  15 ROMOE_N  ROMOE_N
+  16 RAMOE_N  RAMOE_N
+  17 DB0      DB0       # 6.5: OVL onto system DB0 for IN FF
+  18 OVLCLR_N OVLCLR_N
+  19 WSET_N   WSET_N
+  20 LATOE_N  LATOE_N
+  21 IOR_N    IOR_N
+  22 IOW_N    IOW_N
+  23 RESET_N  RESET_N
+  24 VCC      +5V
+
+part U8 74HCT74 74HCT74
+  1  1CLR_N OVLCLR_N    # half 1 = overlay flip-flop (6.5)
+  2  1D     GND         # async set and clear only
+  3  1CLK   GND
+  4  1PRE_N RESET_N
+  5  1Q     OVL
+  6  1Q_N   NC
+  7  GND    GND
+  8  2Q_N   RDYIN       # half 2 = WAIT flip-flop (6.4): /Q drives RDYIN
+  9  2Q     WAIT_Q
+  10 2PRE_N WSET_N
+  11 2CLK   ACK_CLK
+  12 2D     GND         # 6.4 rule 2: D tied low
+  13 2CLR_N RESET_N
+  14 VCC    +5V
+
+part R13 R 10k          # RDYIN pull-up: high in bring-up step 2, before U8 is fitted
+  1 ~ RDYIN
+  2 ~ +5V
+
+part U9 74HCT14 74HCT14
+  1  1A  RESET          # NOT RESET (6.6)
+  2  1Y  RESET_N
+  3  2A  IOR_N          # data 245 /OE = NOT /I/OR (6.4)
+  4  2Y  DOE_N
+  5  3A  A15            # NOT A15 for the RAM high /CE
+  6  3Y  A15_N
+  7  GND GND
+  8  4Y  ACK_CLK        # ACK, second Schmitt stage
+  9  4A  ACK1
+  10 5Y  ACK1           # ACK, first Schmitt stage
+  11 5A  ACK
+  12 6Y  NC             # spare
+  13 6A  GND
+  14 VCC +5V
+
+part U10 74HCT08 74HCT08  # U08a (6.11)
+  1  1A  WAIT_Q         # REQ = Q AND WAIT (6.4)
+  2  1B  WAIT
+  3  1Y  REQ
+  4  2A  WAIT           # WAIT LED buffer
+  5  2B  +5V
+  6  2Y  WAIT_B
+  7  GND GND
+  8  3Y  INTE_B         # INTE LED buffer
+  9  3A  INTE
+  10 3B  +5V
+  11 4Y  HLDA_B         # HLDA LED buffer
+  12 4A  HLDA
+  13 4B  +5V
+  14 VCC +5V
+
+part U11 74HCT08 74HCT08  # U08b (6.11)
+  1  1A  WAIT_B         # H1 = WAIT_B AND /Q
+  2  1B  RDYIN
+  3  1Y  H1
+  4  2A  IOR_N          # H2 = /I/OR AND /I/OW
+  5  2B  IOW_N
+  6  2Y  H2
+  7  GND GND
+  8  3Y  HALT           # HALT = H1 AND H2
+  9  3A  H1
+  10 3B  H2
+  11 4Y  NC
+  12 4A  GND            # 6.11: gate 4 inputs to GND
+  13 4B  GND
+  14 VCC +5V
+
+part U12 74HCT138 74HCT138  # ROM /WE decode (6.10)
+  1  A     A12
+  2  B     A13
+  3  C     A14
+  4  G2A_N MEMW_N
+  5  G2B_N GND
+  6  G1    A15
+  7  Y7_N  Y7_N
+  8  GND   GND
+  9  Y6_N  NC
+  10 Y5_N  NC
+  11 Y4_N  NC
+  12 Y3_N  NC
+  13 Y2_N  NC
+  14 Y1_N  NC
+  15 Y0_N  NC
+  16 VCC   +5V
+
+part JP1 JMP2 JP-WE     # built open (6.10)
+  1 ~ Y7_N
+  2 ~ ROM_WE_N
+part R5 R 10k
+  1 ~ ROM_WE_N
+  2 ~ +5V
+
+part U13 74HCT374 74HCT374  # IN latch (6.4)
+  1  OE_N LATOE_N
+  2  1Q   DB0
+  3  1D   PI_D0
+  4  2D   PI_D1
+  5  2Q   DB1
+  6  3Q   DB2
+  7  3D   PI_D2
+  8  4D   PI_D3
+  9  4Q   DB3
+  10 GND  GND
+  11 CLK  LATCH
+  12 5Q   DB4
+  13 5D   PI_D4
+  14 6D   PI_D5
+  15 6Q   DB5
+  16 7Q   DB6
+  17 7D   PI_D6
+  18 8D   PI_D7
+  19 8Q   DB7
+  20 VCC  +5V
+
+# ---------------------------------------------------------------- Pi interface (6.4)
+# 74LVC245A: A side = 5 V board, B side = Pi. DIR high = A to B. VCC = the Pi's 3V3.
+part U14 74LVC245A 74LVC245A  # A0-A6 and DIR
+  1  DIR  +3V3_PI
+  2  A1   A0
+  3  A2   A1
+  4  A3   A2
+  5  A4   A3
+  6  A5   A4
+  7  A6   A5
+  8  A7   A6
+  9  A8   IOR_N
+  10 GND  GND
+  11 B8   PI_DIR
+  12 B7   PI_A6
+  13 B6   PI_A5
+  14 B5   PI_A4
+  15 B4   PI_A3
+  16 B3   PI_A2
+  17 B2   PI_A1
+  18 B1   PI_A0
+  19 OE_N GND
+  20 VCC  +3V3_PI
+
+part U15 74LVC245A 74LVC245A  # DB0-DB7, OUT data
+  1  DIR  +3V3_PI
+  2  A1   DB0
+  3  A2   DB1
+  4  A3   DB2
+  5  A4   DB3
+  6  A5   DB4
+  7  A6   DB5
+  8  A7   DB6
+  9  A8   DB7
+  10 GND  GND
+  11 B8   BD7
+  12 B7   BD6
+  13 B6   BD5
+  14 B5   BD4
+  15 B4   BD3
+  16 B3   BD2
+  17 B2   BD1
+  18 B1   BD0
+  19 OE_N DOE_N
+  20 VCC  +3V3_PI
+
+part U16 74LVC245A 74LVC245A  # REQ and RESET
+  1  DIR  +3V3_PI
+  2  A1   REQ
+  3  A2   RESET
+  4  A3   GND           # unused inputs tied
+  5  A4   GND
+  6  A5   GND
+  7  A6   GND
+  8  A7   GND
+  9  A8   GND
+  10 GND  GND
+  11 B8   NC
+  12 B7   NC
+  13 B6   NC
+  14 B5   NC
+  15 B4   NC
+  16 B3   NC
+  17 B2   PI_RESET
+  18 B1   PI_REQ
+  19 OE_N GND
+  20 VCC  +3V3_PI
+
+# 330R series array between the data 245 B outputs and the Pi D0-D7 node (6.4). The Pi pins and
+# the 74HCT374 D inputs share PI_Dk, so the Pi's read-back sees the latch inputs.
+part RN6 RN_DIP16 330R
+  1  1a BD0
+  2  2a BD1
+  3  3a BD2
+  4  4a BD3
+  5  5a BD4
+  6  6a BD5
+  7  7a BD6
+  8  8a BD7
+  9  8b PI_D7
+  10 7b PI_D6
+  11 6b PI_D5
+  12 5b PI_D4
+  13 4b PI_D3
+  14 3b PI_D2
+  15 2b PI_D1
+  16 1b PI_D0
+
+part R6 R 4.7k          # ACK pull-down, 5 V side (6.4)
+  1 ~ ACK
+  2 ~ GND
+part R7 R 4.7k          # LATCH pull-down
+  1 ~ LATCH
+  2 ~ GND
+
+# Raspberry Pi 40-pin header, straight-through ribbon: pin n here = Pi pin n. The BCM numbers
+# are the pin names; which BCM carries which signal is src/pi/mod.rs (the test imports it).
+part J1 PI_HDR PI4B
+  1  3V3    +3V3_PI
+  2  5V     NC          # the Pi has its own supply: never joined
+  3  BCM2   NC
+  4  5V     NC
+  5  BCM3   NC
+  6  GND    GND
+  7  BCM4   PI_A0
+  8  BCM14  NC
+  9  GND    GND
+  10 BCM15  NC
+  11 BCM17  LATCH
+  12 BCM18  PI_TRST
+  13 BCM27  PI_D7
+  14 GND    GND
+  15 BCM22  PI_D2
+  16 BCM23  PI_D3
+  17 3V3    +3V3_PI
+  18 BCM24  PI_D4
+  19 BCM10  PI_A6
+  20 GND    GND
+  21 BCM9   PI_A5
+  22 BCM25  PI_D5
+  23 BCM11  PI_DIR
+  24 BCM8   PI_A4
+  25 GND    GND
+  26 BCM7   PI_A3
+  27 BCM0   NC          # ID_SD (HAT EEPROM)
+  28 BCM1   NC          # ID_SC
+  29 BCM5   PI_A1
+  30 GND    GND
+  31 BCM6   PI_A2
+  32 BCM12  PI_REQ
+  33 BCM13  PI_RESET
+  34 GND    GND
+  35 BCM19  NC
+  36 BCM16  ACK
+  37 BCM26  PI_D6
+  38 BCM20  PI_D0
+  39 GND    GND
+  40 BCM21  PI_D1
+
+# ---------------------------------------------------------------- reset (6.6)
+part U18 DS1813 DS1813
+  1 RST_N RESIN_N       # open drain, internal 5.5k pull-up
+  2 VCC   +5V
+  3 GND   GND
+part SW1 SW RESET
+  1 ~ RESIN_N
+  2 ~ GND
+part Q1 2N3904 2N3904  # TEST_RESET (6.6); fitted only for the test rig
+  1 E GND
+  2 B TRST_B
+  3 C RESIN_N
+part R12 R 4.7k         # base resistor from BCM 18
+  1 ~ PI_TRST
+  2 ~ TRST_B
+
+# ---------------------------------------------------------------- status LEDs (6.11)
+part R8 R 1k
+  1 ~ WAIT_B
+  2 ~ LED_WAIT
+part D2 LED WAIT
+  1 K GND
+  2 A LED_WAIT
+part R9 R 1k
+  1 ~ HALT
+  2 ~ LED_HALT
+part D3 LED HALT
+  1 K GND
+  2 A LED_HALT
+part R10 R 1k
+  1 ~ INTE_B
+  2 ~ LED_INTE
+part D4 LED INTE
+  1 K GND
+  2 A LED_INTE
+part R11 R 1k
+  1 ~ HLDA_B
+  2 ~ LED_HLDA
+part D5 LED HLDA
+  1 K GND
+  2 A LED_HLDA
+
+# ---------------------------------------------------------------- bus resistors (6.13)
+part RN1 RN_SIP9 10k
+  1 COM +5V
+  2 R1  A0
+  3 R2  A1
+  4 R3  A2
+  5 R4  A3
+  6 R5  A4
+  7 R6  A5
+  8 R7  A6
+  9 R8  A7
+part RN2 RN_SIP9 10k
+  1 COM +5V
+  2 R1  A8
+  3 R2  A9
+  4 R3  A10
+  5 R4  A11
+  6 R5  A12
+  7 R6  A13
+  8 R7  A14
+  9 R8  A15
+part RN3 RN_SIP9 10k    # socketed: out for bring-up step 2
+  1 COM +5V
+  2 R1  DB0
+  3 R2  DB1
+  4 R3  DB2
+  5 R4  DB3
+  6 R5  DB4
+  7 R6  DB5
+  8 R7  DB6
+  9 R8  DB7
+part RN4 RN_SIP9 2.2k   # bring-up step 2 pull-down, through JP2; never with RN3
+  1 COM PD_COM
+  2 R1  DB0
+  3 R2  DB1
+  4 R3  DB2
+  5 R4  DB3
+  6 R5  DB4
+  7 R6  DB5
+  8 R7  DB6
+  9 R8  DB7
+part JP2 JMP2 JP-PD
+  1 ~ PD_COM
+  2 ~ GND
+
+# ---------------------------------------------------------------- analyzer (6.12, HARDWARE_BUILD 3.1)
+part RN5 RN_DIP16 1k    # LA-B D0-D7 isolation
+  1  1a D0
+  2  2a D1
+  3  3a D2
+  4  4a D3
+  5  5a D4
+  6  6a D5
+  7  7a D6
+  8  8a D7
+  9  8b LAD7
+  10 7b LAD6
+  11 6b LAD5
+  12 5b LAD4
+  13 4b LAD3
+  14 3b LAD2
+  15 2b LAD1
+  16 1b LAD0
+
+part J2 LA_HDR LA-A
+  1  CH0  A0
+  2  CH1  A1
+  3  CH2  A2
+  4  CH3  A3
+  5  CH4  A4
+  6  CH5  A5
+  7  CH6  A6
+  8  CH7  A7
+  9  CH8  A8
+  10 CH9  A9
+  11 CH10 A10
+  12 CH11 A11
+  13 CH12 A12
+  14 CH13 A13
+  15 CH14 A14
+  16 CH15 A15
+  17 GND  GND
+  18 GND  GND
+  19 GND  GND
+  20 GND  GND
+
+part J3 LA_HDR LA-B
+  1  CH0  LAD0
+  2  CH1  LAD1
+  3  CH2  LAD2
+  4  CH3  LAD3
+  5  CH4  LAD4
+  6  CH5  LAD5
+  7  CH6  LAD6
+  8  CH7  LAD7
+  9  CH8  SYNC
+  10 CH9  DBIN
+  11 CH10 WR_N
+  12 CH11 READY
+  13 CH12 WAIT
+  14 CH13 STSTB_N
+  15 CH14 PHI2_TTL
+  16 CH15 RESET
+  17 GND  GND
+  18 GND  GND
+  19 GND  GND
+  20 GND  GND
+
+part J4 LA_HDR LA-C
+  1  CH0  MEMR_N
+  2  CH1  MEMW_N
+  3  CH2  IOR_N
+  4  CH3  IOW_N
+  5  CH4  INTE
+  6  CH5  HLDA
+  7  CH6  RDYIN
+  8  CH7  REQ
+  9  CH8  ACK
+  10 CH9  LATCH
+  11 CH10 OVL
+  12 CH11 ROMOE_N
+  13 CH12 Y7_N
+  14 CH13 HALT
+  15 CH14 RESIN_N
+  16 CH15 NC            # spare pad: fly-wire to ROM /WE for the step 3 check
+  17 GND  GND
+  18 GND  GND
+  19 GND  GND
+  20 GND  GND
+
+# ---------------------------------------------------------------- power (6.9)
+part J5 DCJACK 5V-IN    # 2.1 mm, centre positive
+  1 VIN  +5V_IN
+  2 GND  GND
+  3 SW   NC             # sleeve switch contact, unused
+part Q2 PFET_TO220 SUP53P06-20  # reverse-polarity switch: drain on the jack, source on the board
+  1 G G_RP
+  2 D +5V_IN
+  3 S +5V
+part R14 R 10k          # P-FET gate to GND
+  1 ~ G_RP
+  2 ~ GND
+part PS1 U3V40F12 U3V40F12  # +12 V boost. Pad order UNVERIFIED (tests/netlist_tests.rs)
+  1 EN   NC             # 30k on-board pull-up to VIN: enabled
+  2 VIN  +5V
+  3 VIN  +5V
+  4 GND  GND
+  5 GND  GND
+  6 VOUT +12V
+part U17 7660 7660      # -5 V charge pump, ICL7660 class
+  1 BOOST NC            # NC on the ICL7660, open = normal on the MAX1044
+  2 CAPP  PUMP_CP
+  3 GND   GND
+  4 CAPN  PUMP_CN
+  5 VOUT  -5V
+  6 LV    NC            # open for V+ > 3.5 V
+  7 OSC   NC
+  8 VPLUS +5V
+part C24 CP 10uF        # pump flying capacitor
+  1 + PUMP_CP
+  2 - PUMP_CN
+part C25 CP 10uF        # pump reservoir, which is also the -5 V bulk (6.9)
+  1 + GND
+  2 - -5V
+part C22 CP 10uF        # +5 V bulk, at the jack
+  1 + +5V
+  2 - GND
+part C23 CP 10uF        # +12 V bulk, at PS1
+  1 + +12V
+  2 - GND
+
+# decoupling, 0.1 uF per IC per rail (6.9); placement in HARDWARE_BUILD 2.3
+part C1 C 100nF  # U1 VCC
+  1 ~ +5V
+  2 ~ GND
+part C2 C 100nF  # U1 VDD
+  1 ~ +12V
+  2 ~ GND
+part C3 C 100nF  # U1 VBB
+  1 ~ -5V
+  2 ~ GND
+part C4 C 100nF  # U2 VCC
+  1 ~ +5V
+  2 ~ GND
+part C5 C 100nF  # U2 VDD
+  1 ~ +12V
+  2 ~ GND
+part C6 C 100nF  # U3
+  1 ~ +5V
+  2 ~ GND
+part C7 C 100nF  # U4
+  1 ~ +5V
+  2 ~ GND
+part C8 C 100nF  # U5
+  1 ~ +5V
+  2 ~ GND
+part C9 C 100nF  # U6
+  1 ~ +5V
+  2 ~ GND
+part C10 C 100nF  # U7
+  1 ~ +5V
+  2 ~ GND
+part C11 C 100nF  # U8
+  1 ~ +5V
+  2 ~ GND
+part C12 C 100nF  # U9
+  1 ~ +5V
+  2 ~ GND
+part C13 C 100nF  # U10
+  1 ~ +5V
+  2 ~ GND
+part C14 C 100nF  # U11
+  1 ~ +5V
+  2 ~ GND
+part C15 C 100nF  # U12
+  1 ~ +5V
+  2 ~ GND
+part C16 C 100nF  # U13
+  1 ~ +5V
+  2 ~ GND
+part C17 C 100nF  # U14
+  1 ~ +3V3_PI
+  2 ~ GND
+part C18 C 100nF  # U15
+  1 ~ +3V3_PI
+  2 ~ GND
+part C19 C 100nF  # U16
+  1 ~ +3V3_PI
+  2 ~ GND
+part C20 C 100nF  # U17
+  1 ~ +5V
+  2 ~ GND
+part C21 C 100nF  # U18
+  1 ~ +5V
+  2 ~ GND
+
+# ---------------------------------------------------------------- test points (1-pin headers)
+# Rails for step 0 (TP6: step 5, the rail comes from the Pi). phi1/phi2 for step 1: never on a header.
+part TP1 TP GND
+  1 ~ GND
+part TP2 TP GND
+  1 ~ GND
+part TP3 TP +5V         # after the reverse-polarity FET: the 6.9 window is measured here
+  1 ~ +5V
+part TP4 TP +12V
+  1 ~ +12V
+part TP5 TP -5V
+  1 ~ -5V
+part TP6 TP 3V3
+  1 ~ +3V3_PI
+part TP7 TP PHI1
+  1 ~ PHI1
+part TP8 TP PHI2
+  1 ~ PHI2
+part TP9 TP WSET
+  1 ~ WSET_N            # step 4: STSTB pulse width at the 74HCT74 /PRE
+
+# ---------------------------------------------------------------- mounting holes
+# No pads. Listed so that a netlist update in Pcbnew never deletes them.
+part H1 HOLE M3
+part H2 HOLE M3
+part H3 HOLE M3
+part H4 HOLE M3

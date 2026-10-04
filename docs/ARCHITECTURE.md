@@ -269,7 +269,7 @@ The emulator CPU has one interrupt input, `interrupt(rst)`, callable from the ho
 
 ## 6. Hardware Interface
 
-The circuits the hardware build must contain. The software-visible behavior of every port is in `DEVICE_SPECS.md`. The hardware build itself is Someday; this section is the contract it must meet. Timing in this section was checked in the 2026-10 hardware-alignment pass against the MCS-80 User's Manual 98-153D (Oct 1977: 8080A p.6-3..6-5, 8224 p.6-21..6-25, 8228 p.6-32..6-36) and the TI/Nexperia 74HCT and 74LVC datasheets. Figures are datasheet worst case at tCY = 488.28 ns, with t = 0 at phi1 rising in T1, unless marked (est). Items marked **[bench]** can only be closed by measurement on the built board. Pins, levels and cycle timing of the 8080A, 8224 and 8228: `reference/8080_HARDWARE.md` (98-153B, Sep 1975 edition; its page numbers differ from 98-153D), cited as "reference N". The ROM write path (6.10) is checked against the AT28C64B datasheet, Atmel 0270L-PEEPR-2/09 (https://ww1.microchip.com/downloads/en/DeviceDoc/doc0270.pdf), cited as "AT28C64B DS" with its section numbers. Gate drive and delays in 6.10-6.11 are from TI SCLS063G (SN74HCT08) and SCLS171F (SN74HCT138), worst case at VCC 4.5 V, -40 to 85 °C.
+The circuits the hardware build must contain. The software-visible behavior of every port is in `DEVICE_SPECS.md`. This section is the contract the board must meet. It stays normative for circuits and rules; pin numbers live only in the board netlist `hw/board.net.txt`, which `tests/netlist_tests.rs` checks against this section pad by pad (`HARDWARE_BUILD.md` 2.2). Timing in this section was checked in the 2026-10 hardware-alignment pass against the MCS-80 User's Manual 98-153D (Oct 1977: 8080A p.6-3..6-5, 8224 p.6-21..6-25, 8228 p.6-32..6-36) and the TI/Nexperia 74HCT and 74LVC datasheets. Figures are datasheet worst case at tCY = 488.28 ns, with t = 0 at phi1 rising in T1, unless marked (est). Items marked **[bench]** can only be closed by measurement on the built board. Pins, levels and cycle timing of the 8080A, 8224 and 8228: `reference/8080_HARDWARE.md` (98-153B, Sep 1975 edition; its page numbers differ from 98-153D), cited as "reference N". The ROM write path (6.10) is checked against the AT28C64B datasheet, Atmel 0270L-PEEPR-2/09 (https://ww1.microchip.com/downloads/en/DeviceDoc/doc0270.pdf), cited as "AT28C64B DS" with its section numbers. Gate drive and delays in 6.10-6.11 are from TI SCLS063G (SN74HCT08) and SCLS171F (SN74HCT138), worst case at VCC 4.5 V, -40 to 85 °C.
 
 ### 6.1 Clock and CPU Support
 
@@ -290,6 +290,7 @@ RAM_WE  = MEMW
 ROM_WE  = MEMW AND A15..A12 = 1111 AND JP_WE      ; JP_WE = jumper JP-WE fitted (6.10). No OVL term.
 ```
 
+- Implementation: one ATF22V10C GAL, which also carries the 6.3-6.5 decode and drives DB0 for port 0xFF (6.5). Pinout and equations: `hw/glue.pld`; the burned fuse map `hw/glue.jed` is checked against the emulator's decode by `tests/gal_tests.rs`. All 22 signal pins are used.
 - OVL changes only during an I/O write (OUT FE) or RESET, never while MEMR is active.
 - RAM covers all of 0000-FFFF. RAM_WE has no address term, so a write to F000-FFFF lands in the RAM under the ROM and is never read back: reads of F000-FFFF always select ROM (section 4). With JP-WE open (the default) the write goes nowhere else. With JP-WE fitted it also programs the EEPROM (6.10).
 - RAM is static. It MUST keep its contents with no CPU activity for unlimited time (READY waits, RESET held), so DRAM that needs CPU-driven refresh is excluded.
@@ -318,7 +319,7 @@ Every Pi-window access holds READY low until the Pi releases it. The software co
 
 **WAIT flip-flop.** One 74HCT74 half; the other half is the overlay flip-flop (6.5). Its /Q drives the 8224 RDYIN, so READY is low while Q = 1. Q ANDed with the 8080A WAIT output is the Pi's REQ.
 
-1. **Set** asynchronously (PRE) while all of these hold: 8224 STSTB is low, RESET is inactive, the CPU-side status shows INP (D6) or OUT (D4), and the port decodes into 0x00-0x6F. Status and address are valid from 76 ns before STSTB falls (tDSS min 296 - tDD max 220) until phi2 of T2. SYNC alone MUST NOT qualify the set. SYNC has only maximum delays (tDC <= 120 ns, no minimum) against tDD <= 220 and tDA <= 200, and it falls up to 120 ns after phi2 of T2 while the bus changes to write data. A SYNC-gated set can therefore fire on a memory cycle. SYNC MAY be added as an extra term. The RESET term uses the same inverted RESET that drives the flip-flop's /CLR, for two reasons: the 8224 drives STSTB low during reset, and PRE and CLR low together give Q = /Q = 1. RDYIN MUST be low within 167 ns of STSTB falling (8224 tDRS = -167 ns) and stays low past STSTB + 217 ns (tDRH). STSTB is at least 40 ns wide, against a flip-flop PRE minimum of 20-24 ns. **[bench]** The STSTB width at PRE, after the gate path. The flip-flop MUST NOT be set from I/OR or I/OW. I/OW starts only in T_W.
+1. **Set** asynchronously (PRE) while all of these hold: 8224 STSTB is low, RESET is inactive, the CPU-side status shows INP (D6) or OUT (D4), and the port decodes into 0x00-0x6F. Status and address are valid from 76 ns before STSTB falls (tDSS min 296 - tDD max 220) until phi2 of T2. SYNC alone MUST NOT qualify the set. SYNC has only maximum delays (tDC <= 120 ns, no minimum) against tDD <= 220 and tDA <= 200, and it falls up to 120 ns after phi2 of T2 while the bus changes to write data. A SYNC-gated set can therefore fire on a memory cycle. SYNC MAY be added as an extra term. The RESET term uses the same inverted RESET that drives the flip-flop's /CLR, for two reasons: the 8224 drives STSTB low during reset, and PRE and CLR low together give Q = /Q = 1. The IN-latch enable (IN cycle below) and the port 0xFF read (6.5) carry the same NOT RESET term. RDYIN MUST be low within 167 ns of STSTB falling (8224 tDRS = -167 ns) and stays low past STSTB + 217 ns (tDRH). STSTB is at least 40 ns wide, against a flip-flop PRE minimum of 20-24 ns. **[bench]** The STSTB width at PRE, after the gate path. The flip-flop MUST NOT be set from I/OR or I/OW. I/OW starts only in T_W.
 2. **Cleared** by the rising edge of ACK (clocked, D tied low, not level-sensitive) or asynchronously by RESET. A held ACK level can never block the next set. ACK reaches CLK through two 74HCT14 Schmitt stages. REQ falls within about 100 ns of the ACK edge (est). After raising ACK, the Pi reads ACK back high, then waits at least 500 ns before it treats REQ as a new access, then lowers ACK. The Pi MUST NOT wait for REQ to go low: the next Pi-window REQ can follow about 5 us later, and a preempted Pi would miss the low and deadlock. A longer wait is always safe, because REQ stays high until ACK.
 3. **Every Pi-window cycle inserts at least one T_W**, whatever level ACK is at. REQ is gated by the 8080A WAIT output, so the Pi cannot see or ACK a request before T_W. The 8080 leaves T_W only after an ACK edge or RESET. T3 starts 0.4-0.9 us after the ACK edge (8224 resynchronization). Every Pi-window IN or OUT costs 10 T-states plus N >= 1 T_W.
 4. **No timeout.** A dead or absent Pi stalls the 8080 in T_W until RESET. An indefinite wait is allowed (MCS-80 p.2-5).
@@ -336,21 +337,21 @@ Every Pi-window access holds READY low until the Pi releases it. The software co
 4. returns D0-D7 to input;
 5. raises ACK.
 
-The read-backs guarantee the 74HCT374 tsu 25 ns, th 10 ns and tw 20 ns. Back-to-back GPIO writes do not: on a Pi 4 they can land about 4 ns apart. The latch outputs drive the system data bus (DB0-DB7, never the 8080-side D0-D7) while I/OR is active and the port decodes into the window. The enable MUST NOT use Q or REQ, because the 8080 samples in T3, after ACK has cleared Q. No line is ever driven from both sides. The Pi drives D0-D7 only while REQ is high with DIR = IN, which lies inside I/OR active, when the data 74LVC245A is disabled. It releases them before ACK, while the 8080 is still frozen in T_W.
+The read-backs guarantee the 74HCT374 tsu 25 ns, th 10 ns and tw 20 ns. Back-to-back GPIO writes do not: on a Pi 4 they can land about 4 ns apart. The latch outputs drive the system data bus (DB0-DB7, never the 8080-side D0-D7) while I/OR is active, RESET is inactive and the port decodes into the window. The NOT RESET term keeps the latch off DB if the 8228 asserts /I/OR during RESET while the floated address ramps through the window (6.13). The enable MUST NOT use Q or REQ, because the 8080 samples in T3, after ACK has cleared Q. No line is ever driven from both sides. The Pi drives D0-D7 only while REQ is high with DIR = IN, which lies inside I/OR active, when the data 74LVC245A is disabled. It releases them before ACK, while the 8080 is still frozen in T_W.
 
 **Signals at the Pi (20 GPIO):**
 
 | Signal | Count | Pi direction | Path | BCM GPIO |
 |--------|-------|--------------|------|----------|
 | A0-A6 | 7 | in | 74LVC245A (A7 is always 0 in the window) | 4-10 |
-| D0-D7 | 8 | in on OUT cycles, out to the IN latch on IN cycles | in: 74LVC245A; out: 220-330 ohm series, then 74HCT374 inputs | 20-27 |
+| D0-D7 | 8 | in on OUT cycles, out to the IN latch on IN cycles | in: 74LVC245A B outputs through a 330 ohm series array; out: the 74HCT374 inputs, which share the node of the Pi pins (the array sits between that node and the 245) | 20-27 |
 | DIR (/I/OR) | 1 | in | 74LVC245A | 11 |
 | REQ (Q AND WAIT) | 1 | in | 74LVC245A | 12 |
 | RESET | 1 | in | 74LVC245A | 13 |
 | ACK | 1 | out | 74HCT14 Schmitt input | 16 |
 | LATCH | 1 | out | 74HCT374 CLK (accepts 3.3 V) | 17 |
 
-The Pi's GPIO runs at 3.3 V and is not 5 V tolerant. Every 5 V signal reaches it through a 74LVC245A powered from the Pi's 3V3 pin. Do not use a 74LVCH245A: its bus-hold fights the Pi on D0-D7. Every signal sits in GPLEV0, so one read is an atomic snapshot. D0-D7 sit in GPFSEL2, so turning the data lines around takes one register write.
+The Pi's GPIO runs at 3.3 V and is not 5 V tolerant. Every 5 V signal reaches it through a 74LVC245A powered from the Pi's 3V3 pin. Do not use a 74LVCH245A: its bus-hold fights the Pi on D0-D7. Every signal sits in GPLEV0, so one read is an atomic snapshot. D0-D7 sit in GPFSEL2, so turning the data lines around takes one register write. The 330 ohm array limits the current if the Pi drives D0-D7 while the data 74LVC245A is enabled (a daemon fault, or a jig on the header), and the Pi's read-back still sees the latch inputs, which sit on its own node. On OUT cycles it adds a time constant of about 10 ns (est: 330 ohm into the Pi pin, the 74HCT374 input and the ribbon, about 30 pF), well inside the >= 90 ns by which OUT data leads REQ (above).
 
 **Power and boot independence.** The 8080 board and the Pi have separate supplies, grounds joined at the header, and may be powered in either order, provided that:
 - every 74LVC245A runs from the Pi's 3V3, so an unpowered Pi leaves them in Ioff and is never back-powered;
@@ -363,24 +364,26 @@ The Pi's GPIO runs at 3.3 V and is not 5 V tolerant. Every 5 V signal reaches it
 
 ### 6.5 Overlay Glue (0xFE, 0xFF)
 
-One 74HCT74 half; the other half is the WAIT flip-flop (6.4). /PRE = NOT RESET: the 8224 RESET is active high, and the same inverter drives the WAIT flip-flop's /CLR and the WAIT set term. /CLR = NOT (I/OW AND port = 0xFE), with a full 8-bit decode; the data bus is not decoded. A tri-state gate puts Q onto system DB0 while I/OR is active for port 0xFF. Q is OVL in the memory decode (6.2). Port semantics: `DEVICE_SPECS.md` (System Control).
+One 74HCT74 half; the other half is the WAIT flip-flop (6.4). /PRE = NOT RESET: the 8224 RESET is active high, and the same inverter drives the WAIT flip-flop's /CLR, the WAIT set term and the IN-latch enable (6.4). /CLR = NOT (I/OW AND port = 0xFE), with a full 8-bit decode; the data bus is not decoded. Q is OVL in the memory decode (6.2). Port semantics: `DEVICE_SPECS.md` (System Control).
+
+**Port 0xFF read.** A GAL I/O pin drives system DB0 directly: output = Q, output enable = I/OR AND port = 0xFF (full 8-bit decode) AND NOT RESET, high impedance otherwise. DB1-DB7 are not driven. /I/OR to DB0 valid is at most 15 ns (tEA, ATF22V10C -15 grade, 0735U 4.3), inside the 118 ns read budget (6.2). The NOT RESET term keeps the pin off DB if the 8228 asserts /I/OR during RESET, while the floated address reads port 0xFF and the ROM may drive DB (6.13).
 
 ### 6.6 Reset
 
 - RESIN (8224 pin 2, active low, Schmitt input) is held low until every rail is in regulation and the -5 V and +12 V ramps are complete. The 8224 only synchronizes RESIN to phi2; it does not stretch it. The reset source therefore guarantees the 8080A's minimum of 3 clocks. Source and button: decision RESET-SOURCE (`HARDWARE_BUILD.md`, Decisions).
 - The 8224 RESET output (pin 1, active high, VOH 3.6 V at -100 uA) has three loads, all CMOS inputs:
   - the 8080 RESET (pin 12), directly;
-  - one 74HCT inverter, which drives the overlay flip-flop /PRE, the WAIT flip-flop /CLR and the WAIT set term (6.4);
+  - one 74HCT inverter, which drives the overlay flip-flop /PRE, the WAIT flip-flop /CLR and one GAL input: the WAIT set term, the IN-latch enable and the port 0xFF read (6.4, 6.5);
   - the Pi's RESET GPIO, through a 74LVC245A.
 - Clearing the WAIT flip-flop is required. Without it, a reset taken while the Pi is unresponsive leaves READY low, and the first opcode fetch at 0000 hangs.
 - The 8224 also drives STSTB low during reset. The NOT RESET term in the WAIT set blocks it. **[bench]** REQ stays low across 100 consecutive resets.
 - **The Pi on RESET.**
   - It requests RESET through the gpio character device with both-edge events. The kernel latches the edge, so a pulse of any length is seen, even during an fsync. It also reads the RESET level in every GPIO snapshot.
-  - Before every ACK it checks that RESET is not present and REQ is still high, in a GPIO read made after the device operation. It also asks the kernel's edge latch, but only when more than 1 ms has passed since it last asked. That is enough because of the reset source: a DS1813 (decision RESET-SOURCE) holds RESET for at least 150 ms after any assertion, the button and TEST_RESET included, so no pulse can start and end unseen within 1 ms of the previous check. A pulse that came and went shows as REQ low, since only ACK or RESET clears the WAIT flip-flop. If any check finds a RESET, the Pi drops the request without raising ACK. A reset source that can make sub-millisecond pulses would require the latch to be asked before every ACK. Detail: `PI_DAEMON.md` 4-5.
+  - Before every ACK it checks that RESET is not present and REQ is still high, in a GPIO read made after the device operation. It also asks the kernel's edge latch, but only when more than 1 ms has passed since it last asked. That is enough because of the reset source: a DS1813 (decision RESET-SOURCE) holds RESET for at least 100 ms after any assertion (tRST and tPBRST 100 ms minimum, 150 typical, DS1813 AC table), the button and TEST_RESET included, so no pulse can start and end unseen within 1 ms of the previous check. A pulse that came and went shows as REQ low, since only ACK or RESET clears the WAIT flip-flop. If any check finds a RESET, the Pi drops the request without raising ACK. A reset source that can make sub-millisecond pulses would require the latch to be asked before every ACK. Detail: `PI_DAEMON.md` 4-5.
   - When RESET is next low, it returns every device to its power-on state (`DEVICE_SPECS.md` rule 2.8), and only then serves a REQ. The 8080's first Pi-window access after reset waits under READY until then. This costs zero ROM bytes.
   - A bouncing button can produce several RESET pulses. Each one is a full device reset.
 - A late ACK for a cycle cut off by reset is never raised. One residual race is accepted: the bus thread is descheduled between its last RESET check and the ACK write for longer than the RESET pulse plus the boot path to the first Pi-window access (about 0.12 ms).
-- Nothing else resets the machine, except the optional Pi TEST_RESET (decision TEST-RESET), which pulls the same RESIN node.
+- Nothing else resets the machine, except the optional Pi TEST_RESET (decision TEST-RESET), which pulls the same RESIN node through a 2N3904: collector on RESIN, emitter to GND, base from BCM 18 through 4.7 kohm. At the Pi's minimum VOH of 2.6 V (6.7, INT) and VBE(sat) <= 0.85 V (onsemi 2N3904) that is at least 0.37 mA of base current, against at most 1.75 mA of collector current (the DS1813 pull-up, 5.25 V into 3.5 kohm minimum, plus the 8224 IF of 0.25 mA, reference 11.6), so the transistor saturates. With no Pi the base floats behind 4.7 kohm and the transistor stays off. A test rig that drives TEST_RESET MUST hold each pulse for at least the DS1813 pushbutton detect time tPB, or the full reset time after the pulse, which the 1 ms gate above relies on, is not guaranteed. tPB is 1 us minimum in DS1813 rev 022306; an older Dallas edition says 1 ms in its text, so the rig holds at least 1 ms (`PI_DAEMON.md` 15).
 
 ### 6.7 Other CPU Pins
 
@@ -419,6 +422,7 @@ The console transport between the terminal and the Pi (UART with RTS/CTS, USB ga
 - No 8080A pin or supply may go more than 0.3 V below VBB (8080A absolute maximum). VBB has a Schottky clamp to GND (anode VBB, cathode GND) at the CPU socket. **[bench]** At bring-up, scope VBB single-shot at power-up and power-down: it MUST stay at or below +0.3 V relative to GND.
 - +12 V MUST never exceed 12.6 V, including at turn-on. The 8224 VDD absolute maximum is 13.5 V.
 - If -5 V comes from a charge pump fed by +5 V, VBB tracks VCC. In that case +5 V MUST be held at 4.85-5.15 V at the board. How the rails are generated is decision POWER (`HARDWARE_BUILD.md`, Decisions).
+- **5 V input.** A 2.1 mm centre-positive DC jack feeds the board through a P-channel MOSFET reverse-polarity switch: drain on the jack's centre pin, source on the board +5 V, gate to GND through 10 kohm. With the right polarity the body diode conducts until the channel enhances at VGS = -VIN. With the plug reversed VGS is 0 and the body diode is reverse-biased, so no current flows and no rail goes negative. The part MUST be a logic-level P-MOSFET with RDS(on) specified at VGS = -4.5 V or less and a VGS rating above 5.25 V, so that no gate zener is needed. Fitted: Vishay SUP53P06-20, RDS(on) <= 25 mohm at VGS = -4.5 V, ID = -20 A, 25 °C, VGS +/-20 V (Vishay document 68633 rev C). At about 1 A (the +5 V load above plus about 0.25 A into the +12 V boost, est) it drops at most 25 mV, about 40 mV hot (est: RDS(on) rises with temperature). The 4.85-5.15 V window is measured at the board, after the FET (TP3), so the adapter MUST deliver at least about 4.9 V at the jack under load. **[bench]** +5 V at TP3 and at the jack, board loaded.
 - Decoupling: 0.1 uF per IC per rail, plus 10 uF bulk per rail.
 - The Pi has its own supply (6.4, Power and boot independence).
 
@@ -428,18 +432,16 @@ Decided 2026-10-03 (Mike). The circuit that lets the 8080 reprogram its own ROM.
 
 **Circuit.** One 74HCT138 decodes the ROM range during MEMW. Jumper JP-WE connects its output to the EEPROM:
 
-| 74HCT138 pin | Connection |
-|--------------|------------|
-| 1 (A) | A12 (8080A pin 37) |
-| 2 (B) | A13 (8080A pin 38) |
-| 3 (C) | A14 (8080A pin 39) |
-| 6 (G1) | A15 (8080A pin 36) |
-| 4 (/G2A) | 8228 /MEMW (pin 26) |
-| 5 (/G2B) | GND |
-| 7 (/Y7) | JP-WE pin 1, and LA-C (6.12) |
-| 9-15 (/Y6-/Y0) | unconnected |
+| 74HCT138 input or output | Connection |
+|--------------------------|------------|
+| A, B, C | A12, A13, A14 |
+| G1 | A15 |
+| /G2A | 8228 /MEMW |
+| /G2B | GND |
+| /Y7 | JP-WE, and LA-C (6.12) |
+| /Y6-/Y0 | unconnected |
 
-JP-WE pin 2 is AT28C64B /WE (pin 27), which has a 10 kohm pull-up to +5 V.
+The other side of JP-WE is the AT28C64B /WE, which has a 10 kohm pull-up to +5 V. Pin numbers: `hw/board.net.txt` (U12, JP1), checked against this list by `tests/netlist_tests.rs`.
 
 - /Y7 is low only while A15-A12 = 1111 and /MEMW is low (SCLS171F Table 7-1). With JP-WE fitted, ROM /WE follows /Y7: that is ROM_WE in 6.2. /Y7 then also drives the pull-up, 0.5 mA, inside the 4 mA at which HCT output levels are specified.
 - The MEMW edges reach /WE through one enable path, at most 42 ns (SCLS171F 5.5). Address changes cannot glitch /WE: the address is stable from 688 ns before /WR falls until at least 118 ns after it rises (tAW, tWA, reference 3.5), and /MEMW is inactive outside that window.
@@ -519,7 +521,7 @@ Decided 2026-10-03 (Mike). Three 2x10 0.1-inch headers carry the bus to an exter
 - LA-B: CPU-side data and the CPU timing signals.
 - LA-C: system strobes, the WAIT and overlay flip-flops, the Pi handshake, the ROM write decode and HALT.
 
-Each header has 16 signals on pins 1-16 in channel order and GND on pins 17-20. Pin order, the analyzer and sigrok decoding: `HARDWARE_BUILD.md` 3.1.
+Each header has 16 signals in channel order and GND on four pins. Channel order, the analyzer and sigrok decoding: `HARDWARE_BUILD.md` 3.1; pin numbers: `hw/board.net.txt`.
 
 1. **Logic levels only.** phi1 and phi2 (8224 pins 11, 10) swing to >= 9.4 V (reference 11.6) and MUST NOT be on a header. The clock reference is the 8224 phi2 (TTL) output (pin 6). 8228 /INTA (pin 23) sits on the +12 V RST 7 strap (6.7) and MUST NOT be on a header. ACK and LATCH are 3.3 V levels (6.4). Every other signal is a 5 V level.
 2. **Direct taps, except CPU-side D0-D7,** which go through 1 kohm series resistors at the tap (one isolated 8-resistor array). On reads the 8228 drives the CPU side. Its VOH (>= 3.6 V) is characterized only at -10 uA, and its tRD of 30 ns, which is part of the 118 ns memory read budget (6.2), only at 25 pF (reference 12.6, 12.7). D4 and D6 already carry more than that before any probe: the 8080A pin (COUT <= 20 pF on a bidirectional pin, reference 3.2), the GAL tap (CIN <= 8 pF, ATF22V10C) and 5-10 pF of trace, 33-38 pF (est). That is a pre-existing risk (`HARDWARE_BUILD.md` 6); the resistor reduces what the probe adds to it, and bring-up step 3 must pass with the analyzer attached. The cost is about 33 ns of extra edge delay at the analyzer (2.2 x 1 kohm x 15 pF, est), which the sampling rules in `HARDWARE_BUILD.md` 3.1 allow for.
@@ -530,7 +532,7 @@ Each header has 16 signals on pins 1-16 in channel order and GND on pins 17-20. 
 
 ### 6.13 Bus Pull-Ups
 
-Decided 2026-10-03 (Mike). 10 kohm pull-up SIPs hold the address bus and the system data bus when nothing drives them. The 8080A floats A0-A15 and D0-D7 in the halt state (reference 9), during RESET (reference 10) and in hold (reference 8; HOLD is tied low in v1, 6.7). Without pull-ups every CMOS input on those nets then floats: RAM, ROM, the 74HCT138 and 74HCT14, and the 74LVC245As to the Pi. No strobe is active, so nothing goes wrong, but floating inputs cost supply current and let decode outputs toggle.
+Decided 2026-10-03 (Mike). 10 kohm pull-up SIPs hold the address bus and the system data bus when nothing drives them. The 8080A floats A0-A15 and D0-D7 in the halt state (reference 9), during RESET (reference 10) and in hold (reference 8; HOLD is tied low in v1, 6.7). Without pull-ups every CMOS input on those nets then floats: RAM, ROM, the 74HCT138 and 74HCT14, and the 74LVC245As to the Pi. Floating inputs cost supply current and let decode outputs toggle. In halt and hold no strobe is active. Whether the 8228 read strobes stay inactive through RESET is unresolved: reference 14 item 7 says DBIN-gated in its text, while its waveform follows STSTB, which the 8224 holds low in reset. If /MEMR or /I/OR is active then, the NOT RESET terms on the IN-latch enable (6.4) and the port 0xFF read (6.5) keep both off DB, so only the memory the floated address selects can drive it.
 
 | Net | Pull-up | Part |
 |-----|---------|------|
@@ -538,7 +540,7 @@ Decided 2026-10-03 (Mike). 10 kohm pull-up SIPs hold the address bus and the sys
 | System DB0-DB7 (8228 side) | 10 kohm to +5 V | one 9-pin bused SIP, in a socket (Bring-up below) |
 | CPU-side D0-D7 | none: it MUST NOT have a pull-up | |
 
-**Sources.** 8080A and 8228 from reference 3.2, 3.3, 12.6 and 12.7 (MCS-80 UM p.5-15, 5-17 and 5-11 / PDF p.77, 79 and 73). AS6C62256: Alliance datasheet v1.0 (Feb 2007), DC and test-load tables, p.3. AT28C64B DS 8 (p.5) and 12 (p.7). ATF22V10C: Atmel 0735U-PLD-7/10, 4.1 (p.4) and 8 (p.8). TI SCLS005E (SN74HCT374) 5.4 p.5, SCLS069G (SN74HCT125) 5.4 p.5, SCAS218X (SN74LVC245A) 7.3 p.5 and 7.5 p.6. A 10 kohm 2% pull-up passes at most (5.25 - 0.45 V) / 9.8 kohm = 0.49 mA into a low output. Worst case unless marked (est).
+**Sources.** 8080A and 8228 from reference 3.2, 3.3, 12.6 and 12.7 (MCS-80 UM p.5-15, 5-17 and 5-11 / PDF p.77, 79 and 73). AS6C62256: Alliance datasheet v1.0 (Feb 2007), DC and test-load tables, p.3. AT28C64B DS 8 (p.5) and 12 (p.7). ATF22V10C: Atmel 0735U-PLD-7/10, 4.1 (p.4), 4.3 (p.5) and 8 (p.8). TI SCLS005E (SN74HCT374) 5.4 p.5, SCAS218X (SN74LVC245A) 7.3 p.5 and 7.5 p.6. A 10 kohm 2% pull-up passes at most (5.25 - 0.45 V) / 9.8 kohm = 0.49 mA into a low output. Worst case unless marked (est).
 
 **Address bus (A0-A15).**
 - The 8080A sinks 1.9 mA at VOL 0.45 V and sources 150 uA at VOH 3.7 V (reference 3.2).
@@ -546,8 +548,8 @@ Decided 2026-10-03 (Mike). 10 kohm pull-up SIPs hold the address bus and the sys
 - High: the pull-up supplies current toward VCC, so it adds to the 150 uA source instead of using it.
 
 **System data bus (DB0-DB7).**
-- Drivers and their guaranteed sink: the 8228 system side 10 mA at 0.45 V (writes); AS6C62256 2 mA at 0.4 V; AT28C64B 2.1 mA at 0.40 V; 74HCT374 (IN latch) and 74HCT125 (DB0) 6 mA at 0.33 V (-40 to 85 °C).
-- Low: the pull-up's 0.49 mA, the 8228 DB input's 0.25 mA (IF, "all other inputs", reference 12.7) and the off-state leakage of the idle parts, at most 32 uA (ROM 10, 74LVC245A 10, 74HCT374 and 74HCT125 5 each, each RAM 1), total 0.77 mA. The weakest driver, the SRAM, keeps 1.23 mA of its 2 mA.
+- Drivers and their guaranteed sink: the 8228 system side 10 mA at 0.45 V (writes); AS6C62256 2 mA at 0.4 V; AT28C64B 2.1 mA at 0.40 V; 74HCT374 (IN latch) 6 mA at 0.33 V (-40 to 85 °C); ATF22V10C (DB0, 6.5) 16 mA at 0.5 V (0735U 4.1).
+- Low: the pull-up's 0.49 mA, the 8228 DB input's 0.25 mA (IF, "all other inputs", reference 12.7) and the off-state leakage of the idle parts, at most 37 uA (ROM 10, 74LVC245A 10, GAL 10 on DB0, 74HCT374 5, each RAM 1), total 0.78 mA. The weakest driver, the SRAM, keeps 1.22 mA of its 2 mA. DB0 also carries the GAL pin-keeper, which a driver overdrives with 40 uA (typ, no max, 0735U 8), inside that margin.
 - High: the pull-up only helps. It lifts the 8228's TTL high (VOH 2.4 V at -1 mA) toward VCC, which adds margin against the AS6C62256 VIH of 2.4 V (`HARDWARE_BUILD.md` 6).
 
 **Why not CPU-side D0-D7.**
@@ -555,12 +557,12 @@ Decided 2026-10-03 (Mike). 10 kohm pull-up SIPs hold the address bus and the sys
 - **Nothing there needs it.** Its only CMOS inputs are the GAL's D4 and D6, and the ATF22V10C holds every input and I/O pin with a pin-keeper (0735U 8). The 8228's D inputs are bipolar. The analyzer sits behind 1 kohm (6.12).
 
 **Timing.**
-- **Driven edges.** On a falling edge the driver also sinks the pull-up's current (<= 0.49 mA). That is less than the DC load each part's own A.C. figures are measured with: 8080A about 1.8 mA (2.1 kohm and a diode to +5 V, p.5-17 note 2), 8228 system side 500 ohm to VCC (p.5-11 note 2), AT28C64B 1.8 kohm to 5 V (DS 12), AS6C62256 one TTL load at 2 mA (p.3). The 74HCT374 and 74HCT125 sink 0.77 mA of their 6 mA (est: TI specifies their delays into 50 pF only). Rising edges gain the pull-up's current. tDA, tDD, the 118 ns read budget (6.2) and the 6.10 write timing all stand.
-- **Undriven lines** rise with tau = 10 kohm x C: about 0.75 us on the address bus (<= 75 pF, 6.12 rule 3) and 0.8 us on DB (est, about 80 pF: 8228 15, ROM 12, two RAMs 16, the 374, 125 and 245 about 25, trace 10). From 0.45 V a line crosses 2.0 V after about 0.4 tau and reaches 4.5 V after about 2.2 tau (est). A floated bus therefore reads FFFF or FF within about 2 us.
+- **Driven edges.** On a falling edge the driver also sinks the pull-up's current (<= 0.49 mA). That is less than the DC load each part's own A.C. figures are measured with: 8080A about 1.8 mA (2.1 kohm and a diode to +5 V, p.5-17 note 2), 8228 system side 500 ohm to VCC (p.5-11 note 2), AT28C64B 1.8 kohm to 5 V (DS 12), AS6C62256 one TTL load at 2 mA (p.3). The 74HCT374 sinks 0.78 mA of its 6 mA (est: TI specifies its delays into 50 pF only), and the GAL 0.78 mA of its 16 mA on DB0. Rising edges gain the pull-up's current. tDA, tDD, the 118 ns read budget (6.2) and the 6.10 write timing all stand.
+- **Undriven lines** rise with tau = 10 kohm x C: about 0.75 us on the address bus (<= 75 pF, 6.12 rule 3) and 0.8 us on DB (est, about 80 pF: 8228 15, ROM 12, two RAMs 16, the 374, GAL and 245 about 25, trace 10). From 0.45 V a line crosses 2.0 V after about 0.4 tau and reaches 4.5 V after about 2.2 tau (est). A floated bus therefore reads FFFF or FF within about 2 us.
 - **Slow ramps.** Through the 74LVC245A input threshold that ramp is about 200 ns/V (est), outside the part's 10 ns/V input transition rate (SCAS218X 7.3). That is not new: DB is undriven between bus cycles in normal operation, whenever no memory, write cycle, IN latch or overlay read drives it, and without a pull-up it drifts slower still and can stop at the threshold. The Pi never uses a 245 output then: it reads only while REQ is high, when the address and, on OUT, DB are driven (6.4). On A12-A15 the same ramp (halt, RESET, hold) is also slower than the 74HCT138's 500 ns maximum input transition time (est, 10-90 % is 2.2 tau, about 1.65 us; SCLS171F 5.2). That is harmless: /G2A is /MEMW, inactive then, so every 138 output stays high (6.10), and without the pull-ups those inputs would float and could stop at the threshold, which is worse. The 74HCT14 on A15 is a Schmitt input and has no such limit.
 
 **Consequences.**
-- In halt, RESET and hold the address bus reads FFFF and DB reads FF. Nothing samples them then: no strobe is active, the WAIT set needs /STSTB low and NOT RESET (6.4 rule 1), and port FF is outside the Pi window.
+- In halt, RESET and hold the address bus reads FFFF and DB reads FF, unless the ROM drives DB during RESET (above). Nothing samples them then: the WAIT set needs /STSTB low and NOT RESET (6.4 rule 1), port FF is outside the Pi window, and in halt and hold no strobe is active.
 - An undriven DB drifts to FF. An `IN` from a port nothing drives (70-FD, FE) needs its data on DB about 1 us after the memory released DB in the instruction's M2 (est), so it reads FF in practice. This is informative only. `DEVICE_SPECS.md` 2.4 still says the value is undefined, and software MUST NOT depend on FF.
 - **Bring-up.** The DB SIP and the 2.2 kohm bring-up pull-down (`HARDWARE_BUILD.md` 3, step 2) MUST NOT be fitted together. The pull-down alone holds an undriven DB line at <= 0.55 V (the 8228's 0.25 mA IF into 2.2 kohm). With the 10 kohm pull-up added it sits at about 1.4 V (est), above the 8228's minimum threshold of 0.8 V, so the free-run no longer reads NOPs. The DB SIP is therefore socketed: out for step 2 and for any CPU screened that way, in from step 3 on. The address SIPs stay fitted throughout.
 - **Power.** All 24 lines low draw at most 13 mA from +5 V: 24 x 5.25 V / 9.8 kohm, with the low at 0 V (6.9).
