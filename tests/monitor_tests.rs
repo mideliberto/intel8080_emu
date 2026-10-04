@@ -2048,6 +2048,27 @@ fn rpn_matches_i128() {
     assert_eq!(m.run("q"), "");
 }
 
+#[test]
+fn example_sieve() {
+    boot().play("example_sieve");
+}
+
+#[test]
+fn sieve_matches_a_model() {
+    // The expected output from an independent model, not from the emulator: trial division,
+    // a different algorithm from the program's sieve. pi(8192) = 1028 is published (OEIS A007053).
+    let primes: Vec<u32> = (2..8192u32).filter(|&n| (2..n).take_while(|d| d * d <= n).all(|d| n % d != 0)).collect();
+    assert_eq!(primes.len(), 1028);
+    let last: Vec<String> = primes[primes.len() - 10..].iter().map(|p| p.to_string()).collect();
+    let want = format!("{} primes below 8192\\r\\nLast ten: {}\\r\\nSum: {}\\r\\n",
+        primes.len(), last.join(" "), primes.iter().sum::<u32>());
+    let mut m = boot();
+    for record in std::fs::read_to_string("examples/sieve.hex").unwrap().lines() {
+        m.run(record);
+    }
+    assert_eq!(m.run("G 0100"), want);
+}
+
 /// A booted monitor with examples/burn.hex pasted and `image` at 1000, its default source.
 fn burner(image: &[u8]) -> Mon {
     let mut m = boot();
