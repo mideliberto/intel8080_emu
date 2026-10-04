@@ -7,7 +7,7 @@
 #   <pad> <pinname> <net>          one line per pad, every pad of the footprint exactly once
 # <net> NC = explicitly unconnected. '~' as <pinname> only for types whose table has no names.
 # Rails: GND +5V +12V -5V +3V3_PI +5V_IN (the jack side of the reverse-polarity FET).
-# Active-low nets end in _N. Values are generic part names; order codes live in the parts order.
+# Active-low nets end in _N. Values are generic part names; order codes live in docs/PARTS_ORDER.md.
 
 # ---------------------------------------------------------------- CPU core (6.1, 6.7)
 part U1 8080A 8080A

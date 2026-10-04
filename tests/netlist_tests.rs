@@ -12,6 +12,7 @@
 // The test also writes the KiCad netlist, reads it back and compares it with the committed
 // hw/board.kicad.net (the file Pcbnew imports), smoke-tests the KiCad project files, and checks
 // hw/board.kicad_pcb against the netlist once the board has footprints (it skips until then).
+// docs/PARTS_ORDER.md is checked against the netlist too: every refdes on exactly one order line.
 
 use intel8080_emu::pi::{ACK, A_SHIFT, DIR, D_SHIFT, LATCH, PINS, REQ, RESET};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -22,6 +23,7 @@ const KICAD_NET: &str = include_str!("../hw/board.kicad.net");
 const PCB: &str = include_str!("../hw/board.kicad_pcb");
 const DRU: &str = include_str!("../hw/board.kicad_dru");
 const PRO: &str = include_str!("../hw/board.kicad_pro");
+const PARTS_ORDER: &str = include_str!("../docs/PARTS_ORDER.md");
 
 const RAILS: [&str; 6] = ["GND", "+5V", "+12V", "-5V", "+3V3_PI", "+5V_IN"];
 /// TEST_RESET (decision PI-GPIO). Not in src/pi: v1 never drives it (PI_DAEMON 15).
@@ -1145,6 +1147,69 @@ fn pcb_check(pcb: &PcbParts, parts: &[Part], types: &HashMap<&'static str, Type>
     errs
 }
 
+// ---------------------------------------------------------------- parts order
+
+/// docs/PARTS_ORDER.md against the netlist (decision "parts set", PARTS_ORDER 1): in every table
+/// whose first column is Refs, each netlist refdes sits in exactly one Refs cell, every Refs entry
+/// is a netlist refdes, Need is the refdes count and Order is at least that. '-' = no refdes.
+fn order_check(order: &str, netlist: &str) -> Vec<String> {
+    let (parts, _) = parse(netlist);
+    let board: BTreeSet<String> = parts.iter().map(|p| p.r.clone()).collect();
+    let mut lines_of: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let mut errs = Vec::new();
+    let mut cols: Option<(usize, usize)> = None; // Need, Order
+    for (i, line) in order.lines().enumerate() {
+        let Some(row) = line.trim().strip_prefix('|') else {
+            cols = None;
+            continue;
+        };
+        let cells: Vec<&str> = row.trim_end_matches('|').split('|').map(str::trim).collect();
+        if cells[0] == "Refs" {
+            let at = |h: &str| cells.iter().position(|c| *c == h);
+            cols = at("Need").zip(at("Order"));
+            if cols.is_none() {
+                errs.push(format!("ORD line {}: Refs table without Need and Order", i + 1));
+            }
+            continue;
+        }
+        let Some((need, ord)) = cols else { continue };
+        if cells[0].chars().all(|c| c == '-' || c == ':') {
+            continue; // separator row, or a line that serves no refdes
+        }
+        let mut refs = Vec::new();
+        for item in cells[0].split(',').map(str::trim) {
+            let (a, b) = item.split_once('-').unwrap_or((item, item));
+            let ((pa, na, ra), (pb, nb, rb)) = (nat(a), nat(b));
+            if pa.is_empty() || pa != pb || !ra.is_empty() || !rb.is_empty() || na > nb {
+                errs.push(format!("ORD line {}: bad Refs entry '{item}'", i + 1));
+                continue;
+            }
+            refs.extend((na..=nb).map(|n| format!("{pa}{n}")));
+        }
+        let num = |c: usize| cells.get(c).and_then(|v| v.parse::<usize>().ok());
+        match (num(need), num(ord)) {
+            (Some(n), Some(o)) if n == refs.len() && o >= n => {}
+            (n, o) => errs.push(format!("ORD line {}: {} refs, Need {n:?}, Order {o:?}", i + 1, refs.len())),
+        }
+        for r in refs {
+            lines_of.entry(r).or_default().push(i + 1);
+        }
+    }
+    for r in &board {
+        match lines_of.get(r).map(Vec::len) {
+            Some(1) => {}
+            None => errs.push(format!("ORD {r}: on no order line")),
+            Some(_) => errs.push(format!("ORD {r}: on order lines {:?}", lines_of[r])),
+        }
+    }
+    for (r, at) in &lines_of {
+        if !board.contains(r) {
+            errs.push(format!("ORD lines {at:?}: {r} is not in hw/board.net.txt"));
+        }
+    }
+    errs
+}
+
 // ---------------------------------------------------------------- tests
 
 #[test]
@@ -1243,6 +1308,34 @@ fn kicad_pcb_matches_netlist() {
     let (parts, _) = parse(NETLIST);
     let errs = pcb_check(&pcb, &parts, &types());
     assert!(errs.is_empty(), "hw/board.kicad_pcb:\n{}", errs.join("\n"));
+}
+
+#[test]
+fn parts_order_covers_the_netlist() {
+    let errs = order_check(PARTS_ORDER, NETLIST);
+    assert!(errs.is_empty(), "docs/PARTS_ORDER.md:\n{}", errs.join("\n"));
+
+    // Each edit of the order (anchor, replacement), or of the netlist, must raise an error.
+    let order_mutants: &[(&str, &str)] = &[
+        ("| U18 |", "| - |"),             // a refdes on no line
+        ("| U17 |", "| U17, U18 |"),      // on two lines (and Need wrong)
+        ("| C1-C21 |", "| C1-C22 |"),     // C22 twice, Need wrong
+        ("| J2-J4 | 2x10 shrouded box header, 2.54 mm | Wurth 61202021621 | 710-61202021621 (confirm) | 3 | 3 |",
+         "| J2-J4 | 2x10 shrouded box header, 2.54 mm | Wurth 61202021621 | 710-61202021621 (confirm) | 3 | 2 |"),
+        ("| H1-H4 |", "| H1-H5 |"),       // a refdes the board does not have
+    ];
+    let mut survived = Vec::new();
+    for (anchor, repl) in order_mutants {
+        assert_eq!(PARTS_ORDER.matches(anchor).count(), 1, "order anchor {anchor:?}");
+        if order_check(&PARTS_ORDER.replacen(anchor, repl, 1), NETLIST).is_empty() {
+            survived.push(format!("order edit {anchor:?} -> {repl:?}"));
+        }
+    }
+    let added = NETLIST.replace("part H4 HOLE M3", "part H4 HOLE M3\npart H5 HOLE M3");
+    if order_check(PARTS_ORDER, &added).is_empty() {
+        survived.push("netlist part H5 not on any order line".to_string());
+    }
+    assert!(survived.is_empty(), "survived: {survived:?}");
 }
 
 #[test]
