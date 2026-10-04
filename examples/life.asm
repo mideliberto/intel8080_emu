@@ -11,8 +11,8 @@
 ; and the cell is alive. The new grid goes to NXT, then is copied to CUR.
 ; The program and its data use 0100-081F only, so it runs under the RAM test
 ; build too.
-; Stresses: bulk memory reads and writes (about 8.7K data accesses to CUR, NXT
-; and S a generation, 1.1M over the run), 16-bit pointer arithmetic (DAD H as a
+; Stresses: bulk memory reads and writes (about 7.2K data accesses to CUR, NXT
+; and S a generation, 0.92M over the run), 16-bit pointer arithmetic (DAD H as a
 ; shift, INX, LDAX/STAX, INR/DCR of a pointer's high byte), wrap by masking
 ; (ANI), ADD M sums, the flags CPI/DCR/SUB leave for the branches, and one
 ; long G (the step budget in the tests is 30M cycles). tests/monitor_tests.rs

@@ -2396,6 +2396,53 @@ fn memtest_default_range() {
 }
 
 #[test]
+fn memtest_catches_an_alias_and_a_stuck_bit() {
+    // The header's claim, over 0200-7FFF. `fault(cpu, address, value)` runs after each RAM
+    // write and may write RAM.
+    let run = |fault: &dyn Fn(&mut Intel8080, u16, u8)| {
+        let mut m = boot();
+        for record in std::fs::read_to_string("examples/memtest.hex").unwrap().lines() {
+            m.run(record);
+        }
+        m.cpu.write_byte(0x0106, 0x7F); // LAST = 7FFF, as E 0105 sets it
+        m.con().borrow_mut().take_output();
+        m.con().borrow_mut().push_input(b"G 0100\r");
+        let start = m.cpu.cycles;
+        let mut out = Vec::new();
+        while !out.ends_with(b"> ") {
+            assert!(!m.cpu.halted && m.cpu.cycles - start < BUDGET, "{}", show(&out));
+            m.cpu.execute_one();
+            for t in m.cpu.transfers().to_vec() {
+                match t {
+                    Transfer::MemWrite(a, v) => fault(&mut m.cpu, a, v),
+                    Transfer::Out(0x00, b) => out.push(b),
+                    _ => {}
+                }
+            }
+        }
+        show(&out)
+    };
+    assert_eq!(run(&|_, _, _| {}), "G 0100\\r\\nRAM OK\\r\\n> ");
+    // An address line fault: 1234 and 5234 are one cell (A14 lost there). Pass 1 writes 26
+    // (34 XOR 12) at 1234, then 66 (34 XOR 52) over it at 5234; 1234 reads back wrong. A
+    // pattern without the high byte writes 34 at both and misses it.
+    let alias = |cpu: &mut Intel8080, a: u16, v: u8| match a {
+        0x1234 => cpu.write_byte(0x5234, v),
+        0x5234 => cpu.write_byte(0x1234, v),
+        _ => {}
+    };
+    assert_eq!(run(&alias), "G 0100\\r\\nFAIL 1234\\r\\n> ");
+    // D3 stuck at 0 in one cell: pass 1 writes 66 there (45 XOR 23, bit 3 clear) and passes;
+    // only the complement pass, 99, sees it.
+    let stuck = |cpu: &mut Intel8080, a: u16, v: u8| {
+        if a == 0x2345 {
+            cpu.write_byte(a, v & !0x08);
+        }
+    };
+    assert_eq!(run(&stuck), "G 0100\\r\\nFAIL 2345\\r\\n> ");
+}
+
+#[test]
 fn examples_match_their_hex() {
     // examples/NAME.hex is what a user pastes; tests/transcripts/example_NAME.txt pastes the
     // same records, in order, as its `> :` lines. The .hex is built from NAME.asm by
@@ -2538,20 +2585,26 @@ impl EdModel {
                 b'r' => self.mount(arg).and_then(|name| {
                     let start = self.text.len();
                     let mut kept = start;
-                    for &b in &self.files[&name] {
-                        if self.text.len() + 1 >= ED_CAP {
-                            self.text.truncate(kept);
-                            return None;
-                        }
+                    // A byte that does not fit drops the line it is in, then "?".
+                    for &b in self.files[&name].iter().chain(&[0x1A]) {
                         if b == 0x1A {
                             break;
+                        }
+                        if self.text.len() == ED_CAP {
+                            self.text.truncate(kept);
+                            return None;
                         }
                         self.text.push(b);
                         if b == b'\n' {
                             kept = self.text.len();
                         }
                     }
+                    // A last line with no LF gets one, if there is room for it.
                     if self.text.len() != kept {
+                        if self.text.len() == ED_CAP {
+                            self.text.truncate(kept);
+                            return None;
+                        }
                         self.text.push(b'\n');
                     }
                     let added = self.text.len() - start;
@@ -2659,15 +2712,55 @@ fn ed_fills_its_buffer() {
     std::fs::write(m.dir.path().join("BIGR"), &big).unwrap();
     model.files.insert("BIGR".into(), big);
     m.ed_session(&mut model, b"r BIGR\rr BIG\rw OUT\rq\r");
-    // The edges: ED_CAP bytes ending in LF do not fit (r keeps room for a closing LF), and
-    // ED_CAP - 1 bytes with no final LF fill the buffer exactly, the LF r adds at CFFF.
+    // A buffer typed full to its last byte (CFFF) is written and read back whole: 649 lines
+    // of 80 and one of 48 are ED_CAP bytes, and one more line does not fit.
+    let mut s = b"a\r".to_vec();
+    for _ in 0..649 {
+        s.extend([b'x'; 79].iter().chain(b"\r"));
+    }
+    s.extend(b"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\rz\r.\rw FULL\rq\r");
+    m.ed_session(&mut model, &s);
+    assert!(model.out.ends_with(format!("y\r\nz\r\n?\r\n.\r\n*w FULL\r\n{}\r\n*q\r\n", ED_CAP).as_bytes()));
+    m.ed_session(&mut model, b"r FULL\rw TWO\rq\r");
+    assert!(model.out.ends_with(format!("*r FULL\r\n{}\r\n*w TWO\r\n{0}\r\n*q\r\n", ED_CAP).as_bytes()));
+    // The edges with no marker: ED_CAP bytes ending in LF fit; ED_CAP - 1 bytes with no
+    // final LF fill the buffer exactly, the LF r adds at CFFF; ED_CAP bytes with no final LF
+    // leave no room for that LF, so the last line is dropped and r prints "?".
     let exact: Vec<u8> = (0..ED_CAP).map(|i| if i % 80 == 79 || i == ED_CAP - 1 { b'\n' } else { b'e' }).collect();
     let edge: Vec<u8> = (0..ED_CAP - 1).map(|i| if i % 80 == 79 { b'\n' } else { b'g' }).collect();
-    for (name, file) in [("EXACT", exact), ("EDGE", edge)] {
+    let over: Vec<u8> = (0..ED_CAP).map(|i| if i % 80 == 79 { b'\n' } else { b'o' }).collect();
+    for (name, file) in [("EXACT", exact), ("EDGE", edge), ("OVER", over)] {
         std::fs::write(m.dir.path().join(name), &file).unwrap();
         model.files.insert(name.into(), file);
     }
-    m.ed_session(&mut model, b"r EXACT\rc\rr EDGE\rw OUT\rq\r");
-    assert!(model.out.ends_with(format!("*r EXACT\r\n?\r\n*c\r\n*r EDGE\r\n{}\r\n*w OUT\r\n{0}\r\n*q\r\n", ED_CAP).as_bytes()));
+    m.ed_session(&mut model, b"r EXACT\rc\rr EDGE\rw OUT\rc\rr OVER\rw OUT\rq\r");
+    assert!(model.out.ends_with(format!("*r EXACT\r\n{}\r\n*c\r\n*r EDGE\r\n{0}\r\n*w OUT\r\n{0}\r\n*c\r\n*r OVER\r\n?\r\n*w OUT\r\n{}\r\n*q\r\n",
+        ED_CAP, ED_CAP / 80 * 80).as_bytes()));
     assert!(m.mem(0xD000, 0x1F00) == above, "ed wrote at or above D000");
+}
+
+#[test]
+fn ed_drops_a_line_cut_by_a_storage_error() {
+    // A host read error (DEVICE_SPECS 6): the failed read returns FF, then the device
+    // unmounts. The host file shrinks to 8 bytes after the mount, under the device's cached
+    // size, so reading byte 8 fails. The whole line before it stays; "wo" and the FF go.
+    let mut m = ed();
+    let path = m.dir.path().join("CUT.TXT");
+    std::fs::write(&path, b"hello\nworld\n").unwrap();
+    m.con().borrow_mut().take_output();
+    m.con().borrow_mut().push_input(b"G 0100\rr CUT.TXT\rp\rq\r");
+    let start = m.cpu.cycles;
+    let mut out = Vec::new();
+    while !out.ends_with(b"> ") {
+        assert!(!m.cpu.halted && m.cpu.cycles - start < BUDGET, "{}", show(&out));
+        m.cpu.execute_one();
+        for &t in m.cpu.transfers() {
+            match t {
+                Transfer::Out(0x0E, 0x01) => std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(8).unwrap(),
+                Transfer::Out(0x00, b) => out.push(b),
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(show(&out), "G 0100\\r\\n*r CUT.TXT\\r\\n?\\r\\n*p\\r\\n1 hello\\r\\n*q\\r\\n> ");
 }

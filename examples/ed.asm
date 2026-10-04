@@ -26,7 +26,11 @@
 ; The storage device cannot shorten a file (DEVICE_SPECS 6), so a shorter text
 ; written over a longer file leaves the old tail behind the marker; r stops at
 ; the marker or at EOF, whichever comes first. A file whose last line has no LF
-; gets one. A file that does not fit adds the lines that do, then prints "?".
+; gets one. A file that does not fit adds the lines that do, then prints "?";
+; anything w wrote fits back into an empty buffer. A storage error during r
+; also keeps the whole lines read before it, drops the line it cut, and
+; prints "?" (DEVICE_SPECS 6: the failed read returns FF, then the file is
+; unmounted).
 ; A mount creates a missing file empty (DEVICE_SPECS 7: there is no "not
 ; found"), so r of a missing name reads nothing, prints "?" and leaves an empty
 ; file of that name. After w and r nothing is mounted.
@@ -232,16 +236,16 @@ READ:   CALL    MOUNT
 RDLP:   IN      0CH
         RLC                     ; CY = bit 7, EOF
         JC      RDEND
-        INX     H
-        MOV     A,H
-        DCX     H
-        CPI     LIMIT >> 8      ; room for this byte and a closing LF
-        JNC     RDFULL
         IN      0BH
         CPI     EOFCH
         JZ      RDEND
-        MOV     M,A
+        MOV     B,A
+        MOV     A,H
+        CPI     LIMIT >> 8      ; room for this byte
+        JNC     RDFULL
+        MOV     M,B
         INX     H
+        MOV     A,B
         CPI     LF
         JNZ     RDLP
         SHLD    ENDP            ; a whole line: keep it
@@ -250,6 +254,12 @@ RDFULL: CALL    UNMNT           ; the lines read so far stay
         JMP     ERR
 RDEND:  CALL    ATEND
         JZ      RDDONE
+        IN      0CH             ; a line with no LF yet: was it cut by an error?
+        RRC                     ; CY = bit 0, mounted
+        JNC     RDFULL          ; unmounted: drop it (UNMNT prints "?")
+        MOV     A,H
+        CPI     LIMIT >> 8      ; room for its LF
+        JNC     RDFULL
         MVI     M,LF            ; the last line had no LF
         INX     H
         SHLD    ENDP
