@@ -223,8 +223,8 @@ fn reset_and_reboot_during_a_slow_access() {
 #[test]
 fn reset_and_reboot_during_a_slow_in_never_drives_d() {
     // 5.2 table row 4 on an IN: the rebooted 8080's request (an OUT) is up when the device
-    // call returns. The edge latch must stop the drive, not only the ACK: D0-D7 as outputs
-    // with DIR = OUT is a board violation.
+    // call returns. DIR high at the step 4 abort check must stop the drive: D0-D7 as
+    // outputs with DIR = OUT is a board violation.
     let mut rig = Rig::new(Knobs::default());
     let mut client = rig.connect();
     rig.start();
@@ -301,6 +301,49 @@ fn reset_while_idle_resets_devices() {
     let (result, trace) = rig.finish();
     assert_eq!(result, Ok(()));
     assert_eq!(resets(&trace), 1, "{:?}", trace);
+}
+
+#[test]
+fn reset_discards_output_not_yet_sent() {
+    // 5.2: RESET discards the console output the daemon holds and has not sent. N bytes go
+    // out back to back (no console pass between them) to a client that reads nothing, so
+    // the socket fills and most of them wait in the daemon at RESET. After RESET and a
+    // marker, the client gets the bytes the socket took before RESET, in order, then the
+    // marker: fewer than N bytes, none twice.
+    const N: usize = 1 << 20;
+    let mut rig = Rig::new(Knobs { gap: Duration::ZERO, req_fall: Duration::ZERO, ..Knobs::default() });
+    rig.traced = false;
+    let mut client = rig.connect();
+    rig.start();
+    let byte = |i: usize| b'a' + (i % 26) as u8;
+    for i in 0..N {
+        rig.board.begin(0x00, Access::Out(byte(i)));
+    }
+    let deadline = Instant::now() + TIMEOUT;
+    while rig.board.completed() < N {
+        assert!(Instant::now() < deadline, "{} of {} OUTs done", rig.board.completed(), N);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    for _ in 0..N {
+        assert_eq!(rig.board.wait(), Done::Out);
+    }
+    // Passes send until the socket is full.
+    std::thread::sleep(Duration::from_millis(200));
+    rig.board.pulse_reset();
+    rig.board.wait_edge_calls(rig.board.edge_calls() + 2);
+    rig.out(0x00, b'#');
+    let mut got = Vec::new();
+    let mut buf = [0u8; 64 * 1024];
+    while got.last() != Some(&b'#') {
+        let n = client.read(&mut buf).unwrap();
+        assert!(n > 0, "EOF before the marker");
+        got.extend(&buf[..n]);
+    }
+    got.pop();
+    assert!(got.len() < N, "{} bytes before the marker: output held at RESET was sent", got.len());
+    assert!(got.iter().enumerate().all(|(i, &b)| b == byte(i)), "not a prefix of the stream");
+    let (result, _) = rig.finish();
+    assert_eq!(result, Ok(()));
 }
 
 #[test]
@@ -401,17 +444,17 @@ fn a_pin_in_an_alt_function_refuses_to_start() {
 
 #[test]
 fn a_second_daemon_is_refused_by_the_gpio_lock() {
-    // GpioMem::open's guard, on a plain file: two opens are two open file descriptions,
-    // as two daemons opening /dev/gpiomem are.
+    // GpioMem::open's open and guard, on a plain file: two opens are two open file
+    // descriptions, as two daemons opening /dev/gpiomem are.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gpiomem");
     std::fs::write(&path, [0u8; 16]).unwrap();
-    let first = std::fs::File::open(&path).unwrap();
-    pi::lock_gpio(&first, "/dev/gpiomem").unwrap();
-    let second = std::fs::File::open(&path).unwrap();
-    assert_eq!(pi::lock_gpio(&second, "/dev/gpiomem").unwrap_err(), "/dev/gpiomem: another pi8080d holds the GPIO");
+    let path = path.to_str().unwrap();
+    let options = std::fs::OpenOptions::new().read(true).write(true).clone();
+    let first = pi::open_gpio(&options, path).unwrap();
+    assert_eq!(pi::open_gpio(&options, path).unwrap_err(), format!("{}: another pi8080d holds the GPIO", path));
     drop(first);
-    pi::lock_gpio(&second, "/dev/gpiomem").unwrap();
+    pi::open_gpio(&options, path).unwrap();
 }
 
 #[test]

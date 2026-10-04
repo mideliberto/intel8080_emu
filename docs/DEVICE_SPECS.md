@@ -558,7 +558,7 @@ A background command (`GET`, `ASK`) runs in a **worker**, a process on the Pi ap
 
 ### GET conformance vectors
 
-Device-level tests MUST cover every row. `H` is the test HTTP server in `tests/support/http.rs`, shared by the GET and N tests: a `std::net::TcpListener` on `127.0.0.1:0`, one thread per connection, canned responses by path. A connection whose first bytes are not `GET ` is closed at once. The `/hang` and `/drip` handlers send their bytes, then block on `read` until the client closes; they report the request's arrival and the close on an mpsc channel, so a test can wait until the worker is connected before it aborts it. No test touches the internet.
+Device-level tests MUST cover every row. `H` is the test HTTP server in `tests/support/http.rs`, shared by the GET and N tests: a `std::net::TcpListener` on `127.0.0.1:0`, one thread per connection, canned responses by path. A connection whose first bytes are not `GET ` is closed at once. The `/hang` and `/drip` handlers send their bytes, then block on `read` until the client closes; they report the request's arrival and the close on an mpsc channel, so a test can wait until the worker is connected before it aborts it. Every other route reports on a second channel: the request when its head is read, and the close after the response is written, the server's side shut and the client's close seen, so a test waits for curl instead of sleeping a fixed time. No test touches the internet.
 
 "Final" is the status after polling `IN 12` until it is not 01. "Response" is every byte read from 13, in hex or as quoted text. A status may read 01 before any `IN 12` read, and the first `IN 12` after execute may already read a later status (Background commands). Every polling loop has a 10 s `Instant` deadline and fails with a message naming the row; "the server sees the close" waits with `recv_timeout(5 s)`. Rows marked *ignored* take 10 s or more and are `#[ignore]` tests, run with `cargo test -- --ignored`.
 
@@ -578,7 +578,7 @@ Device-level tests MUST cover every row. `H` is the test HTTP server in `tests/s
 | `GET http://127.0.0.1:P/` (P a closed port) | none | 83 | unchanged |
 | `GET https://H/hello` | plain HTTP; closes the TLS hello | 83 (no TLS server needed) | unchanged |
 | `GET http://H/hang`; `IN 13`; `IN 12` | accepts, never answers | `IN 13` = 00, then `IN 12` = 01 | unchanged |
-| `GET http://H/hello`, `GET http://H/empty`, `GET http://H/404`; wait 500 ms before the first `IN 12` | as in their rows above | the first `IN 12` = 02, 03, 83 | unchanged |
+| `GET http://H/hello`, `GET http://H/empty`, `GET http://H/404`; wait until the server sees the close, then 1 s, before the first `IN 12` | as in their rows above | the first `IN 12` = 02, 03, 83 | unchanged |
 | `GET http://H/hello > BOOK.TXT` | as `/hello` | 03 after `"000007"` | `BOOK.TXT` = `Hello` 0D 0A; no `~BOOK.TXT` |
 | `GET http://H/hello   >   book.txt ` | as `/hello` | 03 after `"000007"` | `BOOK.TXT` as above |
 | `GET http://H/empty > E.BIN` | 200, empty | 03 after `"000000"` | `E.BIN` exists, empty |

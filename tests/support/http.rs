@@ -4,7 +4,10 @@
 // A std TcpListener on 127.0.0.1:0, one thread per connection, canned responses by
 // path. A connection whose first bytes are not `GET ` is closed at once (so an https
 // request fails fast). /hang and /drip send their bytes, then block on read until the
-// client closes; they report the request and the close on a channel. No test touches the internet.
+// client closes; they report the request and the close on a channel. Every other route
+// reports on a second channel: the request when its head is read, the close after the
+// response is written, the server's side shut and the client's close seen (so a test can
+// wait for curl instead of sleeping). No test touches the internet.
 //
 // Routes: /hello (`Hello` CR LF), /lf (`a` LF `b` LF), /bin (00-FF), /chunk (100 KiB
 // of `pattern`, chunked), /empty, /304, /rN (a redirect to /r(N-1); /r0 is 200 `ok`),
@@ -19,16 +22,18 @@
 // close. `sse` writes the Messages API events for a list of text deltas.
 
 use std::io::{ErrorKind, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub struct Server {
     addr: SocketAddr,
     /// "open PATH" when a /hang or /drip request arrives, "close PATH" when its client closes.
     events: Receiver<String>,
+    /// "request PATH" and "close PATH" for every other route.
+    served: Receiver<String>,
 }
 
 /// Start H. It runs until the test process ends.
@@ -36,13 +41,14 @@ pub fn start() -> Server {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let (tx, events) = mpsc::channel();
+    let (served_tx, served) = mpsc::channel();
     thread::spawn(move || {
         for conn in listener.incoming().flatten() {
-            let tx = tx.clone();
-            thread::spawn(move || serve(conn, tx));
+            let (tx, served_tx) = (tx.clone(), served_tx.clone());
+            thread::spawn(move || serve(conn, tx, served_tx));
         }
     });
-    Server { addr, events }
+    Server { addr, events, served }
 }
 
 impl Server {
@@ -67,6 +73,20 @@ impl Server {
     pub fn sees_close(&self) -> bool {
         self.events.recv_timeout(Duration::from_secs(5)).is_ok_and(|e| e.starts_with("close "))
     }
+
+    /// A route other than /hang and /drip reported `event` ("request PATH" or "close
+    /// PATH") within 10 s; earlier reports are skipped.
+    pub fn sees_served(&self, event: &str) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            match self.served.recv_timeout(left) {
+                Ok(e) if e == event => return true,
+                Ok(_) => {}
+                Err(_) => return false,
+            }
+        }
+        false
+    }
 }
 
 /// `S` of the connect-limit vector: accepts and holds every connection, reading nothing,
@@ -86,7 +106,7 @@ pub fn pattern(n: usize) -> Vec<u8> {
     (0..n).map(|i| (i % 251) as u8).collect()
 }
 
-fn serve(mut conn: TcpStream, events: Sender<String>) {
+fn serve(mut conn: TcpStream, events: Sender<String>, served: Sender<String>) {
     let mut head = Vec::new();
     let mut buf = [0u8; 1024];
     while !head.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -99,6 +119,15 @@ fn serve(mut conn: TcpStream, events: Sender<String>) {
         }
     }
     let path = String::from_utf8_lossy(&head[4..]).split(' ').next().unwrap_or("").to_string();
+    match path.as_str() {
+        "/hang" => return hold(conn, &path, &events),
+        "/drip" => {
+            let _ = conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nConnection: close\r\n\r\nabc");
+            return hold(conn, &path, &events);
+        }
+        _ => {}
+    }
+    let _ = served.send(format!("request {}", path));
     // Write errors are the client's business (curl stops reading /over): ignore them.
     let _ = match path.as_str() {
         "/hello" => respond(&mut conn, "200 OK", b"Hello\r\n"),
@@ -112,17 +141,15 @@ fn serve(mut conn: TcpStream, events: Sender<String>) {
         "/max" => respond(&mut conn, "200 OK", &pattern(0xFF_FFFF)),
         "/over" => chunked(&mut conn, &pattern(0x100_0000)),
         "/r0" => respond(&mut conn, "200 OK", b"ok"),
-        "/hang" => hold(conn, &path, &events),
-        "/drip" => {
-            let _ = conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nConnection: close\r\n\r\nabc");
-            hold(conn, &path, &events)
-        }
         p => match p.strip_prefix("/r").and_then(|n| n.parse::<u32>().ok()) {
             Some(n) => conn.write_all(format!(
                 "HTTP/1.1 302 Found\r\nLocation: /r{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", n - 1).as_bytes()),
             None => respond(&mut conn, "404 Not Found", b""),
         },
     };
+    let _ = conn.shutdown(Shutdown::Write);
+    while let Ok(1..) = conn.read(&mut buf) {}
+    let _ = served.send(format!("close {}", path));
 }
 
 fn respond(conn: &mut TcpStream, status: &str, body: &[u8]) -> std::io::Result<()> {
@@ -141,12 +168,11 @@ fn chunked(conn: &mut TcpStream, body: &[u8]) -> std::io::Result<()> {
 }
 
 /// Report the request, block until the client closes, then report the close.
-fn hold(mut conn: TcpStream, path: &str, events: &Sender<String>) -> std::io::Result<()> {
+fn hold(mut conn: TcpStream, path: &str, events: &Sender<String>) {
     let _ = events.send(format!("open {}", path));
     let mut buf = [0u8; 256];
     while let Ok(1..) = conn.read(&mut buf) {}
     let _ = events.send(format!("close {}", path));
-    Ok(())
 }
 
 /// One step of a scripted connection.

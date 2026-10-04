@@ -96,7 +96,7 @@ fn monotonic_ns() -> u64 {
 /// The real `Gpio`: the mmapped register block and the RESET line request.
 pub struct GpioMem {
     base: *mut u32,
-    /// `/dev/gpiomem`, kept open for its lock (`pi::lock_gpio`).
+    /// `/dev/gpiomem`, kept open for its lock (`pi::open_gpio`).
     _lock: File,
     /// The line-event fd, after `request_reset`.
     reset: Option<File>,
@@ -114,9 +114,7 @@ impl GpioMem {
             return Err(format!("{}: not a BCM2711 (Pi 4B)", path));
         }
         let path = "/dev/gpiomem";
-        let file = OpenOptions::new().read(true).write(true).custom_flags(libc::O_SYNC).open(path)
-            .map_err(|e| format!("{}: {}", path, e))?;
-        super::lock_gpio(&file, path)?;
+        let file = super::open_gpio(OpenOptions::new().read(true).write(true).custom_flags(libc::O_SYNC), path)?;
         // SAFETY: a fresh shared mapping of the 4 KiB GPIO block.
         let base = unsafe {
             libc::mmap(std::ptr::null_mut(), 4096, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED,

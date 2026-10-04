@@ -1115,14 +1115,16 @@ fn only_in_12_checks_the_worker() {
 fn the_first_in_12_can_see_a_later_state() {
     // Background commands, Execute: "The first IN 12 after it reads that status or any later
     // state the request has reached": that read is a check like any other. Row: /hello,
-    // /empty, /404; wait 500 ms before the first IN 12 | 02, 03, 83.
+    // /empty, /404; wait until H sees curl close, then 1 s for curl to exit, before the
+    // first IN 12 | 02, 03, 83.
     let h = http::start();
     for (path, want) in [("/hello", AVAIL), ("/empty", DONE), ("/404", E_SERVICE)] {
         let mut r = rig();
         r.clear();
         r.send(format!("GET {}", h.url(path)).as_bytes());
         r.out(CTL, EXECUTE);
-        std::thread::sleep(Duration::from_millis(500));
+        assert!(h.sees_served(&format!("close {}", path)), "{}: curl never closed", path);
+        std::thread::sleep(Duration::from_secs(1));
         assert_eq!(r.inp(STATUS), want, "{}", path);
     }
 }
@@ -1132,13 +1134,15 @@ fn the_last_pop_goes_busy_without_a_check() {
     // Background commands: "When it pops the last byte read so far, the status goes back to
     // BUSY without a check." /chunk is 100 KB; one check reads at most 4096 bytes, so after
     // popping exactly those the next IN 13 is in BUSY and reads 00. No IN 12 before the
-    // wait: an early check could find fewer than 4096 bytes in the pipe.
+    // wait: an early check could find fewer than 4096 bytes in the pipe. The wait: until H
+    // has curl's request (curl is running), then 1 s for curl to fill the pipe.
     let h = http::start();
     let mut r = rig();
     r.clear();
     r.send(format!("GET {}", h.url("/chunk")).as_bytes());
     r.out(CTL, EXECUTE);
-    std::thread::sleep(Duration::from_millis(200));
+    assert!(h.sees_served("request /chunk"), "/chunk: no request");
+    std::thread::sleep(Duration::from_secs(1));
     assert_eq!(r.inp(STATUS), AVAIL);
     for i in 0..4096usize {
         assert_eq!(r.inp(RESP), (i % 251) as u8, "byte {}", i);

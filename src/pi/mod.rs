@@ -10,7 +10,7 @@ use crate::io::devices::console::Console;
 use crate::io::devices::mailbox;
 use crate::io::{build_bus, IoBus};
 use std::cell::RefCell;
-use std::fs::{File, TryLockError};
+use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
@@ -71,12 +71,14 @@ const MS: Duration = Duration::from_millis(1);
 const INPUT_CHUNK: usize = 4096;
 const OUTPUT_CHUNK: usize = 16 * 1024;
 
-/// The single-instance guard (PI_DAEMON 3.3): an exclusive, non-blocking lock on the open
-/// register device, held for the daemon's life and taken before `setup_pins` writes
-/// anything, so a second daemon is refused before it can touch the running one's pins.
-pub fn lock_gpio(file: &File, path: &str) -> Result<(), String> {
+/// Opens the register device and takes the single-instance guard (PI_DAEMON 3.3): an
+/// exclusive, non-blocking lock, held for as long as the returned file is open (the
+/// daemon's life) and taken before `setup_pins` writes anything, so a second daemon is
+/// refused before it can touch the running one's pins.
+pub fn open_gpio(options: &OpenOptions, path: &str) -> Result<File, String> {
+    let file = options.open(path).map_err(|e| format!("{}: {}", path, e))?;
     match file.try_lock() {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(file),
         Err(TryLockError::WouldBlock) => Err(format!("{}: another pi8080d holds the GPIO", path)),
         Err(TryLockError::Error(e)) => Err(format!("{}: lock: {}", path, e)),
     }
